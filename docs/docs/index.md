@@ -21,68 +21,137 @@ Built with enterprise-grade architecture, Radkit offers:
 
 ## Quick Example
 
+```toml
+[dependencies]
+radkit = "0.0.1"
+futures = "0.3.31"
+tokio = "1.47.1"
+uuid = "1.18.0"
+dotenvy = "0.15.7"
+```
+
+Create a `.env` file with your Anthropic API key:
+
+```dotenv
+ANTHROPIC_API_KEY="YOUR_API_KEY"
+```
+
+Then, create an agent and send a message:
+
 ```rust
-use radkit::a2a::{Message, MessageRole, MessageSendParams, Part, SendMessageResult};
+use futures::StreamExt;
+use radkit::a2a::{
+    Message, MessageRole, MessageSendParams, Part, SendStreamingMessageResult, TaskState,
+};
 use radkit::agents::{Agent, AgentConfig};
 use radkit::models::AnthropicLlm;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create an LLM provider
+    // Load environment variables from .env file.
+    dotenvy::dotenv()?;
+
+    // Create an LLM provider (supports Anthropic, Gemini, and Mock providers)
     let llm = Arc::new(AnthropicLlm::new(
         "claude-3-5-sonnet-20241022".to_string(),
         std::env::var("ANTHROPIC_API_KEY")?,
     ));
-    
-    // Create an agent with built-in tools (services created automatically)
+
+    // Create an agent with built-in task management tools
     let agent = Agent::new(
-        "Assistant".to_string(),
-        "A helpful AI assistant".to_string(),
-        "You are a helpful assistant that can manage tasks and save important information.".to_string(),
+        "research_assistant".to_string(),
+        "Research Assistant".to_string(),
+        "You are a helpful research assistant. When working on tasks, \
+         always use update_status to indicate your progress (e.g., 'working' \
+         when processing, 'completed' when done). When you produce any \
+         results or findings, save them using save_artifact so they can be \
+         retrieved later."
+            .to_string(),
         llm,
     )
-    .with_config(AgentConfig::default().with_max_iterations(10))
-    .with_builtin_task_tools(); // Adds update_status and save_artifact tools
-    
-    // Send a message (non-streaming)
-    let params = MessageSendParams {
-        message: Message {
-            kind: "message".to_string(),
-            message_id: uuid::Uuid::new_v4().to_string(),
-            role: MessageRole::User,
-            parts: vec![Part::Text {
-                text: "Help me calculate the sum of 1 to 100 and save the result.".to_string(),
-                metadata: None,
-            }],
-            context_id: None,  // New session will be created
-            task_id: None,     // New task will be created
-            reference_task_ids: Vec::new(),
-            extensions: Vec::new(),
+        .with_config(AgentConfig::default().with_max_iterations(10))
+        .with_builtin_task_tools(); // Enables update_status and save_artifact tools
+
+    // User simply asks for research - no mention of tools
+    let message = Message {
+        kind: "message".to_string(),
+        message_id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        parts: vec![Part::Text {
+            text: "Can you research the Fibonacci sequence and create a \
+                   summary of its properties and applications?"
+                .to_string(),
             metadata: None,
-        },
-        configuration: None,
+        }],
+        context_id: None, // New session will be created
+        task_id: None,    // New task will be created
+        reference_task_ids: Vec::new(),
+        extensions: Vec::new(),
         metadata: None,
     };
-    
-    // Execute and get enriched results with events
-    let response = agent.send_message(
-        "my_app".to_string(),
-        "user123".to_string(),
-        params,
-    ).await?;
-    
-    // Access the task result
-    if let SendMessageResult::Task(task) = response.result {
-        println!("Task completed: {}", task.id);
-        println!("Status: {:?}", task.status.state);
-        println!("Artifacts generated: {}", task.artifacts.len());
+
+    // Stream the execution to capture real-time A2A protocol events
+    let mut execution = agent
+        .send_streaming_message(
+            "my_app".to_string(),
+            "user123".to_string(),
+            MessageSendParams {
+                message,
+                configuration: None,
+                metadata: None,
+            },
+        )
+        .await?;
+
+    let mut status_events = 0;
+    let mut artifact_events = 0;
+    let mut final_task = None;
+
+    // Process streaming results and capture A2A protocol events
+    while let Some(event) = execution.stream.next().await {
+        match event {
+            SendStreamingMessageResult::TaskStatusUpdate(status_event) => {
+                status_events += 1;
+                println!("📊 Status Update: {:?}", status_event.status.state);
+
+                if status_event.status.message.is_some() {
+                    println!(
+                        "  Message: {:?}",
+                        status_event.status.message.as_ref().unwrap()
+                    );
+                }
+            }
+            SendStreamingMessageResult::TaskArtifactUpdate(artifact_event) => {
+                artifact_events += 1;
+                println!("💾 Artifact Saved: {:?}", artifact_event.artifact.name);
+            }
+            SendStreamingMessageResult::Task(task) => {
+                println!("✅ Task Completed: {}", task.id);
+                final_task = Some(task);
+                break;
+            }
+            _ => {} // Handle other events as needed
+        }
     }
-    
-    // Analyze captured events for monitoring
-    println!("Internal events captured: {}", response.internal_events.len());
-    println!("A2A protocol events: {}", response.a2a_events.len());
-    
+
+    // Examine the final task state
+    if let Some(task) = final_task {
+        println!("\n📈 Final Results:");
+        println!("  Task State: {:?}", task.status.state);
+        println!("  Messages: {}", task.history.len());
+        println!("  Artifacts: {}", task.artifacts.len());
+
+        // Check the saved artifact content
+        if let Some(artifact) = task.artifacts.first() {
+            if let Some(Part::Text { text, .. }) = artifact.parts.first() {
+                println!(
+                    "  Artifact Content Preview: {}",
+                    &text[..text.len().min(200)]
+                );
+            }
+        }
+    }
     Ok(())
 }
 ```
@@ -99,18 +168,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **A2A Events**: Automatic generation of protocol-compliant events
 - **Built-in Tools**: `update_status` and `save_artifact` with event emission
 
-## Installation
-
-```toml
-[dependencies]
-radkit = { git = "https://github.com/microagents/radkit.git" }
-tokio = { version = "1.47", features = ["full"] }
-uuid = { version = "1.18", features = ["v4"] }
-serde_json = "1.0"
-futures = "0.3"
-async-trait = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
-```
 
 ## Quick Start Guide
 

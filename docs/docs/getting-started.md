@@ -14,16 +14,11 @@ Add these dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-radkit = { git = "https://github.com/microagents/radkit.git" }
-tokio = { version = "1.47", features = ["full"] }
-uuid = { version = "1.18", features = ["v4"] }
-serde_json = "1.0"
-futures = "0.3"
-async-trait = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
-
-# Optional: for environment variables
-dotenvy = "0.15"
+radkit = "0.0.1"
+futures = "0.3.31"
+tokio = "1.47.1"
+uuid = "1.18.0"
+dotenvy = "0.15.7"
 ```
 
 ## Setting Up Your First Agent
