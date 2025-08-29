@@ -53,14 +53,6 @@ impl Session {
     }
 
     /// Legacy compatibility methods
-    pub fn update_session_state(&mut self, key: String, value: Value) {
-        self.set_state(key, value);
-    }
-
-    pub fn get_session_state(&self, key: &str) -> Option<&Value> {
-        self.get_state(key)
-    }
-
     pub fn remove_session_state(&mut self, key: &str) -> Option<Value> {
         self.last_activity = Utc::now();
         self.state.remove(key)
@@ -165,23 +157,5 @@ mod tests {
         session.clear_events();
         assert!(session.get_events().is_empty());
         assert!(session.last_activity > activity_after_add);
-    }
-
-    #[test]
-    fn test_legacy_state_compatibility_methods() {
-        let mut session = Session::new("test_app".to_string(), "user123".to_string());
-
-        // update_session_state should be equivalent to set_state
-        session.update_session_state("legacy_key".to_string(), json!("legacy_value"));
-        assert_eq!(
-            session.get_state("legacy_key"),
-            Some(&json!("legacy_value"))
-        );
-
-        // get_session_state should be equivalent to get_state
-        assert_eq!(
-            session.get_session_state("legacy_key"),
-            Some(&json!("legacy_value"))
-        );
     }
 }

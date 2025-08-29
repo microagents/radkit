@@ -284,7 +284,50 @@ impl StorageProjector {
 
     /// Store internal event directly to session storage
     async fn store_internal_event(&self, event: &InternalEvent) -> AgentResult<()> {
-        // Extract session info from internal events that have context_id
+        // Handle StateChange events by actually applying the state change
+        if let InternalEvent::StateChange {
+            context_id,
+            app_name,
+            user_id,
+            scope,
+            key,
+            new_value,
+            ..
+        } = event
+        {
+            // Apply the state change based on scope
+            match scope {
+                crate::events::internal::StateScope::App => {
+                    // App-level state change
+                    self.session_service
+                        .update_app_state(app_name, key, new_value.clone())
+                        .await?;
+                }
+                crate::events::internal::StateScope::User => {
+                    // User-level state change
+                    if let Some(user_id) = user_id {
+                        self.session_service
+                            .update_user_state(app_name, user_id, key, new_value.clone())
+                            .await?;
+                    }
+                }
+                crate::events::internal::StateScope::Session => {
+                    // Session-level state change
+                    if let (Some(context_id), Some(user_id)) = (context_id, user_id) {
+                        if let Some(mut session) = self
+                            .session_service
+                            .get_session(app_name, user_id, context_id)
+                            .await?
+                        {
+                            session.set_state(key.clone(), new_value.clone());
+                            self.session_service.save_session(&session).await?;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Now store the event for audit/debugging (for all event types)
         let (context_id, app_name, user_id) = match event {
             InternalEvent::MessageReceived { metadata, .. } => (
                 event.context_id(),
@@ -1347,6 +1390,369 @@ mod tests {
             a2a_rx.try_recv().is_err(),
             "Internal events should be ignored by A2AOnlyProjector"
         );
+    }
+
+    #[tokio::test]
+    async fn test_storage_projector_state_change_application() {
+        let (task_manager, session_service) = create_test_components();
+        
+        // Create a session first
+        let session = session_service
+            .create_session("test_app".to_string(), "test_user".to_string())
+            .await
+            .unwrap();
+        
+        let projector = StorageProjector::new(
+            task_manager,
+            session_service.clone(),
+            "test_app".to_string(),
+            "test_user".to_string(),
+        );
+
+        // Test App-level state change
+        let app_state_event = InternalEvent::StateChange {
+            context_id: None,
+            app_name: "test_app".to_string(),
+            user_id: None,
+            scope: crate::events::internal::StateScope::App,
+            key: "app_setting".to_string(),
+            old_value: None,
+            new_value: serde_json::json!("app_value"),
+            change_reason: Some("Testing app state".to_string()),
+            timestamp: Utc::now(),
+        };
+
+        projector.project_internal(app_state_event).await.unwrap();
+
+        // Verify app state was updated
+        let updated_session = session_service
+            .get_session("test_app", "test_user", &session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            updated_session.get_state("app:app_setting"),
+            Some(&serde_json::json!("app_value"))
+        );
+
+        // Test User-level state change
+        let user_state_event = InternalEvent::StateChange {
+            context_id: None,
+            app_name: "test_app".to_string(),
+            user_id: Some("test_user".to_string()),
+            scope: crate::events::internal::StateScope::User,
+            key: "user_preference".to_string(),
+            old_value: None,
+            new_value: serde_json::json!("user_value"),
+            change_reason: Some("Testing user state".to_string()),
+            timestamp: Utc::now(),
+        };
+
+        projector.project_internal(user_state_event).await.unwrap();
+
+        // Verify user state was updated
+        let updated_session = session_service
+            .get_session("test_app", "test_user", &session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            updated_session.get_state("user:user_preference"),
+            Some(&serde_json::json!("user_value"))
+        );
+
+        // Test Session-level state change
+        let session_state_event = InternalEvent::StateChange {
+            context_id: Some(session.id.clone()),
+            app_name: "test_app".to_string(),
+            user_id: Some("test_user".to_string()),
+            scope: crate::events::internal::StateScope::Session,
+            key: "session_data".to_string(),
+            old_value: None,
+            new_value: serde_json::json!({"nested": "value"}),
+            change_reason: Some("Testing session state".to_string()),
+            timestamp: Utc::now(),
+        };
+
+        projector.project_internal(session_state_event).await.unwrap();
+
+        // Verify session state was updated
+        let updated_session = session_service
+            .get_session("test_app", "test_user", &session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            updated_session.get_state("session_data"),
+            Some(&serde_json::json!({"nested": "value"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_storage_projector_state_change_with_old_value() {
+        let (task_manager, session_service) = create_test_components();
+        
+        // Create a session and set initial state
+        let session = session_service
+            .create_session("test_app".to_string(), "test_user".to_string())
+            .await
+            .unwrap();
+        
+        // Set initial user state
+        session_service
+            .update_user_state("test_app", "test_user", "counter", serde_json::json!(5))
+            .await
+            .unwrap();
+        
+        let projector = StorageProjector::new(
+            task_manager,
+            session_service.clone(),
+            "test_app".to_string(),
+            "test_user".to_string(),
+        );
+
+        // Update with old value tracking
+        let state_event = InternalEvent::StateChange {
+            context_id: None,
+            app_name: "test_app".to_string(),
+            user_id: Some("test_user".to_string()),
+            scope: crate::events::internal::StateScope::User,
+            key: "counter".to_string(),
+            old_value: Some(serde_json::json!(5)),
+            new_value: serde_json::json!(10),
+            change_reason: Some("Incrementing counter".to_string()),
+            timestamp: Utc::now(),
+        };
+
+        projector.project_internal(state_event.clone()).await.unwrap();
+
+        // Verify state was updated
+        let updated_session = session_service
+            .get_session("test_app", "test_user", &session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            updated_session.get_state("user:counter"),
+            Some(&serde_json::json!(10))
+        );
+
+        // Verify event was stored for audit
+        assert_eq!(updated_session.get_events().len(), 0); // Events only stored if session has context_id
+    }
+
+    #[tokio::test]
+    async fn test_storage_projector_concurrent_state_changes() {
+        use tokio::task::JoinSet;
+        
+        let (task_manager, session_service) = create_test_components();
+        
+        let session = session_service
+            .create_session("concurrent_app".to_string(), "concurrent_user".to_string())
+            .await
+            .unwrap();
+        
+        let projector = Arc::new(StorageProjector::new(
+            task_manager,
+            session_service.clone(),
+            "concurrent_app".to_string(),
+            "concurrent_user".to_string(),
+        ));
+
+        let mut join_set = JoinSet::new();
+
+        // Spawn concurrent state updates
+        for i in 0..10 {
+            let projector_clone = projector.clone();
+            let session_id = session.id.clone();
+            
+            join_set.spawn(async move {
+                let state_event = InternalEvent::StateChange {
+                    context_id: Some(session_id),
+                    app_name: "concurrent_app".to_string(),
+                    user_id: Some("concurrent_user".to_string()),
+                    scope: crate::events::internal::StateScope::Session,
+                    key: format!("key_{}", i),
+                    old_value: None,
+                    new_value: serde_json::json!(format!("value_{}", i)),
+                    change_reason: Some(format!("Concurrent update {}", i)),
+                    timestamp: Utc::now(),
+                };
+                
+                projector_clone.project_internal(state_event).await
+            });
+        }
+
+        // Wait for all updates
+        while let Some(result) = join_set.join_next().await {
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_ok());
+        }
+
+        // Verify all states were set
+        let final_session = session_service
+            .get_session("concurrent_app", "concurrent_user", &session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        
+        for i in 0..10 {
+            assert_eq!(
+                final_session.get_state(&format!("key_{}", i)),
+                Some(&serde_json::json!(format!("value_{}", i)))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_storage_projector_state_change_event_ordering() {
+        let (task_manager, session_service) = create_test_components();
+        
+        let session = session_service
+            .create_session("test_app".to_string(), "test_user".to_string())
+            .await
+            .unwrap();
+        
+        let projector = StorageProjector::new(
+            task_manager,
+            session_service.clone(),
+            "test_app".to_string(),
+            "test_user".to_string(),
+        );
+
+        // Apply multiple state changes to the same key
+        let values = vec![1, 5, 10, 3, 7];
+        for (i, value) in values.iter().enumerate() {
+            let state_event = InternalEvent::StateChange {
+                context_id: Some(session.id.clone()),
+                app_name: "test_app".to_string(),
+                user_id: Some("test_user".to_string()),
+                scope: crate::events::internal::StateScope::Session,
+                key: "counter".to_string(),
+                old_value: if i > 0 { Some(serde_json::json!(values[i-1])) } else { None },
+                new_value: serde_json::json!(value),
+                change_reason: Some(format!("Update {}", i)),
+                timestamp: Utc::now(),
+            };
+            
+            projector.project_internal(state_event).await.unwrap();
+        }
+
+        // Verify final state is the last value
+        let final_session = session_service
+            .get_session("test_app", "test_user", &session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            final_session.get_state("counter"),
+            Some(&serde_json::json!(7))
+        );
+        
+        // Verify all events were recorded
+        assert_eq!(final_session.get_events().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_storage_projector_mixed_event_types() {
+        let (task_manager, session_service) = create_test_components();
+        
+        let session = session_service
+            .create_session("test_app".to_string(), "test_user".to_string())
+            .await
+            .unwrap();
+        
+        let task = task_manager
+            .create_task("test_app".to_string(), "test_user".to_string(), session.id.clone())
+            .await
+            .unwrap();
+        
+        let projector = StorageProjector::new(
+            task_manager.clone(),
+            session_service.clone(),
+            "test_app".to_string(),
+            "test_user".to_string(),
+        );
+
+        // Mix different event types
+        let events: Vec<InternalEvent> = vec![
+            // State change event
+            InternalEvent::StateChange {
+                context_id: Some(session.id.clone()),
+                app_name: "test_app".to_string(),
+                user_id: Some("test_user".to_string()),
+                scope: crate::events::internal::StateScope::Session,
+                key: "mode".to_string(),
+                old_value: None,
+                new_value: serde_json::json!("active"),
+                change_reason: Some("Activation".to_string()),
+                timestamp: Utc::now(),
+            },
+            // Message event
+            InternalEvent::MessageReceived {
+                content: {
+                    use crate::models::content::Content;
+                    let msg = Message {
+                        kind: "message".to_string(),
+                        message_id: "msg1".to_string(),
+                        role: MessageRole::User,
+                        parts: vec![crate::a2a::Part::Text {
+                            text: "Hello".to_string(),
+                            metadata: None,
+                        }],
+                        context_id: Some(session.id.clone()),
+                        task_id: Some(task.id.clone()),
+                        reference_task_ids: vec![],
+                        extensions: vec![],
+                        metadata: None,
+                    };
+                    Content::from_message(msg, task.id.clone(), session.id.clone())
+                },
+                metadata: EventMetadata {
+                    app_name: "test_app".to_string(),
+                    user_id: "test_user".to_string(),
+                    model_info: None,
+                    performance: None,
+                },
+                timestamp: Utc::now(),
+            },
+            // Another state change
+            InternalEvent::StateChange {
+                context_id: Some(session.id.clone()),
+                app_name: "test_app".to_string(),
+                user_id: Some("test_user".to_string()),
+                scope: crate::events::internal::StateScope::Session,
+                key: "status".to_string(),
+                old_value: None,
+                new_value: serde_json::json!("processing"),
+                change_reason: Some("Started processing".to_string()),
+                timestamp: Utc::now(),
+            },
+        ];
+
+        // Project all events
+        for event in events {
+            projector.project_internal(event).await.unwrap();
+        }
+
+        // Verify state changes were applied
+        let final_session = session_service
+            .get_session("test_app", "test_user", &session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        
+        assert_eq!(
+            final_session.get_state("mode"),
+            Some(&serde_json::json!("active"))
+        );
+        assert_eq!(
+            final_session.get_state("status"),
+            Some(&serde_json::json!("processing"))
+        );
+        
+        // Verify all events were stored
+        assert_eq!(final_session.get_events().len(), 3);
     }
 
     #[tokio::test]
