@@ -1,18 +1,21 @@
 use crate::errors::{AgentError, AgentResult};
 use async_trait::async_trait;
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing;
 
 use super::task_store::TaskStore;
 use crate::a2a::{SendStreamingMessageResult, Task};
 
+// Type aliases to simplify complex nested DashMap types
+type UserTasks = Arc<DashMap<String, Task>>;
+type AppUserTasks = Arc<DashMap<String, UserTasks>>;
+type TaskStoreMap = Arc<DashMap<String, AppUserTasks>>;
+
 /// In-memory implementation of TaskStore.
 ///
 /// This implementation provides:
 /// - Multi-tenant security isolation via three-tier storage
-/// - Thread-safe concurrent operations using RwLock
 /// - Automatic cleanup of empty containers
 /// - Development and testing-friendly storage
 ///
@@ -22,7 +25,7 @@ use crate::a2a::{SendStreamingMessageResult, Task};
 ///
 /// Storage Structure:
 /// ```text
-/// HashMap<app_name, HashMap<user_id, HashMap<task_id, Task>>>
+/// DashMap<app_name, DashMap<user_id, DashMap<task_id, Task>>>
 /// ```
 ///
 /// Performance Characteristics:
@@ -31,9 +34,9 @@ use crate::a2a::{SendStreamingMessageResult, Task};
 /// - Not suitable for large-scale production (use database backend)
 pub struct InMemoryTaskStore {
     /// Secure three-tier task storage: app -> user -> task_id -> Task
-    tasks: Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, Task>>>>>,
+    tasks: TaskStoreMap,
     /// A2A events storage by task_id: task_id -> Vec<A2A Events>
-    task_events: Arc<RwLock<HashMap<String, Vec<SendStreamingMessageResult>>>>,
+    task_events: Arc<DashMap<String, Vec<SendStreamingMessageResult>>>,
 }
 
 impl InMemoryTaskStore {
@@ -49,31 +52,32 @@ impl InMemoryTaskStore {
         );
 
         Self {
-            tasks: Arc::new(RwLock::new(HashMap::new())),
-            task_events: Arc::new(RwLock::new(HashMap::new())),
+            tasks: Arc::new(DashMap::new()),
+            task_events: Arc::new(DashMap::new()),
         }
     }
 
     /// Clear all tasks from storage.
     /// Primarily used for testing and development.
     pub async fn clear(&self) {
-        let mut tasks = self.tasks.write().await;
-        tasks.clear();
-        let mut task_events = self.task_events.write().await;
-        task_events.clear();
+        self.tasks.clear();
+        self.task_events.clear();
     }
 
     /// Get statistics about the current storage state.
     /// Returns (total_apps, total_users, total_tasks)
     pub async fn stats(&self) -> (usize, usize, usize) {
-        let tasks = self.tasks.read().await;
-        let total_apps = tasks.len();
-        let total_users: usize = tasks.values().map(|users| users.len()).sum();
-        let total_tasks: usize = tasks
-            .values()
-            .flat_map(|users| users.values())
-            .map(|user_tasks| user_tasks.len())
-            .sum();
+        let total_apps = self.tasks.len();
+        let mut total_users = 0;
+        let mut total_tasks = 0;
+
+        for app_ref in self.tasks.iter() {
+            let app_users = app_ref.value();
+            total_users += app_users.len();
+            for user_ref in app_users.iter() {
+                total_tasks += user_ref.value().len();
+            }
+        }
         (total_apps, total_users, total_tasks)
     }
 
@@ -83,10 +87,9 @@ impl InMemoryTaskStore {
         task_id: &str,
         event: SendStreamingMessageResult,
     ) -> AgentResult<()> {
-        let mut task_events = self.task_events.write().await;
-        task_events
+        self.task_events
             .entry(task_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(event);
         Ok(())
     }
@@ -96,8 +99,11 @@ impl InMemoryTaskStore {
         &self,
         task_id: &str,
     ) -> AgentResult<Vec<SendStreamingMessageResult>> {
-        let task_events = self.task_events.read().await;
-        Ok(task_events.get(task_id).cloned().unwrap_or_default())
+        Ok(self
+            .task_events
+            .get(task_id)
+            .map(|entry| entry.clone())
+            .unwrap_or_default())
     }
 
     /// Get task with its A2A events
@@ -134,28 +140,26 @@ impl TaskStore for InMemoryTaskStore {
         user_id: &str,
         task_id: &str,
     ) -> AgentResult<Option<Task>> {
-        let tasks = self.tasks.read().await;
-
-        let task = tasks
-            .get(app_name)
-            .and_then(|app_users| app_users.get(user_id))
-            .and_then(|user_tasks| user_tasks.get(task_id))
-            .cloned();
-
-        Ok(task)
+        if let Some(app_users) = self.tasks.get(app_name) {
+            if let Some(user_tasks) = app_users.get(user_id) {
+                if let Some(task_ref) = user_tasks.get(task_id) {
+                    return Ok(Some(task_ref.clone()));
+                }
+            }
+        }
+        Ok(None)
     }
 
     async fn save_task(&self, app_name: &str, user_id: &str, task: &Task) -> AgentResult<()> {
-        let mut tasks = self.tasks.write().await;
-
         // Navigate/create the three-tier structure
-        let app_users = tasks
+        let app_users = self
+            .tasks
             .entry(app_name.to_string())
-            .or_insert_with(HashMap::new);
+            .or_insert_with(|| Arc::new(DashMap::new()));
 
         let user_tasks = app_users
             .entry(user_id.to_string())
-            .or_insert_with(HashMap::new);
+            .or_insert_with(|| Arc::new(DashMap::new()));
 
         // Store the task
         user_tasks.insert(task.id.clone(), task.clone());
@@ -164,28 +168,27 @@ impl TaskStore for InMemoryTaskStore {
     }
 
     async fn delete_task(&self, app_name: &str, user_id: &str, task_id: &str) -> AgentResult<()> {
-        let mut tasks = self.tasks.write().await;
-
         // Navigate to the task and remove it
-        if let Some(app_users) = tasks.get_mut(app_name) {
-            if let Some(user_tasks) = app_users.get_mut(user_id) {
+        if let Some(app_users) = self.tasks.get(app_name) {
+            if let Some(user_tasks) = app_users.get(user_id) {
                 user_tasks.remove(task_id);
 
                 // Clean up empty user container
                 if user_tasks.is_empty() {
+                    drop(user_tasks); // Drop the reference before removing
                     app_users.remove(user_id);
                 }
             }
 
             // Clean up empty app container
             if app_users.is_empty() {
-                tasks.remove(app_name);
+                drop(app_users); // Drop the reference before removing
+                self.tasks.remove(app_name);
             }
         }
 
         // Also remove task events
-        let mut task_events = self.task_events.write().await;
-        task_events.remove(task_id);
+        self.task_events.remove(task_id);
 
         Ok(())
     }
@@ -196,33 +199,31 @@ impl TaskStore for InMemoryTaskStore {
         user_id: &str,
         context_id: Option<&str>,
     ) -> AgentResult<Vec<Task>> {
-        let tasks = self.tasks.read().await;
+        if let Some(app_users) = self.tasks.get(app_name) {
+            if let Some(user_tasks) = app_users.get(user_id) {
+                let mut result: Vec<Task> = if let Some(context_filter) = context_id {
+                    // Filter by context_id
+                    user_tasks
+                        .iter()
+                        .filter(|entry| entry.value().context_id == context_filter)
+                        .map(|entry| entry.value().clone())
+                        .collect()
+                } else {
+                    // Return all tasks for this user
+                    user_tasks
+                        .iter()
+                        .map(|entry| entry.value().clone())
+                        .collect()
+                };
 
-        let user_tasks = match tasks
-            .get(app_name)
-            .and_then(|app_users| app_users.get(user_id))
-        {
-            Some(user_tasks) => user_tasks,
-            None => return Ok(Vec::new()),
-        };
+                // Sort by creation time (newest first)
+                // Since A2A Task doesn't have created_at, we use the task ID creation order as proxy
+                result.sort_by(|a, b| b.id.cmp(&a.id));
 
-        let mut result: Vec<Task> = if let Some(context_filter) = context_id {
-            // Filter by context_id
-            user_tasks
-                .values()
-                .filter(|task| task.context_id == context_filter)
-                .cloned()
-                .collect()
-        } else {
-            // Return all tasks for this user
-            user_tasks.values().cloned().collect()
-        };
-
-        // Sort by creation time (newest first)
-        // Since A2A Task doesn't have created_at, we use the task ID creation order as proxy
-        result.sort_by(|a, b| b.id.cmp(&a.id));
-
-        Ok(result)
+                return Ok(result);
+            }
+        }
+        Ok(Vec::new())
     }
 
     async fn list_tasks_by_context(
@@ -235,15 +236,12 @@ impl TaskStore for InMemoryTaskStore {
     }
 
     async fn task_exists(&self, app_name: &str, user_id: &str, task_id: &str) -> AgentResult<bool> {
-        let tasks = self.tasks.read().await;
-
-        let exists = tasks
-            .get(app_name)
-            .and_then(|app_users| app_users.get(user_id))
-            .and_then(|user_tasks| user_tasks.get(task_id))
-            .is_some();
-
-        Ok(exists)
+        if let Some(app_users) = self.tasks.get(app_name) {
+            if let Some(user_tasks) = app_users.get(user_id) {
+                return Ok(user_tasks.contains_key(task_id));
+            }
+        }
+        Ok(false)
     }
 
     async fn append_message(
@@ -253,19 +251,19 @@ impl TaskStore for InMemoryTaskStore {
         task_id: &str,
         message: crate::a2a::Message,
     ) -> AgentResult<()> {
-        let mut tasks = self.tasks.write().await;
+        // Navigate to the task and update it atomically
+        if let Some(app_users) = self.tasks.get(app_name) {
+            if let Some(user_tasks) = app_users.get(user_id) {
+                if let Some(mut task_ref) = user_tasks.get_mut(task_id) {
+                    task_ref.history.push(message);
+                    return Ok(());
+                }
+            }
+        }
 
-        // Navigate to the task and update it atomically while holding the write lock
-        let task = tasks
-            .get_mut(app_name)
-            .and_then(|app_users| app_users.get_mut(user_id))
-            .and_then(|user_tasks| user_tasks.get_mut(task_id))
-            .ok_or_else(|| AgentError::TaskNotFound {
-                task_id: task_id.to_string(),
-            })?;
-
-        task.history.push(message);
-        Ok(())
+        Err(AgentError::TaskNotFound {
+            task_id: task_id.to_string(),
+        })
     }
 
     async fn append_artifact(
@@ -275,19 +273,19 @@ impl TaskStore for InMemoryTaskStore {
         task_id: &str,
         artifact: crate::a2a::Artifact,
     ) -> AgentResult<()> {
-        let mut tasks = self.tasks.write().await;
+        // Navigate to the task and update it atomically
+        if let Some(app_users) = self.tasks.get(app_name) {
+            if let Some(user_tasks) = app_users.get(user_id) {
+                if let Some(mut task_ref) = user_tasks.get_mut(task_id) {
+                    task_ref.artifacts.push(artifact);
+                    return Ok(());
+                }
+            }
+        }
 
-        // Navigate to the task and update it atomically while holding the write lock
-        let task = tasks
-            .get_mut(app_name)
-            .and_then(|app_users| app_users.get_mut(user_id))
-            .and_then(|user_tasks| user_tasks.get_mut(task_id))
-            .ok_or_else(|| AgentError::TaskNotFound {
-                task_id: task_id.to_string(),
-            })?;
-
-        task.artifacts.push(artifact);
-        Ok(())
+        Err(AgentError::TaskNotFound {
+            task_id: task_id.to_string(),
+        })
     }
 
     async fn update_task_status(
@@ -297,19 +295,19 @@ impl TaskStore for InMemoryTaskStore {
         task_id: &str,
         status: crate::a2a::TaskStatus,
     ) -> AgentResult<()> {
-        let mut tasks = self.tasks.write().await;
+        // Navigate to the task and update it atomically
+        if let Some(app_users) = self.tasks.get(app_name) {
+            if let Some(user_tasks) = app_users.get(user_id) {
+                if let Some(mut task_ref) = user_tasks.get_mut(task_id) {
+                    task_ref.status = status;
+                    return Ok(());
+                }
+            }
+        }
 
-        // Navigate to the task and update it atomically while holding the write lock
-        let task = tasks
-            .get_mut(app_name)
-            .and_then(|app_users| app_users.get_mut(user_id))
-            .and_then(|user_tasks| user_tasks.get_mut(task_id))
-            .ok_or_else(|| AgentError::TaskNotFound {
-                task_id: task_id.to_string(),
-            })?;
-
-        task.status = status;
-        Ok(())
+        Err(AgentError::TaskNotFound {
+            task_id: task_id.to_string(),
+        })
     }
 
     // ===== Task Event Methods Implementation =====
@@ -332,8 +330,11 @@ impl TaskStore for InMemoryTaskStore {
         };
 
         // Get events directly from storage
-        let task_events = self.task_events.read().await;
-        let events = task_events.get(task_id).cloned().unwrap_or_default();
+        let events = self
+            .task_events
+            .get(task_id)
+            .map(|entry| entry.clone())
+            .unwrap_or_default();
 
         Ok(Some((task, events)))
     }
@@ -344,10 +345,9 @@ impl TaskStore for InMemoryTaskStore {
         event: crate::a2a::SendStreamingMessageResult,
     ) -> AgentResult<()> {
         // Add event directly to storage
-        let mut task_events = self.task_events.write().await;
-        task_events
+        self.task_events
             .entry(task_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(event);
         Ok(())
     }
@@ -357,7 +357,10 @@ impl TaskStore for InMemoryTaskStore {
         task_id: &str,
     ) -> AgentResult<Vec<crate::a2a::SendStreamingMessageResult>> {
         // Get events directly from storage
-        let task_events = self.task_events.read().await;
-        Ok(task_events.get(task_id).cloned().unwrap_or_default())
+        Ok(self
+            .task_events
+            .get(task_id)
+            .map(|entry| entry.clone())
+            .unwrap_or_default())
     }
 }

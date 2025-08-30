@@ -93,7 +93,6 @@ impl ProjectedExecutionContext {
         key: String,
         old_value: Option<serde_json::Value>,
         new_value: serde_json::Value,
-        change_reason: Option<String>,
     ) -> AgentResult<()> {
         let internal = EventGenerators::state_change(
             Some(self.context_id.clone()),
@@ -103,7 +102,6 @@ impl ProjectedExecutionContext {
             key,
             old_value,
             new_value,
-            change_reason,
         );
 
         self.event_projector.project_internal(internal).await
@@ -424,7 +422,6 @@ mod tests {
                 "user_preference".to_string(),
                 Some(serde_json::json!("old_value")),
                 serde_json::json!("new_value"),
-                Some("User updated preference".to_string()),
             )
             .await;
 

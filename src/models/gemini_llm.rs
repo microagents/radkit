@@ -331,8 +331,7 @@ impl BaseLlm for GeminiLlm {
             return Err(AgentError::LlmProvider {
                 provider: "gemini".to_string(),
                 message: error_text,
-            }
-            .into());
+            });
         }
 
         let response_text = response

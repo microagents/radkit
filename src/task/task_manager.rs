@@ -105,7 +105,7 @@ impl TaskManager {
     /// This method:
     /// 1. Atomically adds the artifact to the task's artifacts collection
     /// 2. Returns an A2A-compliant TaskArtifactUpdateEvent for protocol compliance
-    /// Thread-safe: Uses atomic operations to prevent lost updates in concurrent scenarios.
+    ///    Thread-safe: Uses atomic operations to prevent lost updates in concurrent scenarios.
     pub async fn add_artifact(
         &self,
         app_name: &str,
@@ -145,7 +145,7 @@ impl TaskManager {
     /// This method:
     /// 1. Atomically updates the task's status
     /// 2. Returns an A2A-compliant TaskStatusUpdateEvent for protocol compliance
-    /// Thread-safe: Uses atomic operations to prevent lost updates in concurrent scenarios.
+    ///    Thread-safe: Uses atomic operations to prevent lost updates in concurrent scenarios.
     pub async fn update_status(
         &self,
         app_name: &str,

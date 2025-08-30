@@ -327,12 +327,12 @@ pub enum MessageRole {
 
 impl PartialEq<&str> for MessageRole {
     fn eq(&self, other: &&str) -> bool {
-        match (self, *other) {
-            (MessageRole::User, "user") => true,
-            (MessageRole::Agent, "agent") => true,
-            (MessageRole::Agent, "assistant") => true,
-            _ => false,
-        }
+        matches!(
+            (self, *other),
+            (MessageRole::User, "user")
+                | (MessageRole::Agent, "agent")
+                | (MessageRole::Agent, "assistant")
+        )
     }
 }
 
@@ -649,7 +649,7 @@ pub struct SendMessageSuccessResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SendMessageResponse {
-    Success(SendMessageSuccessResponse),
+    Success(Box<SendMessageSuccessResponse>),
     Error(JSONRPCErrorResponse),
 }
 
@@ -672,7 +672,7 @@ pub struct SendStreamingMessageSuccessResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SendStreamingMessageResponse {
-    Success(SendStreamingMessageSuccessResponse),
+    Success(Box<SendStreamingMessageSuccessResponse>),
     Error(JSONRPCErrorResponse),
 }
 
@@ -686,7 +686,7 @@ pub struct GetTaskSuccessResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GetTaskResponse {
-    Success(GetTaskSuccessResponse),
+    Success(Box<GetTaskSuccessResponse>),
     Error(JSONRPCErrorResponse),
 }
 
@@ -700,7 +700,7 @@ pub struct CancelTaskSuccessResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CancelTaskResponse {
-    Success(CancelTaskSuccessResponse),
+    Success(Box<CancelTaskSuccessResponse>),
     Error(JSONRPCErrorResponse),
 }
 
@@ -770,7 +770,7 @@ pub struct GetAuthenticatedExtendedCardSuccessResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GetAuthenticatedExtendedCardResponse {
-    Success(GetAuthenticatedExtendedCardSuccessResponse),
+    Success(Box<GetAuthenticatedExtendedCardSuccessResponse>),
     Error(JSONRPCErrorResponse),
 }
 
@@ -901,7 +901,7 @@ pub enum SecurityScheme {
     #[serde(rename = "http")]
     Http(HTTPAuthSecurityScheme),
     #[serde(rename = "oauth2")]
-    OAuth2(OAuth2SecurityScheme),
+    OAuth2(Box<OAuth2SecurityScheme>),
     #[serde(rename = "openIdConnect")]
     OpenIdConnect(OpenIdConnectSecurityScheme),
     #[serde(rename = "mutualTLS")]

@@ -1,13 +1,24 @@
 use crate::errors::AgentResult;
 use async_trait::async_trait;
+use dashmap::DashMap;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing;
 
 use super::session::Session;
 use super::session_service::SessionService;
+
+// Type aliases to simplify complex nested DashMap types
+type UserSessions = Arc<DashMap<String, Session>>;
+type AppUsers = Arc<DashMap<String, UserSessions>>;
+type SessionStore = Arc<DashMap<String, AppUsers>>;
+
+type UserStateValues = Arc<DashMap<String, Value>>;
+type AppUserStates = Arc<DashMap<String, UserStateValues>>;
+type UserStateStore = Arc<DashMap<String, AppUserStates>>;
+
+type AppStateValues = Arc<DashMap<String, Value>>;
+type AppStateStore = Arc<DashMap<String, AppStateValues>>;
 
 /// In-memory implementation of SessionService.
 /// Suitable for development, testing, and single-instance deployments.
@@ -15,11 +26,11 @@ use super::session_service::SessionService;
 /// SECURITY: Sessions are stored as app -> user -> session_id -> Session to prevent cross-access
 pub struct InMemorySessionService {
     /// SECURE session storage: app -> user -> session_id -> Session
-    sessions: Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, Session>>>>>,
+    sessions: SessionStore,
     /// User state storage: app -> user -> key -> value
-    user_state: Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, Value>>>>>,
+    user_state: UserStateStore,
     /// App state storage: app -> key -> value
-    app_state: Arc<RwLock<HashMap<String, HashMap<String, Value>>>>,
+    app_state: AppStateStore,
 }
 
 impl InMemorySessionService {
@@ -35,34 +46,29 @@ impl InMemorySessionService {
         );
 
         Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            user_state: Arc::new(RwLock::new(HashMap::new())),
-            app_state: Arc::new(RwLock::new(HashMap::new())),
+            sessions: Arc::new(DashMap::new()),
+            user_state: Arc::new(DashMap::new()),
+            app_state: Arc::new(DashMap::new()),
         }
     }
 
     /// Clear all sessions (useful for testing)
     pub async fn clear(&self) {
-        let mut sessions = self.sessions.write().await;
-        sessions.clear();
-
-        let mut user_state = self.user_state.write().await;
-        user_state.clear();
-
-        let mut app_state = self.app_state.write().await;
-        app_state.clear();
+        self.sessions.clear();
+        self.user_state.clear();
+        self.app_state.clear();
     }
 
     /// Save a session without any state processing (internal helper)
     async fn save_session_raw(&self, session: &Session) -> AgentResult<()> {
         // Store the session in the secure three-level structure
-        let mut sessions = self.sessions.write().await;
-        let app_users = sessions
+        let app_users = self
+            .sessions
             .entry(session.app_name.clone())
-            .or_insert_with(HashMap::new);
+            .or_insert_with(|| Arc::new(DashMap::new()));
         let user_sessions = app_users
             .entry(session.user_id.clone())
-            .or_insert_with(HashMap::new);
+            .or_insert_with(|| Arc::new(DashMap::new()));
         user_sessions.insert(session.id.clone(), session.clone());
 
         Ok(())
@@ -70,23 +76,23 @@ impl InMemorySessionService {
 
     /// Merge app and user state into a session (like Python's _merge_state)
     async fn merge_state(&self, session: &mut Session) -> AgentResult<()> {
-        let app_states = self.app_state.read().await;
-        let user_states = self.user_state.read().await;
-
         // Get app state for this app and add with app: prefix
-        if let Some(app_state) = app_states.get(&session.app_name) {
-            for (key, value) in app_state {
-                session.state.insert(format!("app:{}", key), value.clone());
+        if let Some(app_state) = self.app_state.get(&session.app_name) {
+            for entry in app_state.iter() {
+                session
+                    .state
+                    .insert(format!("app:{}", entry.key()), entry.value().clone());
             }
         }
 
         // Get user state for this user in this app and add with user: prefix
-        if let Some(user_state) = user_states
-            .get(&session.app_name)
-            .and_then(|users| users.get(&session.user_id))
-        {
-            for (key, value) in user_state {
-                session.state.insert(format!("user:{}", key), value.clone());
+        if let Some(users) = self.user_state.get(&session.app_name) {
+            if let Some(user_state) = users.get(&session.user_id) {
+                for entry in user_state.iter() {
+                    session
+                        .state
+                        .insert(format!("user:{}", entry.key()), entry.value().clone());
+                }
             }
         }
 
@@ -108,19 +114,16 @@ impl SessionService for InMemorySessionService {
         user_id: &str,
         session_id: &str,
     ) -> AgentResult<Option<Session>> {
-        let sessions = self.sessions.read().await;
-        if let Some(session) = sessions
-            .get(app_name)
-            .and_then(|app_users| app_users.get(user_id))
-            .and_then(|user_sessions| user_sessions.get(session_id))
-        {
-            let mut merged_session = session.clone();
-            drop(sessions); // Release the read lock before calling merge_state
-            self.merge_state(&mut merged_session).await?;
-            Ok(Some(merged_session))
-        } else {
-            Ok(None)
+        if let Some(app_users) = self.sessions.get(app_name) {
+            if let Some(user_sessions) = app_users.get(user_id) {
+                if let Some(session_ref) = user_sessions.get(session_id) {
+                    let mut merged_session = session_ref.clone();
+                    self.merge_state(&mut merged_session).await?;
+                    return Ok(Some(merged_session));
+                }
+            }
         }
+        Ok(None)
     }
 
     async fn save_session(&self, session: &Session) -> AgentResult<()> {
@@ -148,34 +151,37 @@ impl SessionService for InMemorySessionService {
         user_id: &str,
         session_id: &str,
     ) -> AgentResult<()> {
-        let mut sessions = self.sessions.write().await;
-
         // Remove the session itself from the structure
-        if let Some(app_users) = sessions.get_mut(app_name) {
-            if let Some(user_sessions) = app_users.get_mut(user_id) {
+        if let Some(app_users) = self.sessions.get(app_name) {
+            if let Some(user_sessions) = app_users.get(user_id) {
                 user_sessions.remove(session_id);
 
                 // Clean up empty user if no sessions left
                 if user_sessions.is_empty() {
+                    drop(user_sessions); // Drop the reference before removing
                     app_users.remove(user_id);
                 }
             }
 
             // Clean up empty app if no users left
             if app_users.is_empty() {
-                sessions.remove(app_name);
+                drop(app_users); // Drop the reference before removing
+                self.sessions.remove(app_name);
             }
         }
         Ok(())
     }
 
     async fn list_sessions(&self, app_name: &str, user_id: &str) -> AgentResult<Vec<Session>> {
-        let sessions = self.sessions.read().await;
-        Ok(sessions
-            .get(app_name)
-            .and_then(|app_users| app_users.get(user_id))
-            .map(|user_sessions| user_sessions.values().cloned().collect())
-            .unwrap_or_default())
+        if let Some(app_users) = self.sessions.get(app_name) {
+            if let Some(user_sessions) = app_users.get(user_id) {
+                return Ok(user_sessions
+                    .iter()
+                    .map(|entry| entry.value().clone())
+                    .collect());
+            }
+        }
+        Ok(Vec::new())
     }
 
     async fn session_exists(
@@ -184,12 +190,12 @@ impl SessionService for InMemorySessionService {
         user_id: &str,
         session_id: &str,
     ) -> AgentResult<bool> {
-        let sessions = self.sessions.read().await;
-        Ok(sessions
-            .get(app_name)
-            .and_then(|app_users| app_users.get(user_id))
-            .and_then(|user_sessions| user_sessions.get(session_id))
-            .is_some())
+        if let Some(app_users) = self.sessions.get(app_name) {
+            if let Some(user_sessions) = app_users.get(user_id) {
+                return Ok(user_sessions.contains_key(session_id));
+            }
+        }
+        Ok(false)
     }
 
     async fn touch_session(
@@ -198,13 +204,12 @@ impl SessionService for InMemorySessionService {
         user_id: &str,
         session_id: &str,
     ) -> AgentResult<()> {
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions
-            .get_mut(app_name)
-            .and_then(|app_users| app_users.get_mut(user_id))
-            .and_then(|user_sessions| user_sessions.get_mut(session_id))
-        {
-            session.last_activity = chrono::Utc::now();
+        if let Some(app_users) = self.sessions.get(app_name) {
+            if let Some(user_sessions) = app_users.get(user_id) {
+                if let Some(mut session) = user_sessions.get_mut(session_id) {
+                    session.last_activity = chrono::Utc::now();
+                }
+            }
         }
         Ok(())
     }
@@ -212,10 +217,10 @@ impl SessionService for InMemorySessionService {
     // State management methods
 
     async fn update_app_state(&self, app_name: &str, key: &str, value: Value) -> AgentResult<()> {
-        let mut app_states = self.app_state.write().await;
-        let app_state = app_states
+        let app_state = self
+            .app_state
             .entry(app_name.to_string())
-            .or_insert_with(HashMap::new);
+            .or_insert_with(|| Arc::new(DashMap::new()));
         app_state.insert(key.to_string(), value);
         Ok(())
     }
@@ -227,12 +232,13 @@ impl SessionService for InMemorySessionService {
         key: &str,
         value: Value,
     ) -> AgentResult<()> {
-        let mut user_states = self.user_state.write().await;
-        let user_state = user_states
+        let app_users = self
+            .user_state
             .entry(app_name.to_string())
-            .or_insert_with(HashMap::new)
+            .or_insert_with(|| Arc::new(DashMap::new()));
+        let user_state = app_users
             .entry(user_id.to_string())
-            .or_insert_with(HashMap::new);
+            .or_insert_with(|| Arc::new(DashMap::new()));
         user_state.insert(key.to_string(), value);
         Ok(())
     }

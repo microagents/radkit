@@ -43,8 +43,12 @@ struct ToolParam {
 #[serde(rename_all = "snake_case")]
 enum ToolChoice {
     Auto,
+    #[allow(dead_code)]
     Any,
-    Tool { name: String },
+    #[allow(dead_code)]
+    Tool {
+        name: String,
+    },
 }
 
 // Content block types for messages
@@ -97,7 +101,9 @@ enum AnthropicMessageContent {
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
     content: Vec<ContentBlock>,
+    #[allow(dead_code)]
     model: String,
+    #[allow(dead_code)]
     role: String,
 }
 
@@ -110,6 +116,7 @@ struct AnthropicError {
 struct AnthropicErrorDetail {
     message: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     error_type: String,
 }
 
@@ -318,14 +325,12 @@ impl BaseLlm for AnthropicLlm {
                 return Err(AgentError::LlmProvider {
                     provider: "anthropic".to_string(),
                     message: error.error.message,
-                }
-                .into());
+                });
             } else {
                 return Err(AgentError::LlmProvider {
                     provider: "anthropic".to_string(),
                     message: error_text,
-                }
-                .into());
+                });
             }
         }
 
