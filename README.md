@@ -7,9 +7,9 @@
 
 ## What is Radkit?
 
-Radkit is an **agent framework** for building AI agents in Rust. It provides comprehensive support for the [**A2A (Agent-to-Agent) Protocol**](https://a2a-protocol.org), enabling seamless agent interoperability with zero conversion overhead.
+Radkit is an **agent framework** for building AI agents in Rust. It aims to provide comprehensive support for the [**A2A (Agent-to-Agent) Protocol**](https://a2a-protocol.org).
 
-Built with enterprise-grade architecture, Radkit offers:
+Radkit offers:
 - 🚀 **A2A-Native Design**: Unlike other agent frameworks (Autogen, CrewAI, Langchain, ADK) where a2a is a secondary layer, Radkit is built from the ground up to support the protocol natively.
 - 🤖 **Multi-Provider LLM Support**: Anthropic Claude, Google Gemini, and more
 - 🔧 **Advanced Tool System**: Function calling with built-in task management tools
@@ -174,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Development Status
 
-**Current Version**: 0.1.0 (Work in Progress - Major Architecture Complete)
+**Current Version**: 0.0.1 (Work in Progress - Major Architecture Complete)
 
 ✅ **Completed Features**:
 - A2A Protocol core implementation with native types

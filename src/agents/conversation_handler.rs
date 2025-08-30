@@ -6,7 +6,10 @@
 use crate::a2a::{Message, MessageRole, Part, SendStreamingMessageResult, TaskStatusUpdateEvent};
 use crate::errors::{AgentError, AgentResult};
 use crate::events::ProjectedExecutionContext;
-use crate::models::{GenerateContentConfig, LlmRequest, content::Content};
+use crate::models::{
+    GenerateContentConfig, LlmRequest,
+    content::{Content, FunctionResponseParams},
+};
 use crate::tools::SimpleToolset;
 
 use async_trait::async_trait;
@@ -86,7 +89,7 @@ impl<'a> ConversationHandler for StreamingConversationHandler<'a> {
                 message_id: Uuid::new_v4().to_string(),
                 role: MessageRole::Agent,
                 parts: vec![Part::Text {
-                    text: format!("Maximum iterations ({}) exceeded", max_iterations),
+                    text: format!("Maximum iterations ({max_iterations}) exceeded"),
                     metadata: None,
                 }],
                 context_id: Some(context.context_id.clone()),
@@ -319,10 +322,9 @@ impl<'a> ConversationExecutor<'a> {
                 let duration_ms = start_time.elapsed().as_millis() as u64;
 
                 // Check if tool was found
-                let is_tool_not_available =
-                    tool_result.error_message.as_ref().map_or(false, |msg| {
-                        msg.contains("not found") || msg.contains("No toolset available")
-                    });
+                let is_tool_not_available = tool_result.error_message.as_ref().is_some_and(|msg| {
+                    msg.contains("not found") || msg.contains("No toolset available")
+                });
 
                 if is_tool_not_available {
                     has_function_calls = false;
@@ -336,15 +338,15 @@ impl<'a> ConversationExecutor<'a> {
                     crate::a2a::MessageRole::User,
                 );
 
-                response_content.add_function_response(
-                    name.clone(),
-                    tool_result.success,
-                    tool_result.data.clone(),
-                    tool_result.error_message.clone(),
-                    tool_use_id.clone(),
-                    Some(duration_ms),
-                    None,
-                );
+                response_content.add_function_response(FunctionResponseParams {
+                    name: name.clone(),
+                    success: tool_result.success,
+                    result: tool_result.data.clone(),
+                    error_message: tool_result.error_message.clone(),
+                    tool_use_id: tool_use_id.clone(),
+                    duration_ms: Some(duration_ms),
+                    metadata: None,
+                });
 
                 // Emit function response as separate message
                 context.emit_message(response_content, None).await?;
@@ -378,7 +380,7 @@ impl<'a> ConversationExecutor<'a> {
 
                 tool.run_async(args_map, context).await
             } else {
-                crate::tools::base_tool::ToolResult::error(format!("Tool '{}' not found", name))
+                crate::tools::base_tool::ToolResult::error(format!("Tool '{name}' not found"))
             }
         } else {
             crate::tools::base_tool::ToolResult::error("No toolset available".to_string())

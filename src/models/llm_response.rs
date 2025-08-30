@@ -158,7 +158,7 @@ impl LlmResponse {
             uuid::Uuid::new_v4().to_string(),
             MessageRole::Agent,
         );
-        error_content.add_text(format!("Error: {}", error_message), None);
+        error_content.add_text(format!("Error: {error_message}"), None);
 
         // Add error metadata
         let mut metadata = HashMap::new();

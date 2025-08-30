@@ -80,6 +80,17 @@ pub enum ContentPart {
     },
 }
 
+/// Parameters for adding a function response
+pub struct FunctionResponseParams {
+    pub name: String,
+    pub success: bool,
+    pub result: Value,
+    pub error_message: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub metadata: Option<HashMap<String, Value>>,
+}
+
 impl Content {
     /// Create a new Content instance
     pub fn new(task_id: String, context_id: String, message_id: String, role: MessageRole) -> Self {
@@ -154,24 +165,15 @@ impl Content {
     }
 
     /// Add a function response
-    pub fn add_function_response(
-        &mut self,
-        name: String,
-        success: bool,
-        result: Value,
-        error_message: Option<String>,
-        tool_use_id: Option<String>,
-        duration_ms: Option<u64>,
-        metadata: Option<HashMap<String, Value>>,
-    ) {
+    pub fn add_function_response(&mut self, params: FunctionResponseParams) {
         self.parts.push(ContentPart::FunctionResponse {
-            name,
-            success,
-            result,
-            error_message,
-            tool_use_id,
-            duration_ms,
-            metadata,
+            name: params.name,
+            success: params.success,
+            result: params.result,
+            error_message: params.error_message,
+            tool_use_id: params.tool_use_id,
+            duration_ms: params.duration_ms,
+            metadata: params.metadata,
         });
     }
 
@@ -336,15 +338,15 @@ mod tests {
         );
 
         // Add function response (should be filtered out)
-        content.add_function_response(
-            "test_tool".to_string(),
-            true,
-            json!({"result": "success"}),
-            None,
-            Some("tool_123".to_string()),
-            Some(150),
-            None,
-        );
+        content.add_function_response(FunctionResponseParams {
+            name: "test_tool".to_string(),
+            success: true,
+            result: json!({"result": "success"}),
+            error_message: None,
+            tool_use_id: Some("tool_123".to_string()),
+            duration_ms: Some(150),
+            metadata: None,
+        });
 
         let message = content.to_a2a_message();
 
@@ -400,15 +402,15 @@ mod tests {
             MessageRole::User,
         );
 
-        content.add_function_response(
-            "weather_tool".to_string(),
-            true,
-            json!({"temperature": "72°F", "conditions": "sunny"}),
-            None,
-            Some("tool_456".to_string()),
-            Some(250),
-            None,
-        );
+        content.add_function_response(FunctionResponseParams {
+            name: "weather_tool".to_string(),
+            success: true,
+            result: json!({"temperature": "72°F", "conditions": "sunny"}),
+            error_message: None,
+            tool_use_id: Some("tool_456".to_string()),
+            duration_ms: Some(250),
+            metadata: None,
+        });
 
         assert!(!content.has_function_calls());
         assert!(content.has_function_responses());
@@ -442,15 +444,15 @@ mod tests {
             MessageRole::User,
         );
 
-        content.add_function_response(
-            "failing_tool".to_string(),
-            false,
-            json!({}),
-            Some("Tool execution failed: Network error".to_string()),
-            Some("tool_789".to_string()),
-            Some(50),
-            None,
-        );
+        content.add_function_response(FunctionResponseParams {
+            name: "failing_tool".to_string(),
+            success: false,
+            result: json!({}),
+            error_message: Some("Tool execution failed: Network error".to_string()),
+            tool_use_id: Some("tool_789".to_string()),
+            duration_ms: Some(50),
+            metadata: None,
+        });
 
         let responses = content.get_function_responses();
         if let ContentPart::FunctionResponse {

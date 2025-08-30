@@ -163,7 +163,7 @@ impl std::fmt::Debug for LlmRequest {
             .field("context_id", &self.context_id)
             .field("system_instruction", &self.system_instruction)
             .field("config", &self.config)
-            .field("toolset", &format!("Some(Arc<dyn BaseToolset>)"))
+            .field("toolset", &"Some(Arc<dyn BaseToolset>)".to_string())
             .field("metadata", &self.metadata)
             .finish()
     }

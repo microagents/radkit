@@ -147,8 +147,7 @@ impl BaseLlm for MockLlm {
         // For now, just return an error - we'll implement streaming later
         Err(AgentError::NotImplemented {
             feature: "Streaming for MockLlm".to_string(),
-        }
-        .into())
+        })
     }
 
     fn supports_function_calling(&self) -> bool {

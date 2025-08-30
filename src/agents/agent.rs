@@ -307,7 +307,7 @@ impl Agent {
                             message_id: Uuid::new_v4().to_string(),
                             role: MessageRole::Agent,
                             parts: vec![Part::Text {
-                                text: format!("Streaming execution error: {}", e),
+                                text: format!("Streaming execution error: {e}"),
                                 metadata: Some({
                                     let mut meta = std::collections::HashMap::new();
                                     meta.insert(
@@ -629,7 +629,7 @@ impl Agent {
             .await
             .map_err(|e| AgentError::Internal {
                 component: "stream_sender".to_string(),
-                reason: format!("Failed to send initial working status: {}", e),
+                reason: format!("Failed to send initial working status: {e}"),
             })?;
 
         // Execute the conversation loop
@@ -652,7 +652,7 @@ impl Agent {
             .await
             .map_err(|e| AgentError::Internal {
                 component: "stream_sender".to_string(),
-                reason: format!("Failed to send final task: {}", e),
+                reason: format!("Failed to send final task: {e}"),
             })?;
 
         Ok(())

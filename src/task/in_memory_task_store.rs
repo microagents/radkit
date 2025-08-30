@@ -7,6 +7,11 @@ use tracing;
 use super::task_store::TaskStore;
 use crate::a2a::{SendStreamingMessageResult, Task};
 
+// Type aliases to simplify complex nested DashMap types
+type UserTasks = Arc<DashMap<String, Task>>;
+type AppUserTasks = Arc<DashMap<String, UserTasks>>;
+type TaskStoreMap = Arc<DashMap<String, AppUserTasks>>;
+
 /// In-memory implementation of TaskStore.
 ///
 /// This implementation provides:
@@ -29,7 +34,7 @@ use crate::a2a::{SendStreamingMessageResult, Task};
 /// - Not suitable for large-scale production (use database backend)
 pub struct InMemoryTaskStore {
     /// Secure three-tier task storage: app -> user -> task_id -> Task
-    tasks: Arc<DashMap<String, Arc<DashMap<String, Arc<DashMap<String, Task>>>>>>,
+    tasks: TaskStoreMap,
     /// A2A events storage by task_id: task_id -> Vec<A2A Events>
     task_events: Arc<DashMap<String, Vec<SendStreamingMessageResult>>>,
 }
@@ -65,7 +70,7 @@ impl InMemoryTaskStore {
         let total_apps = self.tasks.len();
         let mut total_users = 0;
         let mut total_tasks = 0;
-        
+
         for app_ref in self.tasks.iter() {
             let app_users = app_ref.value();
             total_users += app_users.len();
@@ -84,7 +89,7 @@ impl InMemoryTaskStore {
     ) -> AgentResult<()> {
         self.task_events
             .entry(task_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(event);
         Ok(())
     }
@@ -94,7 +99,11 @@ impl InMemoryTaskStore {
         &self,
         task_id: &str,
     ) -> AgentResult<Vec<SendStreamingMessageResult>> {
-        Ok(self.task_events.get(task_id).map(|entry| entry.clone()).unwrap_or_default())
+        Ok(self
+            .task_events
+            .get(task_id)
+            .map(|entry| entry.clone())
+            .unwrap_or_default())
     }
 
     /// Get task with its A2A events
@@ -143,7 +152,8 @@ impl TaskStore for InMemoryTaskStore {
 
     async fn save_task(&self, app_name: &str, user_id: &str, task: &Task) -> AgentResult<()> {
         // Navigate/create the three-tier structure
-        let app_users = self.tasks
+        let app_users = self
+            .tasks
             .entry(app_name.to_string())
             .or_insert_with(|| Arc::new(DashMap::new()));
 
@@ -200,7 +210,10 @@ impl TaskStore for InMemoryTaskStore {
                         .collect()
                 } else {
                     // Return all tasks for this user
-                    user_tasks.iter().map(|entry| entry.value().clone()).collect()
+                    user_tasks
+                        .iter()
+                        .map(|entry| entry.value().clone())
+                        .collect()
                 };
 
                 // Sort by creation time (newest first)
@@ -247,7 +260,7 @@ impl TaskStore for InMemoryTaskStore {
                 }
             }
         }
-        
+
         Err(AgentError::TaskNotFound {
             task_id: task_id.to_string(),
         })
@@ -269,7 +282,7 @@ impl TaskStore for InMemoryTaskStore {
                 }
             }
         }
-        
+
         Err(AgentError::TaskNotFound {
             task_id: task_id.to_string(),
         })
@@ -291,7 +304,7 @@ impl TaskStore for InMemoryTaskStore {
                 }
             }
         }
-        
+
         Err(AgentError::TaskNotFound {
             task_id: task_id.to_string(),
         })
@@ -317,7 +330,11 @@ impl TaskStore for InMemoryTaskStore {
         };
 
         // Get events directly from storage
-        let events = self.task_events.get(task_id).map(|entry| entry.clone()).unwrap_or_default();
+        let events = self
+            .task_events
+            .get(task_id)
+            .map(|entry| entry.clone())
+            .unwrap_or_default();
 
         Ok(Some((task, events)))
     }
@@ -330,7 +347,7 @@ impl TaskStore for InMemoryTaskStore {
         // Add event directly to storage
         self.task_events
             .entry(task_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(event);
         Ok(())
     }
@@ -340,6 +357,10 @@ impl TaskStore for InMemoryTaskStore {
         task_id: &str,
     ) -> AgentResult<Vec<crate::a2a::SendStreamingMessageResult>> {
         // Get events directly from storage
-        Ok(self.task_events.get(task_id).map(|entry| entry.clone()).unwrap_or_default())
+        Ok(self
+            .task_events
+            .get(task_id)
+            .map(|entry| entry.clone())
+            .unwrap_or_default())
     }
 }
