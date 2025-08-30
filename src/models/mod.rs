@@ -9,12 +9,14 @@ pub mod gemini_llm;
 pub mod llm_request;
 pub mod llm_response;
 pub mod mock_llm;
+pub mod openai_llm;
 
 pub use anthropic_llm::AnthropicLlm;
 pub use gemini_llm::GeminiLlm;
 pub use llm_request::{GenerateContentConfig, LlmRequest};
 pub use llm_response::{ErrorInfo, ErrorType, LlmResponse, StreamingInfo, UsageMetadata};
 pub use mock_llm::MockLlm;
+pub use openai_llm::OpenAILlm;
 
 /// Base trait for all LLM providers
 ///
