@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::events::InternalEvent;
+use super::session_event::SessionEvent;
 
 /// Represents a user session for managing conversation state, context, and events.
 /// Maps to A2A contextId for grouping related interactions.
@@ -18,8 +18,8 @@ pub struct Session {
     pub user_id: String,
     /// Session-level state (only session-specific data, app/user state is merged in)
     pub state: HashMap<String, Value>,
-    /// Internal events for debugging and observability
-    pub events: Vec<InternalEvent>,
+    /// Session events for the unified system
+    pub events: Vec<SessionEvent>,
     /// When the session was created
     pub created_at: DateTime<Utc>,
     /// Last activity timestamp
@@ -58,21 +58,15 @@ impl Session {
         self.state.remove(key)
     }
 
-    /// Add an internal event to this session
-    pub fn add_event(&mut self, event: InternalEvent) {
+    /// Add a session event to this session
+    pub fn add_session_event(&mut self, event: SessionEvent) {
         self.events.push(event);
         self.last_activity = Utc::now();
     }
 
-    /// Get all internal events for this session
-    pub fn get_events(&self) -> &[InternalEvent] {
+    /// Get all session events
+    pub fn get_session_events(&self) -> &[SessionEvent] {
         &self.events
-    }
-
-    /// Clear all internal events (useful for testing)
-    pub fn clear_events(&mut self) {
-        self.events.clear();
-        self.last_activity = Utc::now();
     }
 }
 
@@ -122,7 +116,7 @@ mod tests {
         let initial_activity = session.last_activity;
         thread::sleep(Duration::from_millis(10));
 
-        // Add event
+        // Add session event
         use crate::models::content::{Content, ContentPart};
         let test_content = Content {
             task_id: "task1".to_string(),
@@ -136,26 +130,16 @@ mod tests {
             metadata: None,
         };
 
-        let event = InternalEvent::MessageReceived {
-            content: test_content,
-            metadata: crate::events::internal::EventMetadata {
-                app_name: "test_app".to_string(),
-                user_id: "user123".to_string(),
-                model_info: None,
-                performance: None,
+        let event = SessionEvent::new(
+            session.id.clone(),
+            "task1".to_string(),
+            crate::sessions::SessionEventType::UserMessage {
+                content: test_content,
             },
-            timestamp: Utc::now(),
-        };
-        session.add_event(event);
-        assert_eq!(session.get_events().len(), 1);
+        );
+
+        session.add_session_event(event);
+        assert_eq!(session.get_session_events().len(), 1);
         assert!(session.last_activity > initial_activity);
-
-        let activity_after_add = session.last_activity;
-        thread::sleep(Duration::from_millis(10));
-
-        // Clear events
-        session.clear_events();
-        assert!(session.get_events().is_empty());
-        assert!(session.last_activity > activity_after_add);
     }
 }

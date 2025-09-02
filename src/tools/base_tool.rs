@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::a2a::MessageSendParams;
-use crate::events::ProjectedExecutionContext;
+use crate::events::ExecutionContext;
 
 /// Function declaration that describes a tool's interface to the LLM.
 /// Similar to Google's FunctionDeclaration but simplified for our use case.
@@ -71,7 +71,7 @@ pub trait BaseTool: Send + Sync {
     async fn run_async(
         &self,
         args: HashMap<String, Value>,
-        context: &ProjectedExecutionContext,
+        context: &ExecutionContext,
     ) -> ToolResult;
 
     /// Processes the outgoing LLM request for this tool.
@@ -80,7 +80,7 @@ pub trait BaseTool: Send + Sync {
     /// - Advanced: preprocessing the LLM request before it's sent
     async fn process_llm_request(
         &self,
-        _context: &ProjectedExecutionContext,
+        _context: &ExecutionContext,
         _llm_request: &mut MessageSendParams,
     ) -> AgentResult<()> {
         // Default implementation: add function declaration to message metadata if available

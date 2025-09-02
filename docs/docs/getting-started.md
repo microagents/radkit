@@ -176,28 +176,25 @@ let response = agent.send_message("my_app".to_string(), "user123".to_string(), p
 
 ```rust
 // Example: How the agent reconstructs conversation context
-async fn create_llm_request(&self, context: &ProjectedExecutionContext) -> LlmRequest {
-    // Get the full session with ALL events across ALL tasks
-    let session = self.agent.session_service()
-        .get_session(&context.app_name, &context.user_id, &context.context_id)
-        .await?;
-
-    // Convert session events to Content messages for LLM
-    let content_messages = self
-        .convert_events_to_content_messages(&session.events, &context.task_id)
-        .await?;
+async fn create_llm_request(&self, context: &ExecutionContext) -> LlmRequest {
+    // Get conversation from EventProcessor which reconstructs from session events
+    let content_messages = context.get_llm_conversation().await?;
 
     // The LLM sees the ENTIRE conversation history reconstructed from events
-    LlmRequest::with_messages(
-        content_messages,               // All content from session events
-        context.task_id.clone(),        // Current task for highlighting  
-        context.context_id.clone(),     // Maps to A2A contextId
-    )
+    LlmRequest {
+        messages: content_messages,     // All content from session events
+        current_task_id: context.task_id.clone(),
+        context_id: context.context_id.clone(),   // Maps to A2A contextId
+        system_instruction: Some(self.agent.instruction().to_string()),
+        config: GenerateContentConfig::default(),
+        toolset: self.agent.toolset().cloned(),
+        metadata: context.current_params.metadata.clone().unwrap_or_default(),
+    }
 }
 
-// Events to Content conversion preserves:
-// - User messages (MessageReceived with User role)
-// - Agent responses (MessageReceived with Agent role)  
+// SessionEvent to Content conversion preserves:
+// - User messages (SessionEventType::UserMessage)
+// - Agent responses (SessionEventType::AgentMessage)  
 // - Function calls and responses (ContentPart within messages)
 // - All metadata and context information
 ```
@@ -339,12 +336,11 @@ let agent = Agent::new(
 
 ### 5. Monitoring Tool Calls and Responses
 
-Tool calls and responses are captured as internal events and can be monitored in real-time:
+Tool calls and responses are captured in session events and can be monitored in real-time via streaming:
 
 ```rust
-use radkit::events::InternalEvent;
-use radkit::models::content::ContentPart;
 use futures::StreamExt;
+use radkit::a2a::SendStreamingMessageResult;
 
 // Send a message that will trigger tool usage
 let message = create_user_message(
@@ -364,56 +360,17 @@ let mut execution = agent.send_streaming_message(
     params
 ).await?;
 
-// Monitor tool execution via internal events
-let mut internal_events = execution.internal_events;
-tokio::spawn(async move {
-    while let Some(event) = internal_events.recv().await {
-        match event {
-            InternalEvent::MessageReceived { content, metadata, .. } => {
-                // Check for function calls and responses in the content
-                for part in &content.parts {
-                    match part {
-                        ContentPart::FunctionCall { name, arguments, .. } => {
-                            println!("🔧 Tool Call: {}", name);
-                            println!("   Arguments: {}", serde_json::to_string_pretty(arguments).unwrap_or_default());
-                        }
-                        ContentPart::FunctionResponse { name, success, result, error_message, duration_ms, .. } => {
-                            let status = if *success { "✓" } else { "✗" };
-                            println!("⚙️  Tool Response: {} {}", name, status);
-                            if *success {
-                                println!("   Result: {}", serde_json::to_string_pretty(result).unwrap_or_default());
-                            } else if let Some(error) = error_message {
-                                println!("   Error: {}", error);
-                            }
-                            if let Some(duration) = duration_ms {
-                                println!("   Duration: {}ms", duration);
-                            }
-                        }
-                        ContentPart::Text { text, .. } => {
-                            if content.role == MessageRole::Agent {
-                                println!("💬 Agent: {}", text);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            InternalEvent::StateChange { key, new_value, scope, .. } => {
-                println!("📝 State changed: {} = {} (scope: {:?})", key, new_value, scope);
-            }
-        }
-    }
-});
-
-// Process A2A events normally
 let mut final_task = None;
-while let Some(event) = execution.stream.next().await {
+
+// Process A2A events and monitor tool responses
+while let Some(event) = execution.a2a_stream.next().await {
     match event {
         SendStreamingMessageResult::Message(msg) => {
-            // Agent's response with tool results integrated
+            // Agent's response includes tool results
+            println!("💬 Agent (role={:?}):", msg.role);
             for part in &msg.parts {
                 if let Part::Text { text, .. } = part {
-                    print!("{}", text);
+                    println!("  {}", text);
                 }
             }
         }
@@ -425,7 +382,7 @@ while let Some(event) = execution.stream.next().await {
     }
 }
 
-// Tool calls are also persisted in session events
+// Tool calls are persisted in session events with detailed information
 if let Some(task) = final_task {
     let session_service = agent.session_service();
     let session = session_service
@@ -433,25 +390,33 @@ if let Some(task) = final_task {
         .await?
         .expect("Session should exist");
 
-    println!("\n📋 Persisted Tool Calls in Session:");
+    println!("\n📋 Session Events Summary:");
+    println!("  Total events: {}", session.events.len());
+    
+    // Count different types of content in session events
+    let mut tool_calls = 0;
+    let mut tool_responses = 0;
+    
     for event in &session.events {
-        if let InternalEvent::MessageReceived { content, .. } = event {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
             for part in &content.parts {
                 match part {
-                    ContentPart::FunctionCall { name, arguments, .. } => {
-                        println!("  🔧 Stored Tool Call: {} with {:?}", name, arguments);
+                    radkit::models::content::ContentPart::FunctionCall { name, .. } => {
+                        tool_calls += 1;
+                        println!("  🔧 Tool Call: {}", name);
                     }
-                    ContentPart::FunctionResponse { name, success, result, .. } => {
-                        println!("  ⚙️ Stored Tool Response: {} (success: {})", name, success);
-                        if *success {
-                            println!("     Result: {:?}", result);
-                        }
+                    radkit::models::content::ContentPart::FunctionResponse { name, success, .. } => {
+                        tool_responses += 1;
+                        println!("  ⚙️ Tool Response: {} (success: {})", name, success);
                     }
                     _ => {}
                 }
             }
         }
     }
+    
+    println!("  Tool calls: {}, Tool responses: {}", tool_calls, tool_responses);
 }
 ```
 
@@ -485,14 +450,28 @@ let error_tool = FunctionTool::new(
     "required": ["input"]
 }));
 
-// Monitor tool failures
-while let Some(event) = internal_events.recv().await {
-    if let InternalEvent::MessageReceived { content, .. } = event {
-        for part in &content.parts {
-            if let ContentPart::FunctionResponse { name, success, error_message, .. } = part {
-                if !success {
-                    println!("❌ Tool '{}' failed: {}", name, 
-                        error_message.as_deref().unwrap_or("Unknown error"));
+// Monitor tool failures through session events after completion
+let response = agent.send_message(app, user, params).await?;
+
+if let SendMessageResult::Task(task) = response.result {
+    // Check session events for tool failures
+    let session_service = agent.session_service();
+    let session = session_service
+        .get_session("test_app", "test_user", &task.context_id)
+        .await?
+        .expect("Session should exist");
+
+    for event in &session.events {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
+            for part in &content.parts {
+                if let radkit::models::content::ContentPart::FunctionResponse { 
+                    name, success, error_message, .. 
+                } = part {
+                    if !success {
+                        println!("❌ Tool '{}' failed: {}", name, 
+                            error_message.as_deref().unwrap_or("Unknown error"));
+                    }
                 }
             }
         }
@@ -508,7 +487,59 @@ Best for: Simple queries, batch processing, testing
 
 ```rust
 let execution = agent.send_message(app, user, params).await?;
-// Get complete response with all events captured
+
+// Access the complete response
+if let SendMessageResult::Task(task) = execution.result {
+    println!("Task completed: {}", task.id);
+}
+
+// Access ALL events including function calls/responses
+println!("Total events captured: {}", execution.all_events.len());
+
+for event in &execution.all_events {
+    match &event.event_type {
+        radkit::sessions::SessionEventType::UserMessage { content } |
+        radkit::sessions::SessionEventType::AgentMessage { content } => {
+            // Check for function calls and responses
+            for part in &content.parts {
+                match part {
+                    radkit::models::content::ContentPart::FunctionCall { name, arguments, .. } => {
+                        println!("🔧 Function called: {} with args: {:?}", name, arguments);
+                    }
+                    radkit::models::content::ContentPart::FunctionResponse { 
+                        name, success, result, error_message, duration_ms, .. 
+                    } => {
+                        println!("⚙️ Function {} returned (success: {})", name, success);
+                        if *success {
+                            println!("   Result: {:?}", result);
+                        } else if let Some(err) = error_message {
+                            println!("   Error: {}", err);
+                        }
+                        if let Some(ms) = duration_ms {
+                            println!("   Duration: {}ms", ms);
+                        }
+                    }
+                    radkit::models::content::ContentPart::Text { text, .. } => {
+                        if content.role == MessageRole::Agent {
+                            println!("💬 Agent: {}", text);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        radkit::sessions::SessionEventType::TaskStatusChanged { new_state, .. } => {
+            println!("📊 Task status: {:?}", new_state);
+        }
+        radkit::sessions::SessionEventType::ArtifactSaved { artifact } => {
+            println!("💾 Artifact saved: {:?}", artifact.name);
+        }
+        _ => {}
+    }
+}
+
+// Access A2A protocol events only (filtered subset)
+println!("A2A events: {}", execution.a2a_events.len());
 ```
 
 ### Streaming (Real-Time Response)
@@ -530,19 +561,20 @@ let params = MessageSendParams {
     metadata: None,
 };
 
-// Use streaming to capture A2A events in real-time
+// Use streaming to capture events in real-time
 let mut execution = agent.send_streaming_message(
     "my_app".to_string(),
     "user123".to_string(),
     params
 ).await?;
 
+// Option 1: Monitor A2A protocol events (for UI updates)
 let mut status_updates = 0;
 let mut artifacts = 0;
 let mut final_task = None;
 
-// Process events as they arrive
-while let Some(event) = execution.stream.next().await {
+// Process A2A events as they arrive
+while let Some(event) = execution.a2a_stream.next().await {
     match event {
         SendStreamingMessageResult::Message(msg) => {
             // Real-time message content
@@ -571,72 +603,124 @@ while let Some(event) = execution.stream.next().await {
 
 println!("Streaming completed: {} status updates, {} artifacts", status_updates, artifacts);
 
-// Process internal events for debugging
-let mut internal_events = Vec::new();
-while let Ok(event) = execution.internal_events.try_recv() {
-    internal_events.push(event);
+// Option 2: Also monitor ALL events stream for detailed debugging
+// You can spawn a task to monitor all_events_stream in parallel
+tokio::spawn(async move {
+    let mut all_events_stream = execution.all_events_stream;
+    
+    while let Some(event) = all_events_stream.next().await {
+        match &event.event_type {
+            radkit::sessions::SessionEventType::UserMessage { content } |
+            radkit::sessions::SessionEventType::AgentMessage { content } => {
+                // Monitor function calls and responses in real-time
+                for part in &content.parts {
+                    match part {
+                        radkit::models::content::ContentPart::FunctionCall { name, arguments, .. } => {
+                            println!("🔧 [DEBUG] Function called: {} with {:?}", name, arguments);
+                        }
+                        radkit::models::content::ContentPart::FunctionResponse { 
+                            name, success, result, duration_ms, .. 
+                        } => {
+                            println!("⚙️ [DEBUG] Function {} returned in {:?}ms (success: {})", 
+                                name, duration_ms, success);
+                            if *success {
+                                println!("   [DEBUG] Result: {:?}", result);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            radkit::sessions::SessionEventType::TaskCreated { .. } => {
+                println!("📋 [DEBUG] Task created");
+            }
+            radkit::sessions::SessionEventType::StateChanged { key, new_value, .. } => {
+                println!("📝 [DEBUG] State changed: {} = {}", key, new_value);
+            }
+            _ => {}
+        }
+    }
+});
+
+// Access session events for debugging after completion
+if let Some(task) = &final_task {
+    let session_service = agent.session_service();
+    let session = session_service
+        .get_session("my_app", "user123", &task.context_id)
+        .await?
+        .expect("Session should exist");
+    println!("Session has {} total events", session.events.len());
 }
-println!("Captured {} internal events", internal_events.len());
 ```
 
 ## Event Monitoring
 
-Both streaming and non-streaming modes capture events:
+Both streaming and non-streaming modes capture events in the session:
 
 ```rust
-// Access internal events for debugging
-for event in &response.internal_events {
-    use radkit::events::InternalEvent;
-    use radkit::models::content::ContentPart;
-    
-    match event {
-        InternalEvent::MessageReceived { content, metadata, .. } => {
+use radkit::models::content::ContentPart;
+
+// Access session events after completion
+let session_service = agent.session_service();
+let session = session_service
+    .get_session("test_app", "test_user", &task.context_id)
+    .await?
+    .expect("Session should exist");
+
+// Monitor all activity in the session
+println!("📋 Session Event Summary:");
+println!("  Total events: {}", session.events.len());
+
+for event in &session.events {
+    match &event.event_type {
+        radkit::sessions::SessionEventType::UserMessage { content } => {
+            println!("👤 User message: {}", 
+                content.parts.iter()
+                    .filter_map(|p| match p {
+                        ContentPart::Text { text, .. } => Some(text.chars().take(50).collect::<String>()),
+                        _ => None
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        radkit::sessions::SessionEventType::AgentMessage { content } => {
+            println!("🤖 Agent response");
+            
             // Monitor tool calls and responses
             for part in &content.parts {
                 match part {
                     ContentPart::FunctionCall { name, arguments, .. } => {
-                        println!("🔧 Function Call: {} with args: {:?}", name, arguments);
+                        println!("  🔧 Function Call: {} with args: {:?}", name, arguments);
                     }
                     ContentPart::FunctionResponse { name, success, result, error_message, duration_ms, .. } => {
-                        println!("⚙️ Function Response: {} (success: {})", name, success);
+                        println!("  ⚙️ Function Response: {} (success: {})", name, success);
                         if let Some(error) = error_message {
-                            println!("   Error: {}", error);
+                            println!("     Error: {}", error);
                         }
                         if let Some(duration) = duration_ms {
-                            println!("   Duration: {}ms", duration);
+                            println!("     Duration: {}ms", duration);
                         }
                     }
                     ContentPart::Text { text, .. } => {
-                        if content.role == MessageRole::Agent {
-                            println!("💬 Agent response: {}", text.chars().take(50).collect::<String>());
-                        }
+                        println!("  💬 Text: {}", text.chars().take(50).collect::<String>());
                     }
                     _ => {}
                 }
             }
-            
-            // Check if this message has performance metadata
-            if let Some(perf) = &metadata.performance {
-                println!("⏱️  Performance: {}ms", perf.duration_ms);
-            }
-            
-            // Check if this message has model metadata
-            if let Some(model_info) = &metadata.model_info {
-                println!("🤖 Model: {} (tokens: {}→{})", 
-                    model_info.model_name,
-                    model_info.prompt_tokens.unwrap_or(0),
-                    model_info.response_tokens.unwrap_or(0)
-                );
-            }
         }
-        InternalEvent::StateChange { key, new_value, scope, .. } => {
+        radkit::sessions::SessionEventType::TaskStatusChanged { new_state, .. } => {
+            println!("📊 Task status changed to: {:?}", new_state);
+        }
+        radkit::sessions::SessionEventType::ArtifactSaved { artifact } => {
+            println!("💾 Artifact saved: {:?}", artifact.name);
+        }
+        radkit::sessions::SessionEventType::StateChanged { key, new_value, scope, .. } => {
             println!("📝 State changed: {} = {} (scope: {:?})", key, new_value, scope);
         }
+        _ => {}
     }
 }
-
-// Access A2A protocol events
-println!("A2A events: {}", response.a2a_events.len());
 ```
 
 ## Complete Example: Math Tutor Agent
@@ -645,7 +729,7 @@ println!("A2A events: {}", response.a2a_events.len());
 use radkit::a2a::{Message, MessageRole, MessageSendParams, Part, SendMessageResult};
 use radkit::agents::{Agent, AgentConfig};
 use radkit::models::AnthropicLlm;
-use radkit::events::InternalEvent;
+use radkit::sessions::SessionEventType;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -730,24 +814,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n✅ Task Status: {:?}", task.status.state);
     }
     
-    // Analyze performance from captured events
-    let mut total_time = 0u64;
-    let mut model_calls = 0;
+    // Analyze session events
+    let session_service = agent.session_service();
+    let session = session_service
+        .get_session("math_tutor_app", "student_001", &task.context_id)
+        .await?
+        .expect("Session should exist");
     
-    for event in &response.internal_events {
-        match event {
-            InternalEvent::MessageReceived { metadata, .. } => {
-                if let Some(perf) = &metadata.performance {
-                    total_time += perf.duration_ms;
-                }
-                if metadata.model_info.is_some() {
-                    model_calls += 1;
-                }
+    println!("📊 Session Analysis:");
+    println!("  Total events: {}", session.events.len());
+    
+    let mut message_events = 0;
+    let mut status_changes = 0;
+    let mut artifacts = 0;
+    
+    for event in &session.events {
+        match &event.event_type {
+            radkit::sessions::SessionEventType::UserMessage { .. } | 
+            radkit::sessions::SessionEventType::AgentMessage { .. } => {
+                message_events += 1;
+            }
+            radkit::sessions::SessionEventType::TaskStatusChanged { .. } => {
+                status_changes += 1;
+            }
+            radkit::sessions::SessionEventType::ArtifactSaved { .. } => {
+                artifacts += 1;
             }
             _ => {}
         }
     }
-    println!("⏱️ Total processing time: {}ms across {} model calls", total_time, model_calls);
+    
+    println!("  Messages: {}, Status changes: {}, Artifacts: {}", 
+        message_events, status_changes, artifacts);
     
     Ok(())
 }

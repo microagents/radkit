@@ -7,7 +7,7 @@
 use futures::StreamExt;
 use radkit::a2a::{
     Message, MessageRole, MessageSendParams, Part, SendMessageResult, SendStreamingMessageResult,
-    Task, TaskArtifactUpdateEvent, TaskQueryParams, TaskState, TaskStatusUpdateEvent,
+    TaskQueryParams,
 };
 use radkit::agents::{Agent, AgentConfig};
 use radkit::models::{AnthropicLlm, GeminiLlm};
@@ -68,15 +68,16 @@ fn create_user_message(text: &str) -> Message {
     }
 }
 
-/// Helper function to count function calls in internal events
+/// Helper function to count function calls in session events
 fn count_function_calls(
-    internal_events: &[radkit::events::InternalEvent],
+    session_events: &[radkit::sessions::SessionEvent],
     tool_name: &str,
 ) -> usize {
-    internal_events
+    session_events
         .iter()
-        .filter_map(|event| match event {
-            radkit::events::InternalEvent::MessageReceived { content, .. } => Some(
+        .filter_map(|event| match &event.event_type {
+            radkit::sessions::SessionEventType::UserMessage { content }
+            | radkit::sessions::SessionEventType::AgentMessage { content } => Some(
                 content
                     .parts
                     .iter()
@@ -126,7 +127,7 @@ async fn test_anthropic_status_update() {
     let mut final_task = None;
 
     // Process streaming results to capture A2A events
-    while let Some(event) = execution.stream.next().await {
+    while let Some(event) = execution.a2a_stream.next().await {
         match event {
             SendStreamingMessageResult::TaskStatusUpdate(status_event) => {
                 status_update_events += 1;
@@ -165,7 +166,17 @@ async fn test_anthropic_status_update() {
 
     // Verify update_status tool was called using internal events
     let mut internal_events = Vec::new();
-    while let Ok(event) = execution.internal_events.try_recv() {
+    // Collect some events from the stream
+    let mut collected_events = Vec::new();
+    for _ in 0..10 {
+        if let Some(internal_event) = execution.all_events_stream.next().await {
+            collected_events.push(internal_event);
+        } else {
+            break;
+        }
+    }
+
+    for event in collected_events {
         internal_events.push(event);
     }
     let status_update_calls = count_function_calls(&internal_events, "update_status");
@@ -244,7 +255,7 @@ async fn test_anthropic_artifact_save() {
     let mut received_artifacts = Vec::new();
 
     // Process streaming results to capture A2A events
-    while let Some(event) = execution.stream.next().await {
+    while let Some(event) = execution.a2a_stream.next().await {
         match event {
             SendStreamingMessageResult::TaskArtifactUpdate(artifact_event) => {
                 artifact_update_events += 1;
@@ -323,7 +334,17 @@ async fn test_anthropic_artifact_save() {
 
     // Verify save_artifact tool was called using internal events
     let mut internal_events = Vec::new();
-    while let Ok(event) = execution.internal_events.try_recv() {
+    // Collect some events from the stream
+    let mut collected_events = Vec::new();
+    for _ in 0..10 {
+        if let Some(internal_event) = execution.all_events_stream.next().await {
+            collected_events.push(internal_event);
+        } else {
+            break;
+        }
+    }
+
+    for event in collected_events {
         internal_events.push(event);
     }
     let artifact_save_calls = count_function_calls(&internal_events, "save_artifact");
@@ -425,7 +446,7 @@ async fn test_gemini_status_update() {
     );
 
     // Verify update_status tool was called using internal events
-    let status_update_calls = count_function_calls(&send_result.internal_events, "update_status");
+    let status_update_calls = count_function_calls(&send_result.all_events, "update_status");
     assert!(
         status_update_calls > 0,
         "Should have called update_status tool"
@@ -526,7 +547,7 @@ async fn test_gemini_artifact_save() {
     assert!(content.contains("Hello from Gemini"));
 
     // Verify save_artifact tool was called using internal events
-    let artifact_save_calls = count_function_calls(&send_result.internal_events, "save_artifact");
+    let artifact_save_calls = count_function_calls(&send_result.all_events, "save_artifact");
     assert!(
         artifact_save_calls > 0,
         "Should have called save_artifact tool"
@@ -607,7 +628,7 @@ async fn test_anthropic_multiple_operations() {
     let mut final_task = None;
 
     // Process streaming results to capture A2A events
-    while let Some(event) = execution.stream.next().await {
+    while let Some(event) = execution.a2a_stream.next().await {
         match event {
             SendStreamingMessageResult::TaskStatusUpdate(status_event) => {
                 status_update_events += 1;
@@ -680,7 +701,17 @@ async fn test_anthropic_multiple_operations() {
 
     // Verify both tools were called using internal events
     let mut internal_events = Vec::new();
-    while let Ok(event) = execution.internal_events.try_recv() {
+    // Collect some events from the stream
+    let mut collected_events = Vec::new();
+    for _ in 0..10 {
+        if let Some(internal_event) = execution.all_events_stream.next().await {
+            collected_events.push(internal_event);
+        } else {
+            break;
+        }
+    }
+
+    for event in collected_events {
         internal_events.push(event);
     }
     let status_update_calls = count_function_calls(&internal_events, "update_status");
@@ -803,8 +834,8 @@ async fn test_gemini_multiple_operations() {
     assert!(content.contains("</h1>"));
 
     // Verify both tools were called using internal events
-    let status_update_calls = count_function_calls(&send_result.internal_events, "update_status");
-    let artifact_save_calls = count_function_calls(&send_result.internal_events, "save_artifact");
+    let status_update_calls = count_function_calls(&send_result.all_events, "update_status");
+    let artifact_save_calls = count_function_calls(&send_result.all_events, "save_artifact");
     assert!(
         status_update_calls > 0,
         "Should have called update_status tool"

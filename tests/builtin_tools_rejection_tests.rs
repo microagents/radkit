@@ -63,15 +63,16 @@ fn create_user_message(text: &str) -> Message {
     }
 }
 
-/// Helper function to count function calls in internal events
+/// Helper function to count function calls in session events
 fn count_function_calls(
-    internal_events: &[radkit::events::InternalEvent],
+    session_events: &[radkit::sessions::SessionEvent],
     tool_name: &str,
 ) -> usize {
-    internal_events
+    session_events
         .iter()
-        .filter_map(|event| match event {
-            radkit::events::InternalEvent::MessageReceived { content, .. } => Some(
+        .filter_map(|event| match &event.event_type {
+            radkit::sessions::SessionEventType::UserMessage { content }
+            | radkit::sessions::SessionEventType::AgentMessage { content } => Some(
                 content
                     .parts
                     .iter()
@@ -159,7 +160,7 @@ async fn test_anthropic_task_rejection() {
     );
 
     // Verify update_status tool was called using internal events
-    let status_update_calls = count_function_calls(&send_result.internal_events, "update_status");
+    let status_update_calls = count_function_calls(&send_result.all_events, "update_status");
     assert!(
         status_update_calls > 0,
         "Should have called update_status tool"
@@ -256,7 +257,7 @@ async fn test_anthropic_task_failure() {
     );
 
     // Verify update_status tool was called using internal events
-    let status_update_calls = count_function_calls(&send_result.internal_events, "update_status");
+    let status_update_calls = count_function_calls(&send_result.all_events, "update_status");
     assert!(
         status_update_calls > 0,
         "Should have called update_status tool"
@@ -350,7 +351,7 @@ async fn test_gemini_task_cancellation() {
     );
 
     // Verify update_status tool was called using internal events
-    let status_update_calls = count_function_calls(&send_result.internal_events, "update_status");
+    let status_update_calls = count_function_calls(&send_result.all_events, "update_status");
     assert!(
         status_update_calls > 0,
         "Should have called update_status tool"
@@ -447,7 +448,7 @@ async fn test_anthropic_auth_required() {
     );
 
     // Verify update_status tool was called using internal events
-    let status_update_calls = count_function_calls(&send_result.internal_events, "update_status");
+    let status_update_calls = count_function_calls(&send_result.all_events, "update_status");
     assert!(
         status_update_calls > 0,
         "Should have called update_status tool"
@@ -534,7 +535,7 @@ async fn test_gemini_multiple_state_transitions() {
     );
 
     // Verify update_status tool was called multiple times using internal events
-    let status_update_calls = count_function_calls(&send_result.internal_events, "update_status");
+    let status_update_calls = count_function_calls(&send_result.all_events, "update_status");
     assert!(
         status_update_calls >= 2,
         "Should have multiple status updates, got {}",

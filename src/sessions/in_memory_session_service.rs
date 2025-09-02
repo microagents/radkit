@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing;
 
 use super::session::Session;
+use super::session_event::{SessionEvent, SessionEventType};
 use super::session_service::SessionService;
 
 // Type aliases to simplify complex nested DashMap types
@@ -31,6 +32,8 @@ pub struct InMemorySessionService {
     user_state: UserStateStore,
     /// App state storage: app -> key -> value
     app_state: AppStateStore,
+    /// Task index: task_id -> session_id (for fast task lookups)
+    task_index: Arc<DashMap<String, String>>,
 }
 
 impl InMemorySessionService {
@@ -49,6 +52,7 @@ impl InMemorySessionService {
             sessions: Arc::new(DashMap::new()),
             user_state: Arc::new(DashMap::new()),
             app_state: Arc::new(DashMap::new()),
+            task_index: Arc::new(DashMap::new()),
         }
     }
 
@@ -57,6 +61,7 @@ impl InMemorySessionService {
         self.sessions.clear();
         self.user_state.clear();
         self.app_state.clear();
+        self.task_index.clear();
     }
 
     /// Save a session without any state processing (internal helper)
@@ -139,7 +144,7 @@ impl SessionService for InMemorySessionService {
     async fn create_session(&self, app_name: String, user_id: String) -> AgentResult<Session> {
         let session = Session::new(app_name, user_id);
         self.save_session_raw(&session).await?;
-        // Return merged version like Python does
+        // Return the merged version
         let mut merged_session = session.clone();
         self.merge_state(&mut merged_session).await?;
         Ok(merged_session)
@@ -163,7 +168,7 @@ impl SessionService for InMemorySessionService {
                 }
             }
 
-            // Clean up empty app if no users left
+            // Clean up the empty app if no users left
             if app_users.is_empty() {
                 drop(app_users); // Drop the reference before removing
                 self.sessions.remove(app_name);
@@ -242,6 +247,118 @@ impl SessionService for InMemorySessionService {
         user_state.insert(key.to_string(), value);
         Ok(())
     }
+
+    // ===== New Unified Event System Implementation =====
+
+    /// Store an event in the persistence layer (pure storage)
+    async fn store_event(&self, event: &SessionEvent) -> AgentResult<()> {
+        // Handle task indexing for TaskCreated events
+        if let SessionEventType::TaskCreated { .. } = &event.event_type {
+            self.task_index
+                .insert(event.task_id.clone(), event.session_id.clone());
+        }
+
+        self.store_event_in_session(event).await
+    }
+
+    /// Apply state changes from StateChanged events (pure side effects)
+    async fn apply_state_change(&self, event: &SessionEvent) -> AgentResult<()> {
+        self.apply_event_side_effects(event).await
+    }
+
+    /// Get all events for a session (for debugging and business logic)
+    async fn get_session_events(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+    ) -> AgentResult<Vec<SessionEvent>> {
+        let session = self
+            .get_session(app_name, user_id, session_id)
+            .await?
+            .ok_or_else(|| crate::errors::AgentError::SessionNotFound {
+                session_id: session_id.to_string(),
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+            })?;
+
+        Ok(session.events.clone())
+    }
+}
+
+// Private helper methods for the new unified event system
+impl InMemorySessionService {
+    /// Store event in session
+    async fn store_event_in_session(&self, event: &SessionEvent) -> AgentResult<()> {
+        // We need app_name and user_id to find the session
+        // For Phase 1, we'll search through the sessions to find the matching session_id
+        // In Phase 2, we'll optimize this with a session_id -> (app, user) lookup table
+
+        for app_entry in self.sessions.iter() {
+            let _app_name = app_entry.key();
+            let app_users = app_entry.value();
+
+            for user_entry in app_users.iter() {
+                let _user_id = user_entry.key();
+                let user_sessions = user_entry.value();
+
+                if let Some(mut session) = user_sessions.get_mut(&event.session_id) {
+                    session.events.push(event.clone());
+                    session.last_activity = chrono::Utc::now();
+                    return Ok(());
+                }
+            }
+        }
+
+        tracing::warn!("Session not found for event: {}", event.session_id);
+        Ok(())
+    }
+
+    /// Apply side effects from events
+    async fn apply_event_side_effects(&self, event: &SessionEvent) -> AgentResult<()> {
+        if let SessionEventType::StateChanged {
+            scope,
+            key,
+            new_value,
+            ..
+        } = &event.event_type
+        {
+            // Find the session to get app_name and user_id
+            for app_entry in self.sessions.iter() {
+                let app_name = app_entry.key();
+                let app_users = app_entry.value();
+
+                for user_entry in app_users.iter() {
+                    let user_id = user_entry.key();
+                    let user_sessions = user_entry.value();
+
+                    if user_sessions.contains_key(&event.session_id) {
+                        match scope {
+                            super::session_event::StateScope::App => {
+                                self.update_app_state(app_name, key, new_value.clone())
+                                    .await?;
+                            }
+                            super::session_event::StateScope::User => {
+                                self.update_user_state(app_name, user_id, key, new_value.clone())
+                                    .await?;
+                            }
+                            super::session_event::StateScope::Session => {
+                                // Session state is handled directly in the session
+                                if let Some(mut session) = user_sessions.get_mut(&event.session_id)
+                                {
+                                    session.set_state(key.clone(), new_value.clone());
+                                }
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Note: Business logic methods (rebuild_task_from_events, extract_task_ids) moved to EventProcessor
 }
 
 #[cfg(test)]

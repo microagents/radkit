@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use super::base_tool::BaseTool;
-use crate::events::ProjectedExecutionContext;
+use crate::events::ExecutionContext;
 
 /// Base trait for toolsets - collections of related tools.
 /// Similar to Python ADK's BaseToolset but adapted for Rust patterns.
@@ -18,7 +18,7 @@ pub trait BaseToolset: Send + Sync {
     /// Processes the outgoing LLM request for this toolset.
     /// Called before individual tools process the LLM request.
     /// Can be used for toolset-level request modifications.
-    async fn process_llm_request(&self, _context: &ProjectedExecutionContext) {
+    async fn process_llm_request(&self, _context: &ExecutionContext) {
         // Default implementation does nothing
     }
 }
@@ -97,7 +97,7 @@ impl BaseToolset for CombinedToolset {
         self.base_toolset.close().await;
     }
 
-    async fn process_llm_request(&self, context: &ProjectedExecutionContext) {
+    async fn process_llm_request(&self, context: &ExecutionContext) {
         self.base_toolset.process_llm_request(context).await;
     }
 }
@@ -105,7 +105,7 @@ impl BaseToolset for CombinedToolset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::ProjectedExecutionContext;
+    use crate::events::ExecutionContext;
     use crate::tools::base_tool::{BaseTool, FunctionDeclaration, ToolResult};
 
     // Mock tool for testing
@@ -145,7 +145,7 @@ mod tests {
         async fn run_async(
             &self,
             _args: std::collections::HashMap<String, serde_json::Value>,
-            _context: &ProjectedExecutionContext,
+            _context: &ExecutionContext,
         ) -> ToolResult {
             ToolResult::success(serde_json::Value::Null)
         }

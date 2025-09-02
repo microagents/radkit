@@ -281,7 +281,7 @@ async fn test_anthropic_basic_sanity() {
     let mut execution = result.unwrap();
     let mut all_text = String::new();
 
-    while let Some(result) = execution.stream.next().await {
+    while let Some(result) = execution.a2a_stream.next().await {
         match result {
             SendStreamingMessageResult::Message(message) => {
                 if message.role == MessageRole::Agent {

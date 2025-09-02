@@ -114,39 +114,40 @@ let execution = agent.send_message(app, user, params).await?;
 
 ### Direct Task Access
 
-You can also work with tasks directly through the TaskManager:
+You can also work with tasks directly through the Agent API:
 
 ```rust
-// Access the task manager
-let task_manager = agent.task_manager();
+use radkit::a2a::TaskQueryParams;
 
 // Get a specific task
-let task = task_manager.get_task(
-    "my_app",
-    "user123", 
-    "task_id_here"
+let task = agent.get_task(
+    "my_app".to_string(),
+    "user123".to_string(), 
+    TaskQueryParams {
+        id: "task_id_here".to_string(),
+        history_length: None,
+        metadata: None,
+    }
 ).await?;
 
-if let Some(task) = task {
-    println!("Task status: {:?}", task.status.state);
-    println!("Messages in history: {}", task.history.len());
-    println!("Artifacts: {}", task.artifacts.len());
-}
+println!("Task status: {:?}", task.status.state);
+println!("Messages in history: {}", task.history.len());
+println!("Artifacts: {}", task.artifacts.len());
 
-// List all tasks for a user
-let all_tasks = task_manager.list_tasks(
-    "my_app",
-    "user123",
+// List all tasks for a user (using the A2A list_tasks method)
+let all_tasks = agent.list_tasks(
+    "my_app".to_string(),
+    "user123".to_string(),
     None  // No context filter
 ).await?;
 
 println!("User has {} total tasks", all_tasks.len());
 
 // List tasks for a specific session
-let session_tasks = task_manager.list_tasks(
-    "my_app",
-    "user123",
-    Some("session_id")  // Filter by context
+let session_tasks = agent.list_tasks(
+    "my_app".to_string(),
+    "user123".to_string(),
+    Some("session_id".to_string())  // Filter by context
 ).await?;
 ```
 
@@ -273,7 +274,7 @@ Generated when task status changes:
 
 ```rust
 // Monitor status updates in streaming mode
-while let Some(event) = execution.stream.next().await {
+while let Some(event) = execution.a2a_stream.next().await {
     if let SendStreamingMessageResult::TaskStatusUpdate(update) = event {
         println!("Task {} status: {:?}", update.task_id, update.status.state);
         
@@ -299,7 +300,7 @@ Generated when artifacts are added:
 
 ```rust
 // Monitor artifact updates
-while let Some(event) = execution.stream.next().await {
+while let Some(event) = execution.a2a_stream.next().await {
     if let SendStreamingMessageResult::TaskArtifactUpdate(update) = event {
         println!("New artifact: {}", update.artifact.artifact_id);
         
@@ -320,7 +321,7 @@ while let Some(event) = execution.stream.next().await {
 ### Handling Failed Tasks
 
 ```rust
-use ak_rust::errors::AgentError;
+use radkit::errors::AgentError;
 
 async fn handle_task_failure(
     agent: &Agent,
@@ -330,10 +331,15 @@ async fn handle_task_failure(
 ) -> Result<Task, Box<dyn std::error::Error>> {
     
     // Get the failed task
-    let failed_task = agent.task_manager()
-        .get_task(app_name, user_id, failed_task_id)
-        .await?
-        .ok_or("Task not found")?;
+    let failed_task = agent.get_task(
+        app_name.to_string(),
+        user_id.to_string(),
+        TaskQueryParams {
+            id: failed_task_id.to_string(),
+            history_length: None,
+            metadata: None,
+        }
+    ).await?;
     
     // Analyze failure
     let failure_reason = failed_task.status.message.as_ref()
@@ -432,7 +438,7 @@ async fn monitor_task_with_timeout(
     let start = Instant::now();
     let mut execution = agent.send_streaming_message(app_name, user_id, params).await?;
     
-    while let Some(event) = execution.stream.next().await {
+    while let Some(event) = execution.a2a_stream.next().await {
         // Check timeout
         if start.elapsed().as_secs() > timeout_seconds {
             return Err("Task timeout".into());

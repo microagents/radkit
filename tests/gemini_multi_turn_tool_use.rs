@@ -8,7 +8,6 @@ use radkit::a2a::{Message, MessageRole, MessageSendParams, Part, SendStreamingMe
 use radkit::agents::Agent;
 use radkit::models::GeminiLlm;
 use radkit::sessions::InMemorySessionService;
-use radkit::task::InMemoryTaskStore;
 use radkit::tools::{FunctionTool, ToolResult};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -22,7 +21,6 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
     get_gemini_key().map(|api_key| {
         let gemini_llm = GeminiLlm::new("gemini-2.0-flash-exp".to_string(), api_key);
         let session_service = Arc::new(InMemorySessionService::new());
-        let task_store = Arc::new(InMemoryTaskStore::new());
 
         let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
             .into_iter()
@@ -37,7 +35,6 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
             Arc::new(gemini_llm),
         )
         .with_session_service(session_service)
-        .with_task_store(task_store)
         .with_tools(base_tools)
     })
 }
@@ -138,7 +135,7 @@ async fn test_gemini_multi_turn_calculation() {
     let mut final_task = None;
 
     println!("✅ Processing A2A streaming events for Gemini tool execution:");
-    while let Some(result) = execution.stream.next().await {
+    while let Some(result) = execution.a2a_stream.next().await {
         match result {
             SendStreamingMessageResult::Message(message) => {
                 println!("  📨 A2A Message Event: role={:?}", message.role);
@@ -174,8 +171,21 @@ async fn test_gemini_multi_turn_calculation() {
     let mut rt_function_responses = 0;
 
     println!("✅ Processing real-time internal events:");
-    while let Ok(internal_event) = execution.internal_events.try_recv() {
-        if let radkit::events::InternalEvent::MessageReceived { content, .. } = internal_event {
+    // Collect some events from the stream
+    let mut collected_events = Vec::new();
+    for _ in 0..15 {
+        if let Some(internal_event) = execution.all_events_stream.next().await {
+            collected_events.push(internal_event);
+        } else {
+            break;
+        }
+    }
+
+    for internal_event in collected_events {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } =
+            internal_event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall {
@@ -198,7 +208,7 @@ async fn test_gemini_multi_turn_calculation() {
                             "  ⚙️ Real-time Function Response: {} (success: {})",
                             name, success
                         );
-                        assert!(*success, "Tool execution should succeed");
+                        assert!(success, "Tool execution should succeed");
                         if let Some(data) = result.get("result") {
                             println!("    🧮 Real-time Result: {}", data);
                             assert_eq!(data.as_i64().unwrap(), 4, "Should return 4");
@@ -224,7 +234,9 @@ async fn test_gemini_multi_turn_calculation() {
 
     println!("✅ Validating persisted tool execution in session:");
     for event in &session.events {
-        if let radkit::events::InternalEvent::MessageReceived { content, .. } = event {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall {
