@@ -3,7 +3,7 @@
 //! This module provides factory functions for creating built-in tools that integrate
 //! directly with TaskManager and automatically emit A2A-compliant events.
 
-use crate::a2a::{Artifact, Message, MessageRole, Part, TaskState, TaskStatus};
+use crate::a2a::{Artifact, Part, TaskState};
 
 /// Built-in tools that can be enabled on agents
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,6 @@ pub enum BuiltinTool {
     // SetReminder,
 }
 use crate::tools::{BaseTool, FunctionTool};
-use chrono::Utc;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,34 +50,13 @@ pub fn create_update_status_tool() -> Arc<dyn BaseTool> {
                     "rejected" => TaskState::Rejected,
                     _ => TaskState::Working,
                 };
-                let task_status = TaskStatus {
-                    state,
-                    timestamp: Some(Utc::now().to_rfc3339()),
-                    message: message.map(|text| Message {
-                        kind: "message".to_string(),
-                        message_id: Uuid::new_v4().to_string(),
-                        role: MessageRole::Agent,
-                        parts: vec![Part::Text { text, metadata: None }],
-                        context_id: Some(context.context_id.clone()),
-                        task_id: Some(context.task_id.clone()),
-                        reference_task_ids: Vec::new(),
-                        extensions: Vec::new(),
-                        metadata: None,
-                    }),
-                };
-
-                // Emit A2A status update via event system; storage handler will persist
-                let event = crate::a2a::TaskStatusUpdateEvent {
-                    kind: "status-update".to_string(),
-                    task_id: context.task_id.clone(),
-                    context_id: context.context_id.clone(),
-                    status: task_status,
-                    is_final: matches!(status_str, "completed" | "failed" | "canceled" | "rejected"),
-                    metadata: None,
-                };
-                // Emit via tool context; if no projector wired, this is a no-op
+                // Emit task status change event via unified context
                 let _ = context
-                    .emit_a2a(crate::a2a::SendStreamingMessageResult::TaskStatusUpdate(event))
+                    .emit_task_status_update(
+                        TaskState::Submitted, // Previous state (tasks start as Submitted)
+                        state,
+                        message,
+                    )
                     .await;
                 crate::tools::ToolResult::success(json!({
                     "status": status_str,
@@ -149,18 +127,8 @@ pub fn create_save_artifact_tool() -> Arc<dyn BaseTool> {
                     }),
                 };
 
-                // Emit an A2A artifact update; storage handler will persist
-                let event = crate::a2a::TaskArtifactUpdateEvent {
-                    kind: "artifact-update".to_string(),
-                    task_id: context.task_id.clone(),
-                    context_id: context.context_id.clone(),
-                    artifact,
-                    append: None,
-                    last_chunk: Some(true),
-                    metadata: None,
-                };
-                // Use context to emit; if not wired, it's a no-op
-                let _ = context.emit_a2a(crate::a2a::SendStreamingMessageResult::TaskArtifactUpdate(event)).await;
+                // Emit artifact saved event via unified context
+                let _ = context.emit_artifact_save(artifact).await;
                 crate::tools::ToolResult::success(json!({
                     "name": name,
                     "type": artifact_type,

@@ -3,30 +3,25 @@
 //! Tests basic text conversation with Anthropic Claude using the Agent.
 //! These tests require ANTHROPIC_API_KEY environment variable to be set.
 //! Tests comprehensive event validation, task lifecycle, and A2A protocol compliance.
-
-use futures::StreamExt;
 use radkit::a2a::{
     Message, MessageRole, MessageSendParams, Part, SendMessageResult, SendStreamingMessageResult,
     TaskQueryParams, TaskState,
 };
 use radkit::agents::Agent;
-use radkit::events::InternalEvent;
 use radkit::models::AnthropicLlm;
-use radkit::sessions::InMemorySessionService;
-use radkit::task::InMemoryTaskStore;
+use radkit::sessions::{InMemorySessionService, SessionEventType};
 use std::sync::Arc;
 
 mod common;
 use common::{get_anthropic_key, init_test_env};
 
 /// Helper function to create Agent with Anthropic if API key is available
-/// Creates agent with proper session service and task store for comprehensive testing
+/// Creates agent with proper session service for comprehensive testing
 fn create_test_agent() -> Option<Agent> {
     init_test_env();
     get_anthropic_key().map(|api_key| {
         let anthropic_llm = AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
         let session_service = Arc::new(InMemorySessionService::new());
-        let task_store = Arc::new(InMemoryTaskStore::new());
 
         Agent::new(
             "test_agent".to_string(),
@@ -35,7 +30,6 @@ fn create_test_agent() -> Option<Agent> {
             Arc::new(anthropic_llm),
         )
         .with_session_service(session_service)
-        .with_task_store(task_store)
     })
 }
 
@@ -174,11 +168,16 @@ async fn test_anthropic_simple_conversation_comprehensive() {
         "Session should have internal events"
     );
 
-    // Validate internal event types
+    // Validate session event types
     let message_events = session
         .events
         .iter()
-        .filter(|e| matches!(e, InternalEvent::MessageReceived { .. }))
+        .filter(|e| {
+            matches!(
+                e.event_type,
+                SessionEventType::UserMessage { .. } | SessionEventType::AgentMessage { .. }
+            )
+        })
         .count();
 
     assert!(
@@ -238,7 +237,7 @@ async fn test_anthropic_streaming_comprehensive() {
 
     // ✅ 1. Process A2A Streaming Events and Validate Structure
     println!("✅ Processing A2A streaming events:");
-    while let Some(result) = execution.stream.next().await {
+    while let Some(result) = execution.a2a_stream.next().await {
         match result {
             SendStreamingMessageResult::Message(message) => {
                 message_events += 1;
@@ -332,35 +331,76 @@ async fn test_anthropic_streaming_comprehensive() {
     );
 
     // ✅ 3. Validate Response Content
+    if !got_response {
+        println!("❌ DEBUG: No agent response received through A2A stream");
+        println!(
+            "❌ DEBUG: Final task history length: {}",
+            final_task.history.len()
+        );
+        if final_task.history.len() >= 2 {
+            println!(
+                "❌ DEBUG: Agent message exists in task but not in stream - A2A filtering issue?"
+            );
+            for (i, msg) in final_task.history.iter().enumerate() {
+                println!(
+                    "  Task msg {}: role={:?}, parts={}",
+                    i,
+                    msg.role,
+                    msg.parts.len()
+                );
+                for part in &msg.parts {
+                    if let radkit::a2a::Part::Text { text, .. } = part {
+                        println!(
+                            "    Text: '{}'",
+                            if text.len() > 50 { &text[..50] } else { text }
+                        );
+                    }
+                }
+            }
+        }
+    }
     assert!(got_response, "Should have received a response");
     assert!(!all_text.trim().is_empty(), "Response should not be empty");
     println!("✅ Received streaming response: {}", all_text.trim());
 
-    // ✅ 4. Monitor Internal Events in Parallel
-    let mut internal_execution_events = 0;
-    let mut internal_model_events = 0;
+    // ✅ 4. Monitor All Events from the stream
+    let mut all_execution_events = 0;
+    let mut model_events = 0;
 
-    // Process any remaining internal events
-    while let Ok(internal_event) = execution.internal_events.try_recv() {
-        match internal_event {
-            InternalEvent::MessageReceived { content, .. } => {
-                internal_execution_events += 1;
-                println!("  📥 Internal Message Event: {} parts", content.parts.len());
+    // Process events from the all_events_stream using futures
+    use futures::StreamExt;
+    let mut all_events_stream = execution.all_events_stream;
+
+    // Collect a few events to validate (streaming may still be ongoing)
+    while let Some(session_event) = all_events_stream.next().await {
+        match &session_event.event_type {
+            SessionEventType::UserMessage { content }
+            | SessionEventType::AgentMessage { content } => {
+                all_execution_events += 1;
+                println!("  📥 Session Event: {} parts", content.parts.len());
 
                 // Check if this is a model response by looking at role
                 if content.role == radkit::a2a::MessageRole::Agent {
-                    internal_model_events += 1;
+                    model_events += 1;
                 }
             }
-            InternalEvent::StateChange { key, .. } => {
-                println!("  📊 Internal State Change Event: {}", key);
+            SessionEventType::StateChanged { key, .. } => {
+                println!("  📊 Session State Change Event: {}", key);
             }
+            _ => {
+                println!("  📄 Other Session Event: {:?}", session_event.event_type);
+            }
+        }
+
+        // Break after collecting some events (don't wait forever)
+        if all_execution_events >= 2 {
+            break;
         }
     }
 
     println!(
-        "✅ Internal Event Summary: {} execution, {} model events",
-        internal_execution_events, internal_model_events
+        "✅ Session Event Summary: {} execution, {} model events",
+        all_execution_events, model_events
     );
 
     // ✅ 5. Validate Task Storage and Retrieval After Streaming
@@ -529,7 +569,12 @@ async fn test_anthropic_multi_turn_conversation() {
     let message_events = session
         .events
         .iter()
-        .filter(|e| matches!(e, InternalEvent::MessageReceived { .. }))
+        .filter(|e| {
+            matches!(
+                e.event_type,
+                SessionEventType::UserMessage { .. } | SessionEventType::AgentMessage { .. }
+            )
+        })
         .count();
     assert!(
         message_events >= 6,

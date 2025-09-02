@@ -89,7 +89,7 @@ async fn test_complete_event_storage_pipeline() -> AgentResult<()> {
         .expect("Session should exist");
 
     assert!(!session.events.is_empty());
-    println!("✅ Session has {} internal events", session.events.len());
+    println!("✅ Session has {} session events", session.events.len());
 
     println!("🎉 Complete event storage pipeline test passed!");
     Ok(())
@@ -283,17 +283,19 @@ async fn test_tool_event_storage() -> AgentResult<()> {
         .events
         .iter()
         .filter(|e| {
-            if let radkit::events::InternalEvent::MessageReceived { content, .. } = e {
-                // Check if content has function calls or responses
-                content.parts.iter().any(|part| {
-                    matches!(
-                        part,
-                        radkit::models::content::ContentPart::FunctionCall { .. }
-                            | radkit::models::content::ContentPart::FunctionResponse { .. }
-                    )
-                })
-            } else {
-                false
+            match &e.event_type {
+                radkit::sessions::SessionEventType::UserMessage { content }
+                | radkit::sessions::SessionEventType::AgentMessage { content } => {
+                    // Check if content has function calls or responses
+                    content.parts.iter().any(|part| {
+                        matches!(
+                            part,
+                            radkit::models::content::ContentPart::FunctionCall { .. }
+                                | radkit::models::content::ContentPart::FunctionResponse { .. }
+                        )
+                    })
+                }
+                _ => false,
             }
         })
         .count();

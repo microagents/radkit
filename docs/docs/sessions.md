@@ -15,22 +15,33 @@ A **Session** represents a conversation context that:
 **Key Concept**: Radkit sessions store **events** rather than static message history. When an agent needs to understand conversation context, it dynamically reconstructs the full conversation from `session.events`.
 
 ```rust
-// From conversation_handler.rs - how conversations are built:
-async fn convert_events_to_content_messages(
+// From EventProcessor - how conversations are built:
+async fn get_llm_conversation(
     &self,
-    events: &[InternalEvent],
-    _current_task_id: &str,
+    app_name: &str,
+    user_id: &str,
+    context_id: &str,
 ) -> AgentResult<Vec<Content>> {
+    let session = self.session_service
+        .get_session(app_name, user_id, context_id)
+        .await?
+        .ok_or_else(|| AgentError::SessionNotFound { 
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: context_id.to_string(),
+        })?;
+
     let mut content_messages = Vec::new();
 
-    for event in events {
-        match event {
-            InternalEvent::MessageReceived { content, .. } => {
-                // Each MessageReceived event becomes part of conversation
+    for event in &session.events {
+        match &event.event_type {
+            SessionEventType::UserMessage { content } |
+            SessionEventType::AgentMessage { content } => {
+                // Each message event becomes part of conversation
                 content_messages.push(content.clone());
             }
             _ => {
-                // Other events (StateChange) don't affect conversation flow
+                // Other events (StateChange, TaskCreated) don't affect conversation flow
             }
         }
     }

@@ -5,20 +5,19 @@ use std::future::Future;
 use std::pin::Pin;
 
 use super::base_tool::{BaseTool, FunctionDeclaration, ToolResult};
-use crate::events::ProjectedExecutionContext;
+use crate::events::ExecutionContext;
 
 /// Type alias for async function that can be used as a tool
 pub type AsyncToolFunction = Box<
     dyn for<'a> Fn(
             HashMap<String, Value>,
-            &'a ProjectedExecutionContext,
+            &'a ExecutionContext,
         ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>
         + Send
         + Sync,
 >;
 
 /// A tool that wraps a simple function.
-/// Similar to Python ADK's function tools but adapted for Rust async functions.
 pub struct FunctionTool {
     name: String,
     description: String,
@@ -33,7 +32,7 @@ impl FunctionTool {
     where
         F: for<'a> Fn(
                 HashMap<String, Value>,
-                &'a ProjectedExecutionContext,
+                &'a ExecutionContext,
             ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>
             + Send
             + Sync
@@ -89,7 +88,7 @@ impl BaseTool for FunctionTool {
     async fn run_async(
         &self,
         args: HashMap<String, Value>,
-        context: &ProjectedExecutionContext,
+        context: &ExecutionContext,
     ) -> ToolResult {
         (self.function)(args, context).await
     }
@@ -99,22 +98,16 @@ impl BaseTool for FunctionTool {
 mod tests {
     use super::*;
     use crate::a2a::{Message, MessageRole, MessageSendParams, Part};
-    use crate::events::StorageProjector;
+    use crate::events::{EventProcessor, InMemoryEventBus};
     use crate::sessions::InMemorySessionService;
-    use crate::task::{InMemoryTaskStore, TaskManager};
     use serde_json::json;
     use std::sync::Arc;
 
     // Helper function to create a test ExecutionContext
-    async fn create_test_context() -> ProjectedExecutionContext {
-        let task_manager = Arc::new(TaskManager::new(Arc::new(InMemoryTaskStore::new())));
+    async fn create_test_context() -> ExecutionContext {
         let session_service = Arc::new(InMemorySessionService::new());
-        let projector = Arc::new(StorageProjector::new(
-            task_manager,
-            session_service,
-            "test_app".to_string(),
-            "test_user".to_string(),
-        ));
+        let event_bus = Arc::new(InMemoryEventBus::new());
+        let event_processor = Arc::new(EventProcessor::new(session_service, event_bus));
 
         let params = MessageSendParams {
             message: Message {
@@ -135,13 +128,13 @@ mod tests {
             metadata: None,
         };
 
-        ProjectedExecutionContext::new(
+        ExecutionContext::new(
             "test_ctx".to_string(),
             "test_task".to_string(),
             "test_app".to_string(),
             "test_user".to_string(),
             params,
-            projector,
+            event_processor,
         )
     }
 

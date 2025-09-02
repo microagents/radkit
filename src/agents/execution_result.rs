@@ -1,23 +1,22 @@
 use crate::a2a::{SendMessageResult, SendStreamingMessageResult};
-use crate::events::InternalEvent;
+use crate::sessions::SessionEvent;
 use futures::Stream;
 use std::pin::Pin;
-use tokio::sync::mpsc;
 
 /// Result from send_message that includes captured events
 pub struct SendMessageResultWithEvents {
     /// The actual result (Task or Message)
     pub result: SendMessageResult,
-    /// All internal events emitted during execution
-    pub internal_events: Vec<InternalEvent>,
-    /// All A2A events emitted during execution
+    /// All events emitted during execution (including non-A2A events)
+    pub all_events: Vec<SessionEvent>,
+    /// A2A-compatible events only
     pub a2a_events: Vec<SendStreamingMessageResult>,
 }
 
-/// Result from send_streaming_message that includes internal event stream
+/// Result from send_streaming_message with both streams
 pub struct SendStreamingMessageResultWithEvents {
-    /// The A2A event stream (unchanged behavior)
-    pub stream: Pin<Box<dyn Stream<Item = SendStreamingMessageResult> + Send>>,
-    /// Channel receiving internal events in real-time
-    pub internal_events: mpsc::UnboundedReceiver<InternalEvent>,
+    /// Stream of A2A-compatible events only
+    pub a2a_stream: Pin<Box<dyn Stream<Item = SendStreamingMessageResult> + Send>>,
+    /// Stream of all events (including non-A2A events)
+    pub all_events_stream: Pin<Box<dyn Stream<Item = SessionEvent> + Send>>,
 }

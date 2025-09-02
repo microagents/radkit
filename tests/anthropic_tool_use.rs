@@ -10,10 +10,8 @@ use radkit::a2a::{
     TaskState,
 };
 use radkit::agents::Agent;
-use radkit::events::InternalEvent;
 use radkit::models::AnthropicLlm;
 use radkit::sessions::InMemorySessionService;
-use radkit::task::InMemoryTaskStore;
 use radkit::tools::{FunctionTool, ToolResult};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -28,7 +26,6 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
     get_anthropic_key().map(|api_key| {
         let anthropic_llm = AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
         let session_service = Arc::new(InMemorySessionService::new());
-        let task_store = Arc::new(InMemoryTaskStore::new());
 
         let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
             .into_iter()
@@ -43,7 +40,6 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
             Arc::new(anthropic_llm),
         )
         .with_session_service(session_service)
-        .with_task_store(task_store)
         .with_tools(base_tools)
     })
 }
@@ -188,7 +184,7 @@ async fn test_anthropic_single_tool_call_comprehensive() {
     let mut final_task: Option<radkit::a2a::Task> = None;
 
     println!("✅ Processing A2A streaming events for tool execution:");
-    while let Some(result) = execution.stream.next().await {
+    while let Some(result) = execution.a2a_stream.next().await {
         match result {
             SendStreamingMessageResult::Message(message) => {
                 message_events += 1;
@@ -205,7 +201,7 @@ async fn test_anthropic_single_tool_call_comprehensive() {
                         }
                         Part::Data { data, .. } => {
                             // Note: function_call and function_response are no longer sent as A2A messages
-                            // They are now internal events only (stored in session.events)
+                            // They are now internal events only (stored in session.session_events)
                             println!("  📦 A2A Data Part: {}", data);
                         }
                         _ => {}
@@ -259,8 +255,21 @@ async fn test_anthropic_single_tool_call_comprehensive() {
     // Give internal events time to be processed
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    while let Ok(internal_event) = execution.internal_events.try_recv() {
-        if let InternalEvent::MessageReceived { content, .. } = internal_event {
+    // Collect some events from the stream
+    let mut collected_events = Vec::new();
+    for _ in 0..10 {
+        if let Some(internal_event) = execution.all_events_stream.next().await {
+            collected_events.push(internal_event);
+        } else {
+            break;
+        }
+    }
+
+    for internal_event in collected_events {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } =
+            internal_event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall {
@@ -314,7 +323,9 @@ async fn test_anthropic_single_tool_call_comprehensive() {
 
     println!("✅ Validating persisted tool execution in session:");
     for event in &session.events {
-        if let InternalEvent::MessageReceived { content, .. } = event {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall {
@@ -539,7 +550,7 @@ async fn test_anthropic_multi_tool_execution() {
     let mut final_task: Option<radkit::a2a::Task> = None;
 
     println!("✅ Processing A2A streaming events for multi-tool execution:");
-    while let Some(result) = execution.stream.next().await {
+    while let Some(result) = execution.a2a_stream.next().await {
         match result {
             SendStreamingMessageResult::Message(message) => {
                 for part in &message.parts {
@@ -577,8 +588,21 @@ async fn test_anthropic_multi_tool_execution() {
     let mut rt_calculator_responses = 0;
 
     println!("✅ Processing real-time internal events for multi-tool:");
-    while let Ok(internal_event) = execution.internal_events.try_recv() {
-        if let InternalEvent::MessageReceived { content, .. } = internal_event {
+    // Collect some events from the stream for multi-tool test
+    let mut multi_tool_events = Vec::new();
+    for _ in 0..15 {
+        if let Some(internal_event) = execution.all_events_stream.next().await {
+            multi_tool_events.push(internal_event);
+        } else {
+            break;
+        }
+    }
+
+    for internal_event in multi_tool_events {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } =
+            internal_event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall { name, .. } => {
@@ -598,7 +622,7 @@ async fn test_anthropic_multi_tool_execution() {
                             "  ⚙️ Real-time Function Response: {} (success: {})",
                             name, success
                         );
-                        assert!(*success, "All tool executions should succeed");
+                        assert!(success, "All tool executions should succeed");
                         match name.as_str() {
                             "get_weather" => rt_weather_responses += 1,
                             "calculate" => rt_calculator_responses += 1,
@@ -626,7 +650,9 @@ async fn test_anthropic_multi_tool_execution() {
 
     println!("✅ Validating persisted multi-tool execution in session:");
     for event in &session.events {
-        if let InternalEvent::MessageReceived { content, .. } = event {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall { name, .. } => {
@@ -646,7 +672,7 @@ async fn test_anthropic_multi_tool_execution() {
                             "  ⚙️ Session Function Response: {} (success: {})",
                             name, success
                         );
-                        assert!(*success, "All tool executions should succeed");
+                        assert!(success, "All tool executions should succeed");
                         match name.as_str() {
                             "get_weather" => sess_weather_responses += 1,
                             "calculate" => sess_calculator_responses += 1,
@@ -784,7 +810,7 @@ async fn test_anthropic_tool_error_handling() {
     let mut execution = result.unwrap();
     let mut final_task: Option<radkit::a2a::Task> = None;
 
-    while let Some(result) = execution.stream.next().await {
+    while let Some(result) = execution.a2a_stream.next().await {
         match result {
             SendStreamingMessageResult::Message(message) => {
                 for part in &message.parts {
@@ -820,7 +846,9 @@ async fn test_anthropic_tool_error_handling() {
     let mut tool_failure_detected = false;
     println!("✅ Checking session events for tool failure:");
     for event in &session.events {
-        if let InternalEvent::MessageReceived { content, .. } = event {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 if let radkit::models::content::ContentPart::FunctionResponse {
                     name,
@@ -905,8 +933,11 @@ async fn test_anthropic_non_streaming_tool_call() {
     let mut realtime_weather_responses = 0;
 
     println!("✅ Processing captured internal events from non-streaming execution:");
-    for internal_event in &execution.internal_events {
-        if let InternalEvent::MessageReceived { content, .. } = internal_event {
+    for internal_event in &execution.all_events {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } =
+            &internal_event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall {
@@ -956,7 +987,9 @@ async fn test_anthropic_non_streaming_tool_call() {
 
     println!("✅ Validating persisted tool execution in session (non-streaming):");
     for event in &session.events {
-        if let InternalEvent::MessageReceived { content, .. } = event {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall { name, .. } => {

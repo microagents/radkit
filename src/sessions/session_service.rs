@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::session::Session;
+use super::session_event::SessionEvent;
 
 /// Trait for session persistence and management.
 /// Provides abstraction over different storage backends (in-memory, database, etc.)
@@ -62,4 +63,40 @@ pub trait SessionService: Send + Sync {
         key: &str,
         value: Value,
     ) -> AgentResult<()>;
+
+    // ===== New Unified Event System Methods =====
+    // These methods are part of Phase 1 migration - they work alongside existing methods
+
+    /// Store an event in the persistence layer (pure storage)
+    /// This is used by EventProcessor for clean separation of concerns
+    async fn store_event(&self, event: &SessionEvent) -> AgentResult<()> {
+        // Default implementation: no-op (for backward compatibility)
+        let _ = event;
+        Ok(())
+    }
+
+    /// Apply state changes from StateChanged events
+    /// This is used by EventProcessor for state side effects
+    async fn apply_state_change(&self, event: &SessionEvent) -> AgentResult<()> {
+        // Default implementation: no-op (for backward compatibility)
+        let _ = event;
+        Ok(())
+    }
+
+    // Note: Task reconstruction methods removed - this is business logic, not persistence
+    // Use EventProcessor or calling code to build Task objects from events
+
+    /// Get all events for a session (for debugging and business logic)
+    async fn get_session_events(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+    ) -> AgentResult<Vec<SessionEvent>> {
+        // Default implementation: empty events
+        let _ = (app_name, user_id, session_id);
+        Ok(Vec::new())
+    }
+
+    // Note: subscribe_to_events removed - this is business logic, use EventBus directly
 }

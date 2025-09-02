@@ -1,21 +1,21 @@
-//! Conversation Handler
+//! Unified Conversation Handler
 //!
-//! This module contains the conversation handling logic that was extracted from agent.rs
-//! to eliminate code duplication between streaming and non-streaming conversation loops.
+//! This module contains the unified conversation handling logic that uses
+//! SessionService directly for persistence and EventBus for streaming.
 
-use crate::a2a::{Message, MessageRole, Part, SendStreamingMessageResult, TaskStatusUpdateEvent};
+use crate::a2a::{
+    Message, MessageRole, Part, SendStreamingMessageResult, Task, TaskState, TaskStatus,
+    TaskStatusUpdateEvent,
+};
 use crate::errors::{AgentError, AgentResult};
-use crate::events::ProjectedExecutionContext;
+use crate::events::ExecutionContext;
 use crate::models::{
-    GenerateContentConfig, LlmRequest,
+    LlmRequest,
     content::{Content, FunctionResponseParams},
 };
-use crate::tools::SimpleToolset;
 
 use async_trait::async_trait;
-use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing;
 use uuid::Uuid;
@@ -27,18 +27,18 @@ pub struct ToolProcessingResult {
     pub response_parts: Vec<Part>,
 }
 
-/// Trait for handling different conversation modes (streaming vs non-streaming)
+/// Unified trait for handling different conversation modes
 #[async_trait]
 pub trait ConversationHandler {
     /// Handle iteration limit exceeded scenario
     async fn handle_iteration_limit_exceeded(
         &self,
-        context: &ProjectedExecutionContext,
+        context: &ExecutionContext,
         max_iterations: usize,
     ) -> AgentResult<()>;
 }
 
-/// Non-streaming conversation handler
+/// Unified non-streaming conversation handler
 pub struct StandardConversationHandler<'a> {
     pub agent: &'a super::Agent,
 }
@@ -47,17 +47,17 @@ pub struct StandardConversationHandler<'a> {
 impl<'a> ConversationHandler for StandardConversationHandler<'a> {
     async fn handle_iteration_limit_exceeded(
         &self,
-        context: &ProjectedExecutionContext,
+        context: &ExecutionContext,
         _max_iterations: usize,
     ) -> AgentResult<()> {
-        // Emit task failure event - let the agent/tools decide final state
-        let old_state = self
+        // Get current task state and emit failure
+        let task = self
             .agent
-            .task_manager()
+            .event_processor()
             .get_task(&context.app_name, &context.user_id, &context.task_id)
-            .await
-            .ok()
-            .flatten()
+            .await?;
+
+        let old_state = task
             .map(|t| t.status.state)
             .unwrap_or(crate::a2a::TaskState::Working);
 
@@ -67,7 +67,7 @@ impl<'a> ConversationHandler for StandardConversationHandler<'a> {
     }
 }
 
-/// Streaming conversation handler  
+/// Unified streaming conversation handler
 pub struct StreamingConversationHandler<'a> {
     pub agent: &'a super::Agent,
     pub stream_tx: mpsc::Sender<SendStreamingMessageResult>,
@@ -77,56 +77,47 @@ pub struct StreamingConversationHandler<'a> {
 impl<'a> ConversationHandler for StreamingConversationHandler<'a> {
     async fn handle_iteration_limit_exceeded(
         &self,
-        context: &ProjectedExecutionContext,
-        max_iterations: usize,
+        context: &ExecutionContext,
+        _max_iterations: usize,
     ) -> AgentResult<()> {
-        // Fail the task
-        let task_status = crate::a2a::TaskStatus {
-            state: crate::a2a::TaskState::Failed,
-            timestamp: Some(chrono::Utc::now().to_rfc3339()),
-            message: Some(Message {
-                kind: "message".to_string(),
-                message_id: Uuid::new_v4().to_string(),
-                role: MessageRole::Agent,
-                parts: vec![Part::Text {
-                    text: format!("Maximum iterations ({max_iterations}) exceeded"),
-                    metadata: None,
-                }],
-                context_id: Some(context.context_id.clone()),
-                task_id: Some(context.task_id.clone()),
-                reference_task_ids: Vec::new(),
-                extensions: Vec::new(),
-                metadata: None,
-            }),
-        };
+        // Get current task state and emit failure
+        let task = self
+            .agent
+            .event_processor()
+            .get_task(&context.app_name, &context.user_id, &context.task_id)
+            .await?;
 
-        // Send failure status
-        let failure_event = TaskStatusUpdateEvent {
+        let old_state = task
+            .map(|t| t.status.state)
+            .unwrap_or(crate::a2a::TaskState::Working);
+
+        let status_event = TaskStatusUpdateEvent {
             kind: "status-update".to_string(),
             task_id: context.task_id.clone(),
             context_id: context.context_id.clone(),
-            status: task_status.clone(),
+            status: crate::a2a::TaskStatus {
+                state: crate::a2a::TaskState::Failed,
+                timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                message: None,
+            },
             is_final: true,
             metadata: None,
         };
 
-        // Send failure event with better error handling
-        if let Err(e) = self
+        // Send to both streaming and persistent storage
+        let _ = self
             .stream_tx
-            .send(SendStreamingMessageResult::TaskStatusUpdate(failure_event))
+            .send(SendStreamingMessageResult::TaskStatusUpdate(status_event))
+            .await;
+        context
+            .emit_task_status_update(old_state, crate::a2a::TaskState::Failed, None)
             .await
-        {
-            tracing::warn!("Failed to stream failure event: {}", e);
-            // Continue to persist the failure via storage
-        }
-
-        Ok(())
     }
 }
 
-/// Core conversation execution logic
+/// Unified conversation executor that handles the core conversation loop
 pub struct ConversationExecutor<'a> {
-    pub agent: &'a super::Agent,
+    agent: &'a super::Agent,
 }
 
 impl<'a> ConversationExecutor<'a> {
@@ -134,208 +125,129 @@ impl<'a> ConversationExecutor<'a> {
         Self { agent }
     }
 
-    /// Execute the core conversation loop with the given handler
     pub async fn execute_conversation_core<H: ConversationHandler>(
         &self,
-        mut context: ProjectedExecutionContext,
-        handler: H,
-    ) -> AgentResult<ProjectedExecutionContext> {
+        handler: &H,
+        context: &ExecutionContext,
+        _initial_message: &Message,
+    ) -> AgentResult<()> {
         let max_iterations = self.agent.config().max_iterations;
         let mut iteration = 0;
 
-        // Set up metadata with system instruction
-        self.setup_context_metadata(&mut context);
+        // Emit TaskCreated event at the start of conversation
+        let task = Task {
+            kind: "task".to_string(),
+            id: context.task_id.clone(),
+            context_id: context.context_id.clone(),
+            status: TaskStatus {
+                state: TaskState::Submitted,
+                timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                message: None,
+            },
+            history: vec![],
+            artifacts: vec![],
+            metadata: None,
+        };
+        context.emit_task_created(task).await?;
+
+        // Emit the initial user message now that the task exists
+        let mut initial_msg = _initial_message.clone();
+        initial_msg.context_id = Some(context.context_id.clone());
+        initial_msg.task_id = Some(context.task_id.clone());
+        context.emit_user_input(initial_msg).await?;
 
         loop {
-            iteration += 1;
-            if iteration > max_iterations {
+            if iteration >= max_iterations {
                 handler
-                    .handle_iteration_limit_exceeded(&context, max_iterations)
+                    .handle_iteration_limit_exceeded(context, max_iterations)
                     .await?;
                 break;
             }
 
-            // Get task messages and create LlmRequest
-            let llm_request = self.create_llm_request(&context).await?;
+            iteration += 1;
+            tracing::debug!(
+                "Conversation iteration {} for task {}",
+                iteration,
+                context.task_id
+            );
 
-            // Process through LLM using proper LlmRequest/LlmResponse pattern
-            let llm_response = self.agent.model().generate_content(llm_request).await?;
+            // Get conversation history from EventProcessor for each iteration
+            let content_messages = context.get_llm_conversation().await?;
 
-            // Content from LlmResponse
-            let response_content = llm_response.message;
+            let llm_request = LlmRequest {
+                messages: content_messages,
+                current_task_id: context.task_id.clone(),
+                context_id: context.context_id.clone(),
+                system_instruction: Some(self.agent.instruction().to_string()),
+                config: crate::models::GenerateContentConfig::default(),
+                toolset: self.agent.toolset().cloned(),
+                metadata: context.current_params.metadata.clone().unwrap_or_default(),
+            };
 
-            // Create model info from usage metadata
-            let model_info =
-                llm_response
-                    .usage_metadata
-                    .as_ref()
-                    .map(|u| crate::events::internal::ModelInfo {
-                        model_name: self.agent.model().model_name().to_string(),
-                        prompt_tokens: u.input_tokens.map(|t| t as usize),
-                        response_tokens: u.output_tokens.map(|t| t as usize),
-                        cost_estimate: u.cost_cents.map(|c| c as f64 / 100.0),
-                    });
+            // Generate response from LLM
+            let response = self
+                .agent
+                .model()
+                .generate_content(llm_request)
+                .await
+                .map_err(|e| AgentError::LlmError {
+                    source: Box::new(e),
+                })?;
 
-            // Emit message received event directly with Content
-            context
-                .emit_message(response_content.clone(), model_info)
-                .await?;
+            // Convert LLM response to Content and emit
+            let response_content = Content::from_llm_response(
+                response,
+                context.task_id.clone(),
+                context.context_id.clone(),
+            );
 
-            // Process tool calls from Content
-            let tool_results = self
-                .process_tool_calls_from_content(&response_content, &context)
-                .await?;
+            context.emit_message(response_content.clone()).await?;
 
-            if tool_results.has_function_calls {
-                // Model made function calls - continue loop to process results
-                // The function results will be available in the next iteration
-                continue;
-            } else {
-                // No function calls - conversation is complete
-                // The response has already been stored via emit_message above
+            // Process tool calls if any
+            let tool_result = self.process_tool_calls(&response_content, context).await?;
+
+            if !tool_result.has_function_calls {
+                // No more tool calls, conversation complete
+                // Task state will remain in its current state (likely Working or whatever tools set it to)
+                // Tools are responsible for marking tasks as Completed/Failed using update_status
                 break;
             }
+
+            // Continue loop for next iteration
         }
 
-        Ok(context)
+        Ok(())
     }
 
-    /// Set up context metadata with system instruction
-    fn setup_context_metadata(&self, context: &mut ProjectedExecutionContext) {
-        if context.current_params.metadata.is_none() {
-            context.current_params.metadata = Some(HashMap::new());
-        }
-        if let Some(ref mut metadata) = context.current_params.metadata {
-            metadata.insert(
-                "system_instruction".to_string(),
-                json!(self.agent.instruction()),
-            );
-            metadata.insert("task_id".to_string(), json!(&context.task_id));
-        }
-    }
-
-    /// Create LlmRequest from session events converted to ExtendedMessages
-    async fn create_llm_request(
-        &self,
-        context: &ProjectedExecutionContext,
-    ) -> AgentResult<LlmRequest> {
-        // Get the full session with ALL events across ALL tasks
-        let session = self
-            .agent
-            .session_service()
-            .get_session(&context.app_name, &context.user_id, &context.context_id)
-            .await?
-            .ok_or_else(|| AgentError::SessionNotFound {
-                session_id: context.context_id.clone(),
-                app_name: context.app_name.clone(),
-                user_id: context.user_id.clone(),
-            })?;
-
-        // Debug: Check what tools are available
-        if let Some(toolset) = self.agent.toolset() {
-            let _available_tools = toolset.get_tools().await;
-        }
-
-        // Convert session events to Content messages
-        let content_messages = self
-            .convert_events_to_content_messages(&session.events, &context.task_id)
-            .await?;
-
-        // Create LlmRequest with Content messages (includes function calls/responses)
-        Ok(LlmRequest::with_messages(
-            content_messages,               // All content from session
-            context.task_id.clone(),        // Current task for highlighting
-            context.context_id.clone(),     // Session context ID
-        )
-        .with_system_instruction(format!(
-            "{}\n\nSession Context:\n- Current Task: {}\n- Session ID: {}\n- Previous tasks are marked with [Task: <id>]",
-            self.agent.instruction(),
-            &context.task_id,
-            &context.context_id,
-        ))
-        .with_config(GenerateContentConfig::default())
-        .with_toolset(
-            self.agent.toolset()
-                .cloned()
-                .unwrap_or_else(|| Arc::new(SimpleToolset::new(vec![]))),
-        ))
-    }
-
-    /// Convert session events to Content messages for LLM processing
-    ///
-    /// This method reconstructs the conversation flow from MessageReceived events:
-    /// - MessageReceived events with User role → User Content
-    /// - MessageReceived events with Agent role → Assistant Content (includes function calls/responses)
-    ///
-    /// Content preserves all function call/response data for LLM context while
-    /// A2A Message conversion filters it out for clean task storage.
-    async fn convert_events_to_content_messages(
-        &self,
-        events: &[crate::events::InternalEvent],
-        _current_task_id: &str,
-    ) -> AgentResult<Vec<Content>> {
-        use crate::events::InternalEvent;
-
-        let mut content_messages = Vec::new();
-
-        for event in events {
-            match event {
-                InternalEvent::MessageReceived { content, .. } => {
-                    // Add Content directly - it already contains all function calls/responses
-                    // and provides clean A2A Message conversion via to_a2a_message()
-                    content_messages.push(content.clone());
-                }
-
-                _ => {
-                    // Other events (StateChange) don't affect conversation flow
-                }
-            }
-        }
-
-        Ok(content_messages)
-    }
-
-    /// Process tool calls from Content
-    pub async fn process_tool_calls_from_content(
+    /// Process tool calls in a message and emit function responses
+    async fn process_tool_calls(
         &self,
         content: &Content,
-        context: &ProjectedExecutionContext,
+        context: &ExecutionContext,
     ) -> AgentResult<ToolProcessingResult> {
-        use std::time::Instant;
-
         let mut has_function_calls = false;
 
-        // Process function calls from Content
-        for function_call_part in content.get_function_calls() {
+        for part in &content.parts {
             if let crate::models::content::ContentPart::FunctionCall {
                 name,
                 arguments,
                 tool_use_id,
-                metadata: _,
-            } = function_call_part
+                ..
+            } = part
             {
                 has_function_calls = true;
+                let start_time = std::time::Instant::now();
 
                 // Execute the tool
-                let start_time = Instant::now();
                 let tool_result = self.execute_tool_call(name, arguments, context).await;
                 let duration_ms = start_time.elapsed().as_millis() as u64;
 
-                // Check if tool was found
-                let is_tool_not_available = tool_result.error_message.as_ref().is_some_and(|msg| {
-                    msg.contains("not found") || msg.contains("No toolset available")
-                });
-
-                if is_tool_not_available {
-                    has_function_calls = false;
-                }
-
-                // Create and store function response message
+                // Create and emit function response
                 let mut response_content = Content::new(
                     context.task_id.clone(),
                     context.context_id.clone(),
-                    uuid::Uuid::new_v4().to_string(),
-                    crate::a2a::MessageRole::User,
+                    Uuid::new_v4().to_string(),
+                    MessageRole::User,
                 );
 
                 response_content.add_function_response(FunctionResponseParams {
@@ -348,14 +260,13 @@ impl<'a> ConversationExecutor<'a> {
                     metadata: None,
                 });
 
-                // Emit function response as separate message
-                context.emit_message(response_content, None).await?;
+                context.emit_message(response_content).await?;
             }
         }
 
         Ok(ToolProcessingResult {
             has_function_calls,
-            response_parts: Vec::new(), // Empty - we don't create fake messages anymore
+            response_parts: Vec::new(), // Not used in unified system
         })
     }
 
@@ -364,7 +275,7 @@ impl<'a> ConversationExecutor<'a> {
         &self,
         name: &str,
         args: &serde_json::Value,
-        context: &ProjectedExecutionContext,
+        context: &ExecutionContext,
     ) -> crate::tools::base_tool::ToolResult {
         if let Some(toolset) = self.agent.toolset() {
             let available_tools = toolset.get_tools().await;

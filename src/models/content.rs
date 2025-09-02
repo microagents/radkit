@@ -122,6 +122,19 @@ impl Content {
         }
     }
 
+    /// Create Content from an LLM response
+    pub fn from_llm_response(
+        response: crate::models::LlmResponse,
+        task_id: String,
+        context_id: String,
+    ) -> Self {
+        // LlmResponse already contains a Content message, so just update the IDs
+        let mut content = response.message;
+        content.task_id = task_id;
+        content.context_id = context_id;
+        content
+    }
+
     /// Convert to A2A Message (filters out function call/response parts)
     pub fn to_a2a_message(&self) -> Message {
         let a2a_parts: Vec<Part> = self

@@ -1,0 +1,370 @@
+//! Unified Session Event Types
+//!
+//! This module defines the unified SessionEvent system that will replace the dual
+//! InternalEvent + A2A event architecture. This is Phase 1 of the migration plan.
+
+use crate::a2a::{Artifact, Task, TaskState};
+use crate::models::content::Content;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Unified session event type - single event stream for all session activities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEvent {
+    /// Unique event identifier
+    pub id: String,
+    /// When this event occurred
+    pub timestamp: DateTime<Utc>,
+    /// Session this event belongs to (maps to A2A contextId)
+    pub session_id: String,
+    /// Task this event belongs to
+    pub task_id: String,
+    /// The actual event data
+    pub event_type: SessionEventType,
+}
+
+/// Different types of events that can occur in a session
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionEventType {
+    /// User sent a message (includes potential function responses)
+    UserMessage { content: Content },
+
+    /// Agent sent a message (includes potential function calls)
+    AgentMessage { content: Content },
+
+    /// Task was created
+    TaskCreated { task: Task },
+
+    /// Task status changed (submitted -> working -> completed/failed, etc.)
+    TaskStatusChanged {
+        old_state: TaskState,
+        new_state: TaskState,
+        message: Option<String>,
+    },
+
+    /// Task completed successfully
+    TaskCompleted { task: Task },
+
+    /// Task failed
+    TaskFailed { task: Task, reason: String },
+
+    /// Artifact was saved
+    ArtifactSaved { artifact: Artifact },
+
+    /// State was changed at app/user/session level
+    StateChanged {
+        scope: StateScope,
+        key: String,
+        old_value: Option<Value>,
+        new_value: Value,
+    },
+}
+
+/// Scope of state changes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateScope {
+    /// Application-level state
+    App,
+    /// User-level state within an app
+    User,
+    /// Session-level state
+    Session,
+}
+
+/// Event filtering for different consumers
+pub enum EventFilter {
+    /// All events (debug/internal use)
+    All,
+    /// Only A2A protocol compliant events (for streaming)
+    A2A,
+    /// Only events for a specific task
+    TaskOnly(String),
+    /// Only conversation events (user/agent messages)
+    ConversationOnly,
+    /// Custom filter function
+    Custom(Box<dyn Fn(&SessionEvent) -> bool + Send + Sync>),
+}
+
+impl std::fmt::Debug for EventFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EventFilter::All => write!(f, "EventFilter::All"),
+            EventFilter::A2A => write!(f, "EventFilter::A2A"),
+            EventFilter::TaskOnly(task_id) => write!(f, "EventFilter::TaskOnly({task_id})"),
+            EventFilter::ConversationOnly => write!(f, "EventFilter::ConversationOnly"),
+            EventFilter::Custom(_) => write!(f, "EventFilter::Custom(<function>)"),
+        }
+    }
+}
+
+impl Clone for EventFilter {
+    fn clone(&self) -> Self {
+        match self {
+            EventFilter::All => EventFilter::All,
+            EventFilter::A2A => EventFilter::A2A,
+            EventFilter::TaskOnly(task_id) => EventFilter::TaskOnly(task_id.clone()),
+            EventFilter::ConversationOnly => EventFilter::ConversationOnly,
+            EventFilter::Custom(_) => {
+                // Custom filters can't be cloned, so we'll create a new "All" filter
+                // In practice, this should rarely be cloned
+                EventFilter::All
+            }
+        }
+    }
+}
+
+impl SessionEvent {
+    /// Create a new session event with auto-generated ID
+    pub fn new(session_id: String, task_id: String, event_type: SessionEventType) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: Utc::now(),
+            session_id,
+            task_id,
+            event_type,
+        }
+    }
+
+    /// Check if this event matches the given filter
+    pub fn matches_filter(&self, filter: &EventFilter) -> bool {
+        match filter {
+            EventFilter::All => true,
+            EventFilter::A2A => self.is_a2a_compatible(),
+            EventFilter::TaskOnly(task_id) => self.task_id == *task_id,
+            EventFilter::ConversationOnly => matches!(
+                self.event_type,
+                SessionEventType::UserMessage { .. } | SessionEventType::AgentMessage { .. }
+            ),
+            EventFilter::Custom(f) => f(self),
+        }
+    }
+
+    /// Check if this event is A2A protocol compatible (should be streamed)
+    pub fn is_a2a_compatible(&self) -> bool {
+        matches!(
+            self.event_type,
+            SessionEventType::UserMessage { .. }
+                | SessionEventType::AgentMessage { .. }
+                | SessionEventType::TaskStatusChanged { .. }
+                | SessionEventType::TaskCompleted { .. }
+                | SessionEventType::TaskFailed { .. }
+                | SessionEventType::ArtifactSaved { .. }
+        )
+    }
+
+    /// Convert to A2A streaming message result (if compatible)
+    pub fn to_a2a_streaming_result(&self) -> Option<crate::a2a::SendStreamingMessageResult> {
+        use crate::a2a::{
+            Message, MessageRole, Part, SendStreamingMessageResult, TaskArtifactUpdateEvent,
+            TaskStatus, TaskStatusUpdateEvent,
+        };
+
+        match &self.event_type {
+            SessionEventType::UserMessage { content }
+            | SessionEventType::AgentMessage { content } => {
+                // Function calls filtered out by to_a2a_message()
+                Some(SendStreamingMessageResult::Message(
+                    content.to_a2a_message(),
+                ))
+            }
+
+            SessionEventType::TaskStatusChanged {
+                new_state, message, ..
+            } => {
+                let task_status = TaskStatus {
+                    state: new_state.clone(),
+                    timestamp: Some(self.timestamp.to_rfc3339()),
+                    message: message.as_ref().map(|msg| Message {
+                        kind: "message".to_string(),
+                        message_id: uuid::Uuid::new_v4().to_string(),
+                        role: MessageRole::Agent,
+                        parts: vec![Part::Text {
+                            text: msg.clone(),
+                            metadata: None,
+                        }],
+                        context_id: Some(self.session_id.clone()),
+                        task_id: Some(self.task_id.clone()),
+                        reference_task_ids: Vec::new(),
+                        extensions: Vec::new(),
+                        metadata: None,
+                    }),
+                };
+
+                Some(SendStreamingMessageResult::TaskStatusUpdate(
+                    TaskStatusUpdateEvent {
+                        kind: "status-update".to_string(),
+                        task_id: self.task_id.clone(),
+                        context_id: self.session_id.clone(),
+                        status: task_status,
+                        is_final: matches!(
+                            new_state,
+                            TaskState::Completed
+                                | TaskState::Failed
+                                | TaskState::Rejected
+                                | TaskState::Canceled
+                        ),
+                        metadata: None,
+                    },
+                ))
+            }
+
+            SessionEventType::ArtifactSaved { artifact } => Some(
+                SendStreamingMessageResult::TaskArtifactUpdate(TaskArtifactUpdateEvent {
+                    kind: "artifact-update".to_string(),
+                    task_id: self.task_id.clone(),
+                    context_id: self.session_id.clone(),
+                    artifact: artifact.clone(),
+                    append: None,
+                    last_chunk: Some(true),
+                    metadata: None,
+                }),
+            ),
+
+            SessionEventType::TaskCompleted { task } => {
+                Some(SendStreamingMessageResult::Task(task.clone()))
+            }
+
+            // Other events don't map to A2A streaming results
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::a2a::MessageRole;
+    use crate::models::content::Content;
+
+    #[test]
+    fn test_session_event_creation() {
+        let content = Content::new(
+            "task1".to_string(),
+            "session1".to_string(),
+            "msg1".to_string(),
+            MessageRole::User,
+        );
+
+        let event = SessionEvent::new(
+            "session1".to_string(),
+            "task1".to_string(),
+            SessionEventType::UserMessage { content },
+        );
+
+        assert_eq!(event.session_id, "session1");
+        assert_eq!(event.task_id, "task1");
+        assert!(!event.id.is_empty());
+        assert!(matches!(
+            event.event_type,
+            SessionEventType::UserMessage { .. }
+        ));
+    }
+
+    #[test]
+    fn test_a2a_compatibility() {
+        let user_message = SessionEvent::new(
+            "session1".to_string(),
+            "task1".to_string(),
+            SessionEventType::UserMessage {
+                content: Content::new(
+                    "task1".to_string(),
+                    "session1".to_string(),
+                    "msg1".to_string(),
+                    MessageRole::User,
+                ),
+            },
+        );
+
+        let state_change = SessionEvent::new(
+            "session1".to_string(),
+            "task1".to_string(),
+            SessionEventType::StateChanged {
+                scope: StateScope::Session,
+                key: "theme".to_string(),
+                old_value: None,
+                new_value: serde_json::json!("dark"),
+            },
+        );
+
+        assert!(user_message.is_a2a_compatible());
+        assert!(!state_change.is_a2a_compatible());
+    }
+
+    #[test]
+    fn test_event_filtering() {
+        let user_message = SessionEvent::new(
+            "session1".to_string(),
+            "task1".to_string(),
+            SessionEventType::UserMessage {
+                content: Content::new(
+                    "task1".to_string(),
+                    "session1".to_string(),
+                    "msg1".to_string(),
+                    MessageRole::User,
+                ),
+            },
+        );
+
+        let state_change = SessionEvent::new(
+            "session1".to_string(),
+            "task2".to_string(),
+            SessionEventType::StateChanged {
+                scope: StateScope::Session,
+                key: "theme".to_string(),
+                old_value: None,
+                new_value: serde_json::json!("dark"),
+            },
+        );
+
+        assert!(user_message.matches_filter(&EventFilter::All));
+        assert!(user_message.matches_filter(&EventFilter::A2A));
+        assert!(user_message.matches_filter(&EventFilter::ConversationOnly));
+        assert!(user_message.matches_filter(&EventFilter::TaskOnly("task1".to_string())));
+        assert!(!user_message.matches_filter(&EventFilter::TaskOnly("task2".to_string())));
+
+        assert!(state_change.matches_filter(&EventFilter::All));
+        assert!(!state_change.matches_filter(&EventFilter::A2A));
+        assert!(!state_change.matches_filter(&EventFilter::ConversationOnly));
+        assert!(state_change.matches_filter(&EventFilter::TaskOnly("task2".to_string())));
+    }
+
+    #[test]
+    fn test_a2a_streaming_conversion() {
+        let user_message = SessionEvent::new(
+            "session1".to_string(),
+            "task1".to_string(),
+            SessionEventType::UserMessage {
+                content: Content::new(
+                    "task1".to_string(),
+                    "session1".to_string(),
+                    "msg1".to_string(),
+                    MessageRole::User,
+                ),
+            },
+        );
+
+        let streaming_result = user_message.to_a2a_streaming_result();
+        assert!(streaming_result.is_some());
+        assert!(matches!(
+            streaming_result.unwrap(),
+            crate::a2a::SendStreamingMessageResult::Message(_)
+        ));
+
+        let state_change = SessionEvent::new(
+            "session1".to_string(),
+            "task1".to_string(),
+            SessionEventType::StateChanged {
+                scope: StateScope::Session,
+                key: "theme".to_string(),
+                old_value: None,
+                new_value: serde_json::json!("dark"),
+            },
+        );
+
+        let streaming_result = state_change.to_a2a_streaming_result();
+        assert!(streaming_result.is_none());
+    }
+}

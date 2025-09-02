@@ -441,7 +441,7 @@ pub struct MessageSendParams {
     pub metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MessageSendConfiguration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocking: Option<bool>,

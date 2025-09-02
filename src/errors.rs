@@ -20,6 +20,12 @@ pub enum AgentError {
         max_tokens: u32,
     },
 
+    #[error("LLM error: {source}")]
+    LlmError {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     #[error("Feature not implemented: {feature}")]
     NotImplemented { feature: String },
 
@@ -138,6 +144,7 @@ impl AgentError {
 
             // Maybe retryable - depends on the specific reason
             Self::LlmProvider { .. } => false,
+            Self::LlmError { .. } => false,
             Self::TaskOperationFailed { .. } => false,
             Self::SessionStateError { .. } => false,
             Self::ToolExecutionFailed { .. } => false,
@@ -158,6 +165,7 @@ impl AgentError {
             | Self::LlmRateLimit { .. }
             | Self::ContentFiltered { .. }
             | Self::ContextLengthExceeded { .. }
+            | Self::LlmError { .. }
             | Self::NotImplemented { .. } => "llm",
 
             Self::TaskNotFound { .. }

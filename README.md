@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut final_task = None;
 
     // Process streaming results and capture A2A protocol events
-    while let Some(event) = execution.stream.next().await {
+    while let Some(event) = execution.a2a_stream.next().await {
         match event {
             SendStreamingMessageResult::TaskStatusUpdate(status_event) => {
                 status_events += 1;

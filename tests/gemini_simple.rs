@@ -132,7 +132,7 @@ async fn test_gemini_creative_question() {
     let mut got_response = false;
 
     println!("✅ Processing streaming events:");
-    while let Some(result) = execution.stream.next().await {
+    while let Some(result) = execution.a2a_stream.next().await {
         println!("  Streaming Result: {:?}", result);
         match result {
             SendStreamingMessageResult::Message(message) => {

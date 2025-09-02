@@ -1,12 +1,9 @@
-// Event projection system
+// Unified event system
+pub mod event_bus;
+pub mod event_processor;
 pub mod execution_context;
-pub mod internal;
-pub mod projection;
 
-// Export the event projection system
-pub use execution_context::ProjectedExecutionContext;
-pub use internal::InternalEvent;
-pub use projection::{
-    A2ACaptureProjector, A2AOnlyProjector, EventCaptureProjector, EventGenerators, EventProjector,
-    InternalOnlyProjector, MultiProjector, StateChangeParams, StorageProjector,
-};
+// Export the unified event system
+pub use event_bus::{EventBus, InMemoryEventBus, Subscription};
+pub use event_processor::EventProcessor;
+pub use execution_context::ExecutionContext;
