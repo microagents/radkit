@@ -7,10 +7,8 @@ use radkit::a2a::{
     Message, MessageRole, MessageSendParams, Part, SendMessageResult,
 };
 use radkit::agents::Agent;
-use radkit::events::InternalEvent;
 use radkit::models::OpenAILlm;
 use radkit::sessions::InMemorySessionService;
-use radkit::task::InMemoryTaskStore;
 use radkit::tools::{FunctionTool, ToolResult};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -63,7 +61,9 @@ fn create_counter_tool() -> (Arc<FunctionTool>, Arc<Mutex<i32>>) {
                 "type": "integer",
                 "description": "Amount to increment the counter by (default: 1)"
             }
-        }
+        },
+        "required": ["increment"],
+        "additionalProperties": false
     }));
 
     (Arc::new(tool), counter)
@@ -165,7 +165,8 @@ fn create_memory_tool() -> Arc<FunctionTool> {
                     "description": "The value to store (only for 'set' action)"
                 }
             },
-            "required": ["action"]
+            "required": ["action", "key", "value"],
+            "additionalProperties": false
         })),
     )
 }
@@ -175,7 +176,6 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
     get_openai_key().map(|api_key| {
         let openai_llm = OpenAILlm::new("gpt-4o-mini".to_string(), api_key);
         let session_service = Arc::new(InMemorySessionService::new());
-        let task_store = Arc::new(InMemoryTaskStore::new());
 
         let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
             .into_iter()
@@ -190,7 +190,6 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
             Arc::new(openai_llm),
         )
         .with_session_service(session_service)
-        .with_task_store(task_store)
         .with_tools(base_tools)
     })
 }
@@ -328,7 +327,7 @@ async fn test_openai_multi_turn_with_stateful_tools() {
 
     println!("✅ Validating tool execution across all turns:");
     for event in &session.events {
-        if let InternalEvent::MessageReceived { content, .. } = event {
+        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall { name, arguments, .. } => {
@@ -517,7 +516,7 @@ async fn test_openai_cross_task_tool_persistence() {
 
     println!("✅ Validating cross-task tool persistence:");
     for event in &session.events {
-        if let InternalEvent::MessageReceived { content, .. } = event {
+        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall { name, arguments, .. } => {

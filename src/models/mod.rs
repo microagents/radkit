@@ -6,6 +6,7 @@ use std::pin::Pin;
 pub mod anthropic_llm;
 pub mod content;
 pub mod gemini_llm;
+pub mod llm_factory;
 pub mod llm_request;
 pub mod llm_response;
 pub mod mock_llm;
@@ -13,6 +14,7 @@ pub mod openai_llm;
 
 pub use anthropic_llm::AnthropicLlm;
 pub use gemini_llm::GeminiLlm;
+pub use llm_factory::LlmFactory;
 pub use llm_request::{GenerateContentConfig, LlmRequest};
 pub use llm_response::{ErrorInfo, ErrorType, LlmResponse, StreamingInfo, UsageMetadata};
 pub use mock_llm::MockLlm;

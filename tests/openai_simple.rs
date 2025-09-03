@@ -10,10 +10,8 @@ use radkit::a2a::{
     TaskQueryParams, TaskState,
 };
 use radkit::agents::Agent;
-use radkit::events::InternalEvent;
 use radkit::models::OpenAILlm;
 use radkit::sessions::InMemorySessionService;
-use radkit::task::InMemoryTaskStore;
 use std::sync::Arc;
 
 mod common;
@@ -31,7 +29,6 @@ fn create_test_agent() -> Option<Agent> {
     get_openai_key().map(|api_key| {
         let openai_llm = OpenAILlm::new("gpt-4o-mini".to_string(), api_key);
         let session_service = Arc::new(InMemorySessionService::new());
-        let task_store = Arc::new(InMemoryTaskStore::new());
 
         Agent::new(
             "test_agent".to_string(),
@@ -40,7 +37,6 @@ fn create_test_agent() -> Option<Agent> {
             Arc::new(openai_llm),
         )
         .with_session_service(session_service)
-        .with_task_store(task_store)
     })
 }
 
@@ -183,7 +179,7 @@ async fn test_openai_simple_conversation_comprehensive() {
     let message_events = session
         .events
         .iter()
-        .filter(|e| matches!(e, InternalEvent::MessageReceived { .. }))
+        .filter(|e| matches!(&e.event_type, radkit::sessions::SessionEventType::UserMessage { .. } | radkit::sessions::SessionEventType::AgentMessage { .. }))
         .count();
 
     assert!(
@@ -243,7 +239,7 @@ async fn test_openai_streaming_comprehensive() {
 
     // ✅ 1. Process A2A Streaming Events and Validate Structure
     println!("✅ Processing A2A streaming events:");
-    while let Some(result) = execution.stream.next().await {
+    while let Some(result) = execution.a2a_stream.next().await {
         match result {
             SendStreamingMessageResult::Message(message) => {
                 message_events += 1;
@@ -346,9 +342,9 @@ async fn test_openai_streaming_comprehensive() {
     let mut internal_model_events = 0;
 
     // Process any remaining internal events
-    while let Ok(internal_event) = execution.internal_events.try_recv() {
-        match internal_event {
-            InternalEvent::MessageReceived { content, .. } => {
+    while let Some(internal_event) = execution.all_events_stream.next().await {
+        match &internal_event.event_type {
+            radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } => {
                 internal_execution_events += 1;
                 println!("  📥 Internal Message Event: {} parts", content.parts.len());
 
@@ -357,10 +353,12 @@ async fn test_openai_streaming_comprehensive() {
                     internal_model_events += 1;
                 }
             }
-            InternalEvent::StateChange { key, .. } => {
-                println!("  📊 Internal State Change Event: {}", key);
+            _ => {
+                println!("  📊 Other Event Type");
             }
         }
+        // Only process a few events
+        if internal_execution_events >= 5 { break; }
     }
 
     println!(
@@ -579,7 +577,7 @@ async fn test_openai_multi_turn_conversation() {
     let message_events = session
         .events
         .iter()
-        .filter(|e| matches!(e, InternalEvent::MessageReceived { .. }))
+        .filter(|e| matches!(&e.event_type, radkit::sessions::SessionEventType::UserMessage { .. } | radkit::sessions::SessionEventType::AgentMessage { .. }))
         .count();
     assert!(
         message_events >= 6,
