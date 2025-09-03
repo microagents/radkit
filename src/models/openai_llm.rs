@@ -1,10 +1,10 @@
-use super::{BaseLlm, LlmRequest, LlmResponse, ProviderCapabilities};
+use super::{BaseLlm, LlmRequest, LlmResponse, ProviderCapabilities, StreamingInfo};
 use crate::a2a::MessageRole;
 use crate::errors::{AgentError, AgentResult};
 use crate::models::content::{Content, ContentPart};
 use crate::tools::BaseToolset;
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::pin::Pin;
@@ -52,10 +52,10 @@ enum ToolChoice {
     Auto,
     None,
     Required,
-    Specific { 
+    Specific {
         #[serde(rename = "type")]
         choice_type: String,
-        function: ToolChoiceFunction 
+        function: ToolChoiceFunction,
     },
 }
 
@@ -114,6 +114,8 @@ struct OpenAIRequest {
     tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +159,45 @@ struct OpenAIErrorDetail {
     #[serde(rename = "type")]
     error_type: String,
     code: Option<String>,
+}
+
+// Streaming response types
+#[derive(Debug, Deserialize)]
+struct StreamResponse {
+    id: String,
+    object: String,
+    created: i64,
+    model: String,
+    choices: Vec<StreamChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChoice {
+    index: i32,
+    delta: Delta,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Delta {
+    role: Option<String>,
+    content: Option<String>,
+    tool_calls: Option<Vec<ToolCallDelta>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallDelta {
+    index: usize,
+    id: Option<String>,
+    #[serde(rename = "type")]
+    tool_type: Option<String>,
+    function: Option<FunctionCallDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FunctionCallDelta {
+    name: Option<String>,
+    arguments: Option<String>,
 }
 
 // A2A-native conversion functions
@@ -316,11 +357,92 @@ impl OpenAILlm {
         openai_messages
     }
 
+    /// Process a streaming chunk from OpenAI and convert it to LlmResponse
+    fn process_stream_chunk(
+        chunk: StreamResponse,
+        task_id: &str,
+        context_id: &str,
+    ) -> AgentResult<LlmResponse> {
+        let mut content = Content::new(
+            task_id.to_string(),
+            context_id.to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            MessageRole::Agent,
+        );
+
+        if chunk.choices.is_empty() {
+            return Ok(LlmResponse {
+                message: content,
+                streaming_info: StreamingInfo {
+                    partial: true,
+                    turn_complete: false,
+                    sequence_number: Some(0),
+                },
+                usage_metadata: None,
+                error_info: None,
+                provider_metadata: std::collections::HashMap::new(),
+            });
+        }
+
+        let choice = &chunk.choices[0];
+        let delta = &choice.delta;
+
+        // Handle text content
+        if let Some(text) = &delta.content {
+            if !text.is_empty() {
+                content.add_text(text.clone(), None);
+            }
+        }
+
+        // Handle tool calls
+        if let Some(tool_calls) = &delta.tool_calls {
+            for (index, tool_call_delta) in tool_calls.iter().enumerate() {
+                // For streaming, we need to accumulate tool call data
+                // This is a simplified approach - in production, you might want to
+                // track tool call state across multiple chunks
+                if let Some(function) = &tool_call_delta.function {
+                    if let (Some(name), Some(arguments)) = (&function.name, &function.arguments) {
+                        if !name.is_empty() || !arguments.is_empty() {
+                            // Only add function call if we have meaningful data
+                            let tool_use_id = tool_call_delta
+                                .id
+                                .clone()
+                                .unwrap_or_else(|| format!("call_{}", index));
+
+                            let parsed_arguments = match serde_json::from_str(arguments) {
+                                Ok(args) => args,
+                                Err(_) => json!({ "raw_arguments": arguments }),
+                            };
+
+                            content.add_function_call(
+                                name.clone(),
+                                parsed_arguments,
+                                Some(tool_use_id),
+                                None,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let is_final = choice.finish_reason.is_some();
+
+        Ok(LlmResponse {
+            message: content,
+            streaming_info: StreamingInfo {
+                partial: !is_final,
+                turn_complete: is_final,
+                sequence_number: Some(0), // OpenAI doesn't provide sequence numbers
+            },
+            usage_metadata: None, // Usage info typically comes at the end
+            error_info: None,
+            provider_metadata: std::collections::HashMap::new(),
+        })
+    }
+
     /// Add system message if provided
-    fn add_system_message(
-        messages: &mut Vec<OpenAIMessage>,
-        system_instruction: Option<String>,
-    ) {
+    fn add_system_message(messages: &mut Vec<OpenAIMessage>, system_instruction: Option<String>) {
         if let Some(instruction) = system_instruction {
             // Insert system message at the beginning
             messages.insert(
@@ -345,10 +467,8 @@ impl BaseLlm for OpenAILlm {
 
     async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse> {
         // Convert Content messages to OpenAI messages
-        let mut openai_messages = Self::content_messages_to_openai_messages(
-            &request.messages,
-            &request.current_task_id,
-        );
+        let mut openai_messages =
+            Self::content_messages_to_openai_messages(&request.messages, &request.current_task_id);
 
         // Add system message if present
         Self::add_system_message(&mut openai_messages, request.system_instruction);
@@ -358,11 +478,7 @@ impl BaseLlm for OpenAILlm {
             let tools = self
                 .convert_toolset_to_openai_tools(toolset.as_ref())
                 .await?;
-            if !tools.is_empty() {
-                Some(tools)
-            } else {
-                None
-            }
+            if !tools.is_empty() { Some(tools) } else { None }
         } else {
             None
         };
@@ -382,6 +498,7 @@ impl BaseLlm for OpenAILlm {
             tools: openai_tools,
             tool_choice,
             response_format: None, // Can be configured for JSON mode if needed
+            stream: None,          // Non-streaming request
         };
 
         let response = self
@@ -417,23 +534,25 @@ impl BaseLlm for OpenAILlm {
             }
         }
 
-        let openai_response: OpenAIResponse = response
-            .json()
-            .await
-            .map_err(|e| AgentError::Serialization {
-                format: "json".to_string(),
-                reason: e.to_string(),
-            })?;
+        let openai_response: OpenAIResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| AgentError::Serialization {
+                    format: "json".to_string(),
+                    reason: e.to_string(),
+                })?;
 
         // Extract the first choice
-        let choice = openai_response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| AgentError::LlmProvider {
-                provider: "openai".to_string(),
-                message: "No choices in response".to_string(),
-            })?;
+        let choice =
+            openai_response
+                .choices
+                .into_iter()
+                .next()
+                .ok_or_else(|| AgentError::LlmProvider {
+                    provider: "openai".to_string(),
+                    message: "No choices in response".to_string(),
+                })?;
 
         // Convert response to Content format
         let mut content_parts = Vec::new();
@@ -475,12 +594,166 @@ impl BaseLlm for OpenAILlm {
 
     async fn generate_content_stream(
         &self,
-        _request: LlmRequest,
+        request: LlmRequest,
     ) -> AgentResult<Pin<Box<dyn Stream<Item = AgentResult<LlmResponse>> + Send>>> {
-        // For now, just return an error - we'll implement streaming later
-        Err(AgentError::NotImplemented {
-            feature: "Streaming for OpenAILlm".to_string(),
-        })
+        // Convert Content messages to OpenAI messages
+        let mut openai_messages =
+            Self::content_messages_to_openai_messages(&request.messages, &request.current_task_id);
+
+        // Add system message if present
+        Self::add_system_message(&mut openai_messages, request.system_instruction);
+
+        // Get tools from LlmRequest toolset
+        let openai_tools = if let Some(toolset) = &request.toolset {
+            Some(
+                self.convert_toolset_to_openai_tools(toolset.as_ref())
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        let tool_choice = if openai_tools.is_some() {
+            Some("auto".to_string())
+        } else {
+            None
+        };
+
+        let openai_request = OpenAIRequest {
+            model: self.model_name.clone(),
+            messages: openai_messages,
+            temperature: request.config.temperature,
+            max_tokens: request.config.max_tokens.map(|t| t as i32),
+            tools: openai_tools,
+            tool_choice,
+            response_format: None, // Can be configured for JSON mode if needed
+            stream: Some(true),    // Enable streaming
+        };
+
+        let response = self
+            .client
+            .post(OPENAI_API_URL)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&openai_request)
+            .send()
+            .await
+            .map_err(|e| AgentError::LlmProvider {
+                provider: "OpenAI".to_string(),
+                message: format!("Request failed: {}", e),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+
+            // Try to parse as OpenAI error
+            if let Ok(openai_error) = serde_json::from_str::<OpenAIError>(&error_body) {
+                return Err(AgentError::LlmProvider {
+                    provider: "OpenAI".to_string(),
+                    message: openai_error.error.message,
+                });
+            }
+
+            return Err(AgentError::LlmProvider {
+                provider: "OpenAI".to_string(),
+                message: format!("HTTP {}: {}", status, error_body),
+            });
+        }
+
+        // Clone task_id and context_id for the closure
+        let task_id = request.current_task_id.clone();
+        let context_id = request.context_id.clone();
+
+        // Convert byte stream to line-based stream using tokio-util
+        let byte_stream = response.bytes_stream().map_err(|e| std::io::Error::new(
+            std::io::ErrorKind::Other, 
+            format!("Request error: {}", e)
+        ));
+        
+        // Use tokio-util to handle proper line buffering
+        let stream_reader = tokio_util::io::StreamReader::new(byte_stream);
+        let lines = tokio_util::codec::FramedRead::new(
+            stream_reader, 
+            tokio_util::codec::LinesCodec::new()
+        );
+        
+        let processed_stream = lines
+            .map_err(|e| AgentError::Network {
+                operation: "stream_read".to_string(),
+                reason: format!("Stream decode error: {}", e),
+            })
+            .filter_map(move |line_result| {
+                let task_id = task_id.clone();
+                let context_id = context_id.clone();
+                async move {
+                    match line_result {
+                        Ok(line) => {
+                            // Skip empty lines
+                            if line.trim().is_empty() {
+                                return None;
+                            }
+
+                            // Handle SSE format - lines start with "data: "
+                            if let Some(data) = line.strip_prefix("data: ") {
+                                // Check for termination signal
+                                if data.trim() == "[DONE]" {
+                                    // Send a final response to indicate completion
+                                    let final_content = Content::new(
+                                        task_id.to_string(),
+                                        context_id.to_string(),
+                                        uuid::Uuid::new_v4().to_string(),
+                                        MessageRole::Agent,
+                                    );
+
+                                    return Some(Ok(LlmResponse {
+                                        message: final_content,
+                                        streaming_info: StreamingInfo {
+                                            partial: false,
+                                            turn_complete: true,
+                                            sequence_number: Some(999), // Final sequence number
+                                        },
+                                        usage_metadata: None,
+                                        error_info: None,
+                                        provider_metadata: std::collections::HashMap::new(),
+                                    }));
+                                }
+
+                                // Skip empty data
+                                if data.trim().is_empty() {
+                                    return None;
+                                }
+
+                                // Parse the JSON chunk
+                                match serde_json::from_str::<StreamResponse>(data.trim()) {
+                                    Ok(stream_chunk) => {
+                                        return Some(Self::process_stream_chunk(
+                                            stream_chunk,
+                                            &task_id,
+                                            &context_id,
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        // Log the problematic data for debugging
+                                        tracing::warn!("Failed to parse SSE data: '{}', error: {}", data, e);
+                                        // Don't fail the entire stream on a single parse error, just skip it
+                                        return None;
+                                    }
+                                }
+                            }
+                            // Skip non-data lines (e.g., "event: " lines)
+                            None
+                        }
+                        Err(e) => Some(Err(e)),
+                    }
+                }
+            });
+
+        Ok(Box::pin(processed_stream))
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true // OpenAI supports streaming
     }
 
     fn supports_function_calling(&self) -> bool {

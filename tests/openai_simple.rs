@@ -179,7 +179,13 @@ async fn test_openai_simple_conversation_comprehensive() {
     let message_events = session
         .events
         .iter()
-        .filter(|e| matches!(&e.event_type, radkit::sessions::SessionEventType::UserMessage { .. } | radkit::sessions::SessionEventType::AgentMessage { .. }))
+        .filter(|e| {
+            matches!(
+                &e.event_type,
+                radkit::sessions::SessionEventType::UserMessage { .. }
+                    | radkit::sessions::SessionEventType::AgentMessage { .. }
+            )
+        })
         .count();
 
     assert!(
@@ -344,7 +350,8 @@ async fn test_openai_streaming_comprehensive() {
     // Process any remaining internal events
     while let Some(internal_event) = execution.all_events_stream.next().await {
         match &internal_event.event_type {
-            radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } => {
+            radkit::sessions::SessionEventType::UserMessage { content }
+            | radkit::sessions::SessionEventType::AgentMessage { content } => {
                 internal_execution_events += 1;
                 println!("  📥 Internal Message Event: {} parts", content.parts.len());
 
@@ -358,7 +365,9 @@ async fn test_openai_streaming_comprehensive() {
             }
         }
         // Only process a few events
-        if internal_execution_events >= 5 { break; }
+        if internal_execution_events >= 5 {
+            break;
+        }
     }
 
     println!(
@@ -577,7 +586,13 @@ async fn test_openai_multi_turn_conversation() {
     let message_events = session
         .events
         .iter()
-        .filter(|e| matches!(&e.event_type, radkit::sessions::SessionEventType::UserMessage { .. } | radkit::sessions::SessionEventType::AgentMessage { .. }))
+        .filter(|e| {
+            matches!(
+                &e.event_type,
+                radkit::sessions::SessionEventType::UserMessage { .. }
+                    | radkit::sessions::SessionEventType::AgentMessage { .. }
+            )
+        })
         .count();
     assert!(
         message_events >= 6,

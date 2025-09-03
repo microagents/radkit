@@ -3,9 +3,7 @@
 //! Tests multi-turn conversations with context persistence and tool use across turns.
 //! These tests require OPENAI_API_KEY environment variable to be set.
 
-use radkit::a2a::{
-    Message, MessageRole, MessageSendParams, Part, SendMessageResult,
-};
+use radkit::a2a::{Message, MessageRole, MessageSendParams, Part, SendMessageResult};
 use radkit::agents::Agent;
 use radkit::models::OpenAILlm;
 use radkit::sessions::InMemorySessionService;
@@ -33,10 +31,7 @@ fn create_counter_tool() -> (Arc<FunctionTool>, Arc<Mutex<i32>>) {
         move |args: HashMap<String, Value>, _context| {
             let counter = counter_clone.clone();
             Box::pin(async move {
-                let increment = args
-                    .get("increment")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(1) as i32;
+                let increment = args.get("increment").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
 
                 let mut count = counter.lock().unwrap();
                 *count += increment;
@@ -80,10 +75,7 @@ fn create_memory_tool() -> Arc<FunctionTool> {
             move |args: HashMap<String, Value>, _context| {
                 let memory = memory.clone();
                 Box::pin(async move {
-                    let action = args
-                        .get("action")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("get");
+                    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("get");
 
                     let key = args
                         .get("key")
@@ -94,10 +86,7 @@ fn create_memory_tool() -> Arc<FunctionTool> {
 
                     match action {
                         "set" => {
-                            let value = args
-                                .get("value")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
 
                             mem.insert(key.to_string(), value.to_string());
 
@@ -199,7 +188,7 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
 async fn test_openai_multi_turn_with_stateful_tools() {
     let (counter_tool, counter_state) = create_counter_tool();
     let memory_tool = create_memory_tool();
-    
+
     let Some(agent) = create_test_agent_with_tools(vec![counter_tool, memory_tool]) else {
         println!("⚠️  Skipping test: OPENAI_API_KEY not found");
         return;
@@ -213,7 +202,8 @@ async fn test_openai_multi_turn_with_stateful_tools() {
         message_id: uuid::Uuid::new_v4().to_string(),
         role: MessageRole::User,
         parts: vec![Part::Text {
-            text: "Please store the value 'OpenAI Test' with the key 'test_key' in memory.".to_string(),
+            text: "Please store the value 'OpenAI Test' with the key 'test_key' in memory."
+                .to_string(),
             metadata: None,
         }],
         context_id: None,
@@ -268,7 +258,7 @@ async fn test_openai_multi_turn_with_stateful_tools() {
         .await;
     assert!(result2.is_ok(), "Second message should succeed");
 
-    let task2 = match result2.unwrap().result {
+    let _task2 = match result2.unwrap().result {
         SendMessageResult::Task(task) => task,
         _ => panic!("Expected Task result"),
     };
@@ -283,7 +273,8 @@ async fn test_openai_multi_turn_with_stateful_tools() {
         message_id: uuid::Uuid::new_v4().to_string(),
         role: MessageRole::User,
         parts: vec![Part::Text {
-            text: "What value did we store with key 'test_key'? Also increment the counter by 3.".to_string(),
+            text: "What value did we store with key 'test_key'? Also increment the counter by 3."
+                .to_string(),
             metadata: None,
         }],
         context_id: Some(context_id.clone()),
@@ -327,32 +318,34 @@ async fn test_openai_multi_turn_with_stateful_tools() {
 
     println!("✅ Validating tool execution across all turns:");
     for event in &session.events {
-        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
-                    radkit::models::content::ContentPart::FunctionCall { name, arguments, .. } => {
-                        match name.as_str() {
-                            "memory" => {
-                                let action = arguments.get("action").and_then(|v| v.as_str());
-                                match action {
-                                    Some("set") => {
-                                        memory_set_calls += 1;
-                                        println!("  🔧 Memory set call");
-                                    }
-                                    Some("get") => {
-                                        memory_get_calls += 1;
-                                        println!("  🔧 Memory get call");
-                                    }
-                                    _ => {}
+                    radkit::models::content::ContentPart::FunctionCall {
+                        name, arguments, ..
+                    } => match name.as_str() {
+                        "memory" => {
+                            let action = arguments.get("action").and_then(|v| v.as_str());
+                            match action {
+                                Some("set") => {
+                                    memory_set_calls += 1;
+                                    println!("  🔧 Memory set call");
                                 }
+                                Some("get") => {
+                                    memory_get_calls += 1;
+                                    println!("  🔧 Memory get call");
+                                }
+                                _ => {}
                             }
-                            "counter" => {
-                                counter_calls += 1;
-                                println!("  🔧 Counter call");
-                            }
-                            _ => {}
                         }
-                    }
+                        "counter" => {
+                            counter_calls += 1;
+                            println!("  🔧 Counter call");
+                        }
+                        _ => {}
+                    },
                     radkit::models::content::ContentPart::FunctionResponse {
                         name,
                         success,
@@ -376,9 +369,15 @@ async fn test_openai_multi_turn_with_stateful_tools() {
 
     // ✅ Validate tool execution
     assert!(memory_set_calls >= 1, "Should have made memory set calls");
-    assert!(memory_get_calls >= 1, "Should have made memory get calls");  
-    assert!(counter_calls >= 2, "Should have made at least 2 counter calls");
-    assert!(found_openai_test_value, "Should have retrieved the stored OpenAI Test value");
+    assert!(memory_get_calls >= 1, "Should have made memory get calls");
+    assert!(
+        counter_calls >= 2,
+        "Should have made at least 2 counter calls"
+    );
+    assert!(
+        found_openai_test_value,
+        "Should have retrieved the stored OpenAI Test value"
+    );
 
     // ✅ Validate conversation context
     let mut mentioned_memory = false;
@@ -426,7 +425,7 @@ async fn test_openai_multi_turn_with_stateful_tools() {
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_openai_cross_task_tool_persistence() {
     let memory_tool = create_memory_tool();
-    
+
     let Some(agent) = create_test_agent_with_tools(vec![memory_tool]) else {
         println!("⚠️  Skipping test: OPENAI_API_KEY not found");
         return;
@@ -495,7 +494,7 @@ async fn test_openai_cross_task_tool_persistence() {
         .await;
     assert!(result2.is_ok(), "Second task should succeed");
 
-    let task2 = match result2.unwrap().result {
+    let _task2 = match result2.unwrap().result {
         SendMessageResult::Task(task) => task,
         _ => panic!("Expected Task result"),
     };
@@ -516,10 +515,14 @@ async fn test_openai_cross_task_tool_persistence() {
 
     println!("✅ Validating cross-task tool persistence:");
     for event in &session.events {
-        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
-                    radkit::models::content::ContentPart::FunctionCall { name, arguments, .. } => {
+                    radkit::models::content::ContentPart::FunctionCall {
+                        name, arguments, ..
+                    } => {
                         if name.as_str() == "memory" {
                             let action = arguments.get("action").and_then(|v| v.as_str());
                             match action {
@@ -555,10 +558,19 @@ async fn test_openai_cross_task_tool_persistence() {
 
     assert!(set_calls >= 3, "Should have made at least 3 set calls");
     assert!(get_calls >= 2, "Should have made at least 2 get calls");
-    assert!(found_gpt4 && found_openai, "Should have retrieved both stored values across tasks");
+    assert!(
+        found_gpt4 && found_openai,
+        "Should have retrieved both stored values across tasks"
+    );
 
-    println!("  ✅ Tool calls: {} sets, {} gets, {} lists", set_calls, get_calls, list_calls);
-    println!("  ✅ Retrieved values: GPT-4 = {}, OpenAI = {}", found_gpt4, found_openai);
+    println!(
+        "  ✅ Tool calls: {} sets, {} gets, {} lists",
+        set_calls, get_calls, list_calls
+    );
+    println!(
+        "  ✅ Retrieved values: GPT-4 = {}, OpenAI = {}",
+        found_gpt4, found_openai
+    );
 
     // ✅ Validate task management
     let all_tasks = agent

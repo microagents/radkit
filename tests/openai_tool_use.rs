@@ -116,15 +116,9 @@ fn create_calculation_tool() -> FunctionTool {
                     .and_then(|v| v.as_str())
                     .unwrap_or("add");
 
-                let a = args
-                    .get("a")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
+                let a = args.get("a").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-                let b = args
-                    .get("b")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
+                let b = args.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
                 let result = match operation {
                     "add" => a + b,
@@ -239,7 +233,9 @@ async fn test_openai_single_tool_use() {
 
     println!("✅ Validating tool execution in session events:");
     for event in &session.events {
-        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall {
@@ -292,8 +288,14 @@ async fn test_openai_single_tool_use() {
         session_function_responses >= 1,
         "Should have received at least 1 function response"
     );
-    assert!(session_weather_called, "get_weather tool should have been called");
-    assert!(session_weather_succeeded, "get_weather tool should have succeeded");
+    assert!(
+        session_weather_called,
+        "get_weather tool should have been called"
+    );
+    assert!(
+        session_weather_succeeded,
+        "get_weather tool should have succeeded"
+    );
 
     // ✅ 4. Validate A2A Task History (should contain conversation but NOT function calls)
     println!("✅ Validating A2A task history:");
@@ -342,7 +344,7 @@ async fn test_openai_single_tool_use() {
 async fn test_openai_multiple_tool_use() {
     let weather_tool = Arc::new(create_weather_tool());
     let calc_tool = Arc::new(create_calculation_tool());
-    
+
     let Some(agent) = create_test_agent_with_tools(vec![weather_tool, calc_tool]) else {
         println!("⚠️  Skipping test: OPENAI_API_KEY not found");
         return;
@@ -350,9 +352,8 @@ async fn test_openai_multiple_tool_use() {
 
     println!("🧪 Testing OpenAI multiple tool use with comprehensive validation...");
 
-    let message = create_user_message(
-        "What's 15 multiplied by 3? Also, what's the weather in New York, NY?"
-    );
+    let message =
+        create_user_message("What's 15 multiplied by 3? Also, what's the weather in New York, NY?");
 
     let params = MessageSendParams {
         message,
@@ -390,7 +391,9 @@ async fn test_openai_multiple_tool_use() {
 
     println!("✅ Validating multiple tool execution in session events:");
     for event in &session.events {
-        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall { name, .. } => {
@@ -402,7 +405,9 @@ async fn test_openai_multiple_tool_use() {
                         }
                     }
                     radkit::models::content::ContentPart::FunctionResponse {
-                        name, success, ..
+                        name,
+                        success,
+                        ..
                     } => {
                         println!("  ⚙️ Function Response: {} (success: {})", name, success);
                         if *success {
@@ -438,17 +443,19 @@ async fn test_openai_multiple_tool_use() {
     }
 
     let response_lower = response_text.to_lowercase();
-    
+
     // Check for calculation result (15 * 3 = 45)
     assert!(
         response_lower.contains("45"),
         "Response should include calculation result (45): {}",
         response_text
     );
-    
+
     // Check for weather information
     assert!(
-        response_lower.contains("72") || response_lower.contains("weather") || response_lower.contains("cloudy"),
+        response_lower.contains("72")
+            || response_lower.contains("weather")
+            || response_lower.contains("cloudy"),
         "Response should include weather information: {}",
         response_text
     );
@@ -500,7 +507,10 @@ async fn test_openai_streaming_with_tools() {
                 );
             }
             SendStreamingMessageResult::Task(task) => {
-                println!("  ✅ Received final task with {} messages", task.history.len());
+                println!(
+                    "  ✅ Received final task with {} messages",
+                    task.history.len()
+                );
                 final_task = Some(task);
                 break;
             }
@@ -520,7 +530,10 @@ async fn test_openai_streaming_with_tools() {
 
     let mut event_count = 0;
     while let Some(internal_event) = execution.all_events_stream.next().await {
-        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &internal_event.event_type {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } =
+            &internal_event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall { name, .. } => {
@@ -530,9 +543,14 @@ async fn test_openai_streaming_with_tools() {
                         }
                     }
                     radkit::models::content::ContentPart::FunctionResponse {
-                        name, success, ..
+                        name,
+                        success,
+                        ..
                     } => {
-                        println!("  ⚙️ Real-time Function Response: {} (success: {})", name, success);
+                        println!(
+                            "  ⚙️ Real-time Function Response: {} (success: {})",
+                            name, success
+                        );
                         if name.as_str() == "get_weather" && *success {
                             realtime_weather_succeeded = true;
                         }
@@ -542,7 +560,9 @@ async fn test_openai_streaming_with_tools() {
             }
         }
         event_count += 1;
-        if event_count >= 10 { break; } // Process only first 10 events
+        if event_count >= 10 {
+            break;
+        } // Process only first 10 events
     }
 
     // ✅ Also validate via session persistence (as fallback)
@@ -558,7 +578,9 @@ async fn test_openai_streaming_with_tools() {
     let mut session_weather_succeeded = false;
 
     for event in &session.events {
-        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
                     radkit::models::content::ContentPart::FunctionCall { name, .. } => {
@@ -567,7 +589,9 @@ async fn test_openai_streaming_with_tools() {
                         }
                     }
                     radkit::models::content::ContentPart::FunctionResponse {
-                        name, success, ..
+                        name,
+                        success,
+                        ..
                     } => {
                         if name.as_str() == "get_weather" && *success {
                             session_weather_succeeded = true;
@@ -600,7 +624,7 @@ async fn test_openai_streaming_with_tools() {
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_openai_tool_error_handling() {
     let calc_tool = Arc::new(create_calculation_tool());
-    
+
     let Some(agent) = create_test_agent_with_tools(vec![calc_tool]) else {
         println!("⚠️  Skipping test: OPENAI_API_KEY not found");
         return;
@@ -609,7 +633,9 @@ async fn test_openai_tool_error_handling() {
     println!("🧪 Testing OpenAI tool error handling...");
 
     // Request a division by zero to trigger an error - be explicit about using the tool
-    let message = create_user_message("Please use the calculate tool to compute 10 divided by 0. I need you to call the function to get the result.");
+    let message = create_user_message(
+        "Please use the calculate tool to compute 10 divided by 0. I need you to call the function to get the result.",
+    );
 
     let params = MessageSendParams {
         message,
@@ -645,23 +671,30 @@ async fn test_openai_tool_error_handling() {
 
     println!("✅ Validating tool error handling in session events:");
     for event in &session.events {
-        if let radkit::sessions::SessionEventType::UserMessage { content } | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type {
+        if let radkit::sessions::SessionEventType::UserMessage { content }
+        | radkit::sessions::SessionEventType::AgentMessage { content } = &event.event_type
+        {
             for part in &content.parts {
                 match part {
-                    radkit::models::content::ContentPart::FunctionResponse { 
-                        success, 
-                        error_message, 
+                    radkit::models::content::ContentPart::FunctionResponse {
+                        success,
+                        error_message,
                         name,
-                        .. 
+                        ..
                     } => {
                         if name.as_str() == "calculate" && !success {
                             found_error = true;
-                            println!("  ❌ Tool Error: {}", 
-                                error_message.as_ref().unwrap_or(&"No error message".to_string()));
+                            println!(
+                                "  ❌ Tool Error: {}",
+                                error_message
+                                    .as_ref()
+                                    .unwrap_or(&"No error message".to_string())
+                            );
                             if let Some(err_msg) = error_message {
                                 assert!(
                                     err_msg.contains("Division by zero"),
-                                    "Error message should mention division by zero, got: {}", err_msg
+                                    "Error message should mention division by zero, got: {}",
+                                    err_msg
                                 );
                             }
                         }
