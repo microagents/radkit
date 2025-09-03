@@ -20,7 +20,7 @@ use crate::tools::{BaseTool, BaseToolset, CombinedToolset, SimpleToolset};
 use super::config::{AgentConfig, AuthenticatedAgent};
 
 /// Agent definition and configuration (lightweight, reusable)  
-/// Agent and EventProcessor share the same SessionService Arc for clean architecture
+/// Agent uses QueryService for reads and EventProcessor for writes
 pub struct Agent {
     name: String,
     description: String,
@@ -28,6 +28,7 @@ pub struct Agent {
     model: Arc<dyn BaseLlm>,
     toolset: Option<Arc<dyn BaseToolset>>,
     session_service: Arc<dyn SessionService>,
+    query_service: Arc<crate::sessions::QueryService>,
     event_processor: Arc<crate::events::EventProcessor>,
     config: AgentConfig,
 }
@@ -53,6 +54,7 @@ impl Agent {
         model: Arc<dyn BaseLlm>,
     ) -> Self {
         let session_service = Arc::new(InMemorySessionService::new());
+        let query_service = Arc::new(crate::sessions::QueryService::new(session_service.clone()));
         let event_bus = Arc::new(crate::events::InMemoryEventBus::new());
         let event_processor = Arc::new(crate::events::EventProcessor::new(
             session_service.clone(), // Still need clone here since we use session_service below
@@ -66,6 +68,7 @@ impl Agent {
             model,
             toolset: None,
             session_service,
+            query_service,
             event_processor,
             config: AgentConfig::default(),
         }
@@ -73,6 +76,9 @@ impl Agent {
 
     /// Set a custom session service (builder pattern)
     pub fn with_session_service(mut self, session_service: Arc<dyn SessionService>) -> Self {
+        // Recreate QueryService with new session service
+        self.query_service = Arc::new(crate::sessions::QueryService::new(session_service.clone()));
+
         // Recreate EventProcessor with new session service
         let event_bus = Arc::new(crate::events::InMemoryEventBus::new());
         self.event_processor = Arc::new(crate::events::EventProcessor::new(
@@ -102,6 +108,11 @@ impl Agent {
     /// Get access to the session service for testing/inspection  
     pub fn session_service(&self) -> &Arc<dyn SessionService> {
         &self.session_service
+    }
+
+    /// Get access to the query service for read operations
+    pub fn query_service(&self) -> &Arc<crate::sessions::QueryService> {
+        &self.query_service
     }
 
     /// Get access to the event processor for business logic operations
@@ -277,7 +288,8 @@ impl Agent {
                 instruction,
                 model,
                 toolset,
-                session_service, // Move instead of additional clone
+                session_service: session_service.clone(),
+                query_service: Arc::new(crate::sessions::QueryService::new(session_service)),
                 event_processor,
                 config,
             };
@@ -380,7 +392,7 @@ impl Agent {
     ) -> AgentResult<Task> {
         // Get task using Agent's EventProcessor (business logic)
         let mut a2a_task = self
-            .event_processor
+            .query_service
             .get_task(app_name, user_id, &params.id)
             .await?
             .ok_or_else(|| AgentError::TaskNotFound {
@@ -411,7 +423,7 @@ impl Agent {
     pub async fn list_tasks(&self, app_name: &str, user_id: &str) -> AgentResult<Vec<Task>> {
         // Get all tasks directly from SessionService (already A2A format)
         let all_a2a_tasks = self
-            .event_processor
+            .query_service
             .list_tasks(app_name, user_id, None)
             .await?;
 
@@ -466,7 +478,7 @@ impl Agent {
         let task_id = if let Some(task_id) = &params.message.task_id {
             // Continue existing task - check if it exists and is not terminal
             match self
-                .event_processor
+                .query_service
                 .get_task(app_name, user_id, task_id)
                 .await?
             {
@@ -496,7 +508,7 @@ impl Agent {
             uuid::Uuid::new_v4().to_string()
         };
 
-        // Create unified execution context with Agent's EventProcessor
+        // Create unified execution context with Agent's EventProcessor and QueryService
         let context = ExecutionContext::new(
             session.id.clone(),
             task_id.clone(),
@@ -504,6 +516,7 @@ impl Agent {
             user_id.to_string(),
             params.clone(),
             self.event_processor.clone(),
+            self.query_service.clone(),
         );
 
         // Set up event subscriptions if capture or streaming is requested

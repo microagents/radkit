@@ -17,7 +17,7 @@ pub enum BuiltinTool {
     // LogMessage,
     // SetReminder,
 }
-use crate::tools::{BaseTool, FunctionTool};
+use crate::tools::{BaseTool, FunctionTool, ToolArtifactAccess, ToolTaskAccess};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,14 +50,8 @@ pub fn create_update_status_tool() -> Arc<dyn BaseTool> {
                     "rejected" => TaskState::Rejected,
                     _ => TaskState::Working,
                 };
-                // Emit task status change event via unified context
-                let _ = context
-                    .emit_task_status_update(
-                        TaskState::Submitted, // Previous state (tasks start as Submitted)
-                        state,
-                        message,
-                    )
-                    .await;
+                // Emit task status change event via ToolContext capabilities
+                let _ = context.update_task_status(state, message).await;
                 crate::tools::ToolResult::success(json!({
                     "status": status_str,
                     "message": "Status update emitted"
@@ -123,12 +117,23 @@ pub fn create_save_artifact_tool() -> Arc<dyn BaseTool> {
                     metadata: Some({
                         let mut meta = HashMap::new();
                         meta.insert("type".to_string(), json!(artifact_type));
+                        meta.insert("context_id".to_string(), json!(context.context_id()));
+                        meta.insert("task_id".to_string(), json!(context.task_id()));
+                        meta.insert("content_type".to_string(), json!(match artifact_type {
+                            "file" => "application/octet-stream",
+                            "data" => "application/json",
+                            "result" => "application/json",
+                            "log" => "text/plain",
+                            "image" => "image/png",
+                            "document" => "text/plain",
+                            _ => "application/json",
+                        }));
                         meta
                     }),
                 };
 
-                // Emit artifact saved event via unified context
-                let _ = context.emit_artifact_save(artifact).await;
+                // Emit artifact saved event via ToolContext capabilities
+                let _ = context.save_artifact(artifact).await;
                 crate::tools::ToolResult::success(json!({
                     "name": name,
                     "type": artifact_type,

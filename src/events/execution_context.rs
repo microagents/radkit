@@ -1,11 +1,11 @@
 use crate::errors::AgentResult;
 use std::sync::Arc;
 
-use crate::a2a::{MessageSendParams, TaskState};
+use crate::a2a::{MessageSendParams, Task, TaskState};
 use crate::events::EventProcessor;
-use crate::sessions::{SessionEvent, SessionEventType};
+use crate::sessions::{QueryService, SessionEvent, SessionEventType};
 
-/// Execution context that uses EventProcessor for clean separation
+/// Execution context that handles event processing and delegates reads to QueryService
 pub struct ExecutionContext {
     pub context_id: String,
     pub task_id: String,
@@ -13,8 +13,10 @@ pub struct ExecutionContext {
     pub user_id: String,
     pub current_params: MessageSendParams,
 
-    // Clean event processing with proper separation of concerns
+    // Event processing for state changes and streaming
     event_processor: Arc<EventProcessor>,
+    // Query service for all read operations
+    query_service: Arc<QueryService>,
 }
 
 impl ExecutionContext {
@@ -25,6 +27,7 @@ impl ExecutionContext {
         user_id: String,
         params: MessageSendParams,
         event_processor: Arc<EventProcessor>,
+        query_service: Arc<QueryService>,
     ) -> Self {
         Self {
             context_id,
@@ -33,16 +36,15 @@ impl ExecutionContext {
             user_id,
             current_params: params,
             event_processor,
+            query_service,
         }
     }
 
     /// Emit user input event using unified SessionEvent
-    pub async fn emit_user_input(&self, message: crate::a2a::Message) -> AgentResult<()> {
-        let content = crate::models::content::Content::from_message(
-            message,
-            self.task_id.clone(),
-            self.context_id.clone(),
-        );
+    pub async fn emit_user_input(
+        &self,
+        content: crate::models::content::Content,
+    ) -> AgentResult<()> {
         let event = SessionEvent::new(
             self.context_id.clone(),
             self.task_id.clone(),
@@ -133,17 +135,47 @@ impl ExecutionContext {
         self.event_processor.process_event(event).await
     }
 
-    /// Get task from EventProcessor (business logic)
-    pub async fn get_task(&self) -> AgentResult<Option<crate::a2a::Task>> {
-        self.event_processor
+    // ===== Business Logic Methods (delegate to QueryService) =====
+
+    /// Get task by ID using event sourcing (A2A Protocol: tasks/get)
+    pub async fn get_task(&self) -> AgentResult<Option<Task>> {
+        self.query_service
             .get_task(&self.app_name, &self.user_id, &self.task_id)
             .await
     }
 
-    /// Get LLM conversation history from EventProcessor (business logic)
-    pub async fn get_llm_conversation(&self) -> AgentResult<Vec<crate::models::content::Content>> {
-        self.event_processor
-            .get_llm_conversation(&self.app_name, &self.user_id, &self.context_id)
+    /// List tasks for app/user using event sourcing (A2A Protocol: tasks/list)
+    pub async fn list_tasks(&self, context_id: Option<&str>) -> AgentResult<Vec<Task>> {
+        self.query_service
+            .list_tasks(&self.app_name, &self.user_id, context_id)
             .await
+    }
+
+    /// Get LLM conversation history from session events
+    pub async fn get_llm_conversation(&self) -> AgentResult<Vec<crate::models::content::Content>> {
+        self.query_service
+            .get_conversation(&self.app_name, &self.user_id, &self.context_id)
+            .await
+    }
+
+    /// Get state value from session (for ToolContext state access)
+    pub async fn get_state(
+        &self,
+        scope: crate::sessions::StateScope,
+        key: &str,
+    ) -> AgentResult<Option<serde_json::Value>> {
+        self.query_service
+            .get_state(&self.app_name, &self.user_id, &self.context_id, scope, key)
+            .await
+    }
+
+    /// Get access to the event processor (for event emission)
+    pub fn event_processor(&self) -> &Arc<EventProcessor> {
+        &self.event_processor
+    }
+
+    /// Get access to the query service (for ToolContext)
+    pub fn query_service(&self) -> &Arc<QueryService> {
+        &self.query_service
     }
 }

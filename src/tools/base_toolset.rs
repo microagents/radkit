@@ -105,8 +105,10 @@ impl BaseToolset for CombinedToolset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::ExecutionContext;
-    use crate::tools::base_tool::{BaseTool, FunctionDeclaration, ToolResult};
+    use crate::tools::{
+        ToolContext,
+        base_tool::{BaseTool, FunctionDeclaration, ToolResult},
+    };
 
     // Mock tool for testing
     #[derive(Debug)]
@@ -145,7 +147,7 @@ mod tests {
         async fn run_async(
             &self,
             _args: std::collections::HashMap<String, serde_json::Value>,
-            _context: &ExecutionContext,
+            _context: &ToolContext<'_>,
         ) -> ToolResult {
             ToolResult::success(serde_json::Value::Null)
         }
