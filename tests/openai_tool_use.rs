@@ -17,14 +17,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod common;
-
-/// Helper function to get OpenAI API key from environment
-fn get_openai_key() -> Option<String> {
-    std::env::var("OPENAI_API_KEY").ok()
-}
+use common::{get_openai_key, init_test_env};
 
 /// Helper function to create Agent with tools if API key is available
 fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> {
+    init_test_env();
     get_openai_key().map(|api_key| {
         let openai_llm = OpenAILlm::new("gpt-4o-mini".to_string(), api_key);
         let session_service = Arc::new(InMemorySessionService::new());

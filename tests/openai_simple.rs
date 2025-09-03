@@ -15,12 +15,7 @@ use radkit::sessions::InMemorySessionService;
 use std::sync::Arc;
 
 mod common;
-use common::init_test_env;
-
-/// Helper function to get OpenAI API key from environment
-fn get_openai_key() -> Option<String> {
-    std::env::var("OPENAI_API_KEY").ok()
-}
+use common::{get_openai_key, init_test_env};
 
 /// Helper function to create Agent with OpenAI if API key is available
 /// Creates agent with proper session service and task store for comprehensive testing
