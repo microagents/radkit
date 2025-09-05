@@ -407,7 +407,7 @@ impl OpenAILlm {
                             let tool_use_id = tool_call_delta
                                 .id
                                 .clone()
-                                .unwrap_or_else(|| format!("call_{}", index));
+                                .unwrap_or_else(|| format!("call_{index}"));
 
                             let parsed_arguments = match serde_json::from_str(arguments) {
                                 Ok(args) => args,
@@ -523,14 +523,12 @@ impl BaseLlm for OpenAILlm {
                 return Err(AgentError::LlmProvider {
                     provider: "openai".to_string(),
                     message: error.error.message,
-                }
-                .into());
+                });
             } else {
                 return Err(AgentError::LlmProvider {
                     provider: "openai".to_string(),
                     message: error_text,
-                }
-                .into());
+                });
             }
         }
 
@@ -640,7 +638,7 @@ impl BaseLlm for OpenAILlm {
             .await
             .map_err(|e| AgentError::LlmProvider {
                 provider: "OpenAI".to_string(),
-                message: format!("Request failed: {}", e),
+                message: format!("Request failed: {e}"),
             })?;
 
         if !response.status().is_success() {
@@ -657,7 +655,7 @@ impl BaseLlm for OpenAILlm {
 
             return Err(AgentError::LlmProvider {
                 provider: "OpenAI".to_string(),
-                message: format!("HTTP {}: {}", status, error_body),
+                message: format!("HTTP {status}: {error_body}"),
             });
         }
 
@@ -666,22 +664,19 @@ impl BaseLlm for OpenAILlm {
         let context_id = request.context_id.clone();
 
         // Convert byte stream to line-based stream using tokio-util
-        let byte_stream = response.bytes_stream().map_err(|e| std::io::Error::new(
-            std::io::ErrorKind::Other, 
-            format!("Request error: {}", e)
-        ));
-        
+        let byte_stream = response.bytes_stream().map_err(|e| {
+            std::io::Error::other(format!("Request error: {e}"))
+        });
+
         // Use tokio-util to handle proper line buffering
         let stream_reader = tokio_util::io::StreamReader::new(byte_stream);
-        let lines = tokio_util::codec::FramedRead::new(
-            stream_reader, 
-            tokio_util::codec::LinesCodec::new()
-        );
-        
+        let lines =
+            tokio_util::codec::FramedRead::new(stream_reader, tokio_util::codec::LinesCodec::new());
+
         let processed_stream = lines
             .map_err(|e| AgentError::Network {
                 operation: "stream_read".to_string(),
-                reason: format!("Stream decode error: {}", e),
+                reason: format!("Stream decode error: {e}"),
             })
             .filter_map(move |line_result| {
                 let task_id = task_id.clone();
@@ -735,7 +730,11 @@ impl BaseLlm for OpenAILlm {
                                     }
                                     Err(e) => {
                                         // Log the problematic data for debugging
-                                        tracing::warn!("Failed to parse SSE data: '{}', error: {}", data, e);
+                                        tracing::warn!(
+                                            "Failed to parse SSE data: '{}', error: {}",
+                                            data,
+                                            e
+                                        );
                                         // Don't fail the entire stream on a single parse error, just skip it
                                         return None;
                                     }

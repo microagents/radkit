@@ -53,7 +53,7 @@ impl<'a> ConversationHandler for StandardConversationHandler<'a> {
         // Get current task state and emit failure
         let task = self
             .agent
-            .event_processor()
+            .query_service()
             .get_task(&context.app_name, &context.user_id, &context.task_id)
             .await?;
 
@@ -83,7 +83,7 @@ impl<'a> ConversationHandler for StreamingConversationHandler<'a> {
         // Get current task state and emit failure
         let task = self
             .agent
-            .event_processor()
+            .query_service()
             .get_task(&context.app_name, &context.user_id, &context.task_id)
             .await?;
 
@@ -154,7 +154,12 @@ impl<'a> ConversationExecutor<'a> {
         let mut initial_msg = _initial_message.clone();
         initial_msg.context_id = Some(context.context_id.clone());
         initial_msg.task_id = Some(context.task_id.clone());
-        context.emit_user_input(initial_msg).await?;
+        let initial_content = Content::from_message(
+            initial_msg,
+            context.task_id.clone(),
+            context.context_id.clone(),
+        );
+        context.emit_user_input(initial_content).await?;
 
         loop {
             if iteration >= max_iterations {
@@ -242,7 +247,7 @@ impl<'a> ConversationExecutor<'a> {
                 let tool_result = self.execute_tool_call(name, arguments, context).await;
                 let duration_ms = start_time.elapsed().as_millis() as u64;
 
-                // Create and emit function response
+                // Create and emit function response as UserMessage (it's input back to the agent)
                 let mut response_content = Content::new(
                     context.task_id.clone(),
                     context.context_id.clone(),
@@ -260,7 +265,8 @@ impl<'a> ConversationExecutor<'a> {
                     metadata: None,
                 });
 
-                context.emit_message(response_content).await?;
+                // Function responses are UserMessage events (input to agent from tools)
+                context.emit_user_input(response_content).await?;
             }
         }
 
@@ -289,7 +295,8 @@ impl<'a> ConversationExecutor<'a> {
                         HashMap::new()
                     };
 
-                tool.run_async(args_map, context).await
+                let tool_context = crate::tools::ToolContext::from_execution_context(context);
+                tool.run_async(args_map, &tool_context).await
             } else {
                 crate::tools::base_tool::ToolResult::error(format!("Tool '{name}' not found"))
             }

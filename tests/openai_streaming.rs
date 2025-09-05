@@ -1,22 +1,23 @@
-use dotenvy::dotenv;
 use futures::StreamExt;
 use radkit::models::content::Content;
 use radkit::models::llm_request::{GenerateContentConfig, LlmRequest};
 use radkit::models::{BaseLlm, OpenAILlm};
-use std::env;
 use std::sync::Arc;
 
+mod common;
+use common::{get_openai_key, init_test_env};
+
 /// Test basic streaming functionality
-/// 
+///
 /// Run with: `cargo test test_openai_streaming_basic --ignored` (requires OPENAI_API_KEY)
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_openai_streaming_basic() {
-    dotenv().ok();
+    init_test_env();
 
-    let api_key = match env::var("OPENAI_API_KEY") {
-        Ok(key) => key,
-        Err(_) => {
+    let api_key = match get_openai_key() {
+        Some(key) => key,
+        None => {
             println!("Skipping OpenAI streaming test - no API key");
             return;
         }
@@ -96,16 +97,16 @@ async fn test_openai_streaming_basic() {
 }
 
 /// Test streaming with function calls
-/// 
+///
 /// Run with: `cargo test test_openai_streaming_with_tools --ignored` (requires OPENAI_API_KEY)
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_openai_streaming_with_tools() {
-    dotenv().ok();
+    init_test_env();
 
-    let api_key = match env::var("OPENAI_API_KEY") {
-        Ok(key) => key,
-        Err(_) => {
+    let api_key = match get_openai_key() {
+        Some(key) => key,
+        None => {
             println!("Skipping OpenAI streaming tools test - no API key");
             return;
         }

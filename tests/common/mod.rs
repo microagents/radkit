@@ -33,6 +33,11 @@ pub fn has_gemini_key() -> bool {
     get_api_key("GEMINI_API_KEY").is_some()
 }
 
+/// Check if OpenAI API key is available
+pub fn has_openai_key() -> bool {
+    get_api_key("OPENAI_API_KEY").is_some()
+}
+
 /// Get Anthropic API key if available
 pub fn get_anthropic_key() -> Option<String> {
     get_api_key("ANTHROPIC_API_KEY")
@@ -41,4 +46,9 @@ pub fn get_anthropic_key() -> Option<String> {
 /// Get Gemini API key if available
 pub fn get_gemini_key() -> Option<String> {
     get_api_key("GEMINI_API_KEY")
+}
+
+/// Get OpenAI API key if available
+pub fn get_openai_key() -> Option<String> {
+    get_api_key("OPENAI_API_KEY")
 }

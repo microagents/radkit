@@ -167,6 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 <div id="centered-install-tabs" class="install-command-container" markdown="1">
 <p style="text-align:center;">
   <a href="docs/docs/getting-started.md" class="md-button" style="margin:3px">Getting Started</a>
+  <a href="docs/docs/tools.md" class="md-button" style="margin:3px">Tools Guide</a>
   <a href="docs/docs/tasks.md" class="md-button" style="margin:3px">Task Guide</a>
   <a href="docs/docs/sessions.md" class="md-button" style="margin:3px">Session Guide</a>
 </p>
@@ -181,9 +182,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - Multi-provider LLM support (Anthropic Claude, Google Gemini)
 - Task lifecycle management with A2A event streaming
 - Comprehensive tool system with built-in A2A tools
+- Secure ToolContext with capability-based access control
+- State management with three-tier state isolation (app/user/session)
 
 🚧 **Coming Soon**:
-- State management with three-tier state isolation
 - A2A Server mode (HTTP/gRPC endpoints for agent interoperability)
 - A2A Client mode (call other A2A agents via function calling)
 - MCP (Model Context Protocol) tools integration

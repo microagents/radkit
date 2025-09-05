@@ -5,13 +5,13 @@ use std::future::Future;
 use std::pin::Pin;
 
 use super::base_tool::{BaseTool, FunctionDeclaration, ToolResult};
-use crate::events::ExecutionContext;
+use crate::tools::ToolContext;
 
 /// Type alias for async function that can be used as a tool
 pub type AsyncToolFunction = Box<
     dyn for<'a> Fn(
             HashMap<String, Value>,
-            &'a ExecutionContext,
+            &'a ToolContext<'a>,
         ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>
         + Send
         + Sync,
@@ -32,7 +32,7 @@ impl FunctionTool {
     where
         F: for<'a> Fn(
                 HashMap<String, Value>,
-                &'a ExecutionContext,
+                &'a ToolContext<'a>,
             ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>
             + Send
             + Sync
@@ -88,7 +88,7 @@ impl BaseTool for FunctionTool {
     async fn run_async(
         &self,
         args: HashMap<String, Value>,
-        context: &ExecutionContext,
+        context: &ToolContext<'_>,
     ) -> ToolResult {
         (self.function)(args, context).await
     }
@@ -98,14 +98,16 @@ impl BaseTool for FunctionTool {
 mod tests {
     use super::*;
     use crate::a2a::{Message, MessageRole, MessageSendParams, Part};
-    use crate::events::{EventProcessor, InMemoryEventBus};
+    use crate::events::{EventProcessor, ExecutionContext, InMemoryEventBus};
     use crate::sessions::InMemorySessionService;
+    use crate::tools::ToolContext;
     use serde_json::json;
     use std::sync::Arc;
 
     // Helper function to create a test ExecutionContext
-    async fn create_test_context() -> ExecutionContext {
+    async fn create_test_execution_context() -> ExecutionContext {
         let session_service = Arc::new(InMemorySessionService::new());
+        let query_service = Arc::new(crate::sessions::QueryService::new(session_service.clone()));
         let event_bus = Arc::new(InMemoryEventBus::new());
         let event_processor = Arc::new(EventProcessor::new(session_service, event_bus));
 
@@ -135,6 +137,7 @@ mod tests {
             "test_user".to_string(),
             params,
             event_processor,
+            query_service,
         )
     }
 
@@ -172,8 +175,9 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".to_string(), json!("Alice"));
 
-        let context = create_test_context().await;
-        let result = tool.run_async(args, &context).await;
+        let exec_ctx = create_test_execution_context().await;
+        let tool_context = ToolContext::from_execution_context(&exec_ctx);
+        let result = tool.run_async(args, &tool_context).await;
 
         assert!(result.success);
         assert_eq!(result.data["greeting"], "Hello, Alice!");
@@ -222,9 +226,10 @@ mod tests {
 
         assert!(long_tool.is_long_running());
 
-        let context = create_test_context().await;
+        let exec_ctx = create_test_execution_context().await;
+        let tool_context = ToolContext::from_execution_context(&exec_ctx);
         let start = std::time::Instant::now();
-        let result = long_tool.run_async(HashMap::new(), &context).await;
+        let result = long_tool.run_async(HashMap::new(), &tool_context).await;
         let duration = start.elapsed();
 
         assert!(result.success);
@@ -290,8 +295,9 @@ mod tests {
             json!(["rust", "python", "javascript"]),
         );
 
-        let context = create_test_context().await;
-        let result = complex_tool.run_async(args, &context).await;
+        let exec_ctx = create_test_execution_context().await;
+        let tool_context = ToolContext::from_execution_context(&exec_ctx);
+        let result = complex_tool.run_async(args, &tool_context).await;
         assert!(result.success);
 
         let data = result.data.as_object().unwrap();
@@ -320,18 +326,19 @@ mod tests {
             },
         );
 
-        let context = create_test_context().await;
+        let exec_ctx = create_test_execution_context().await;
+        let tool_context = ToolContext::from_execution_context(&exec_ctx);
         // Test success case
         let mut args = HashMap::new();
         args.insert("fail".to_string(), json!(false));
-        let result = error_tool.run_async(args, &context).await;
+        let result = error_tool.run_async(args, &tool_context).await;
         assert!(result.success);
         assert_eq!(result.data, json!({"status": "success"}));
 
         // Test error case
         let mut args = HashMap::new();
         args.insert("fail".to_string(), json!(true));
-        let result = error_tool.run_async(args, &context).await;
+        let result = error_tool.run_async(args, &tool_context).await;
         assert!(!result.success);
         assert_eq!(
             result.error_message,
@@ -347,19 +354,20 @@ mod tests {
             |_args, ctx| {
                 Box::pin(async move {
                     ToolResult::success(json!({
-                        "context_id": ctx.context_id,
-                        "task_id": ctx.task_id,
-                        "app_name": ctx.app_name,
-                        "user_id": ctx.user_id,
-                        "has_metadata": ctx.current_params.metadata.is_some()
+                        "context_id": ctx.context_id(),
+                        "task_id": ctx.task_id(),
+                        "app_name": ctx.app_name(),
+                        "user_id": ctx.user_id(),
+                        "has_metadata": false // ToolContext doesn't expose current_params
                     }))
                 })
             },
         );
 
-        let context = create_test_context().await;
+        let exec_ctx = create_test_execution_context().await;
+        let tool_context = ToolContext::from_execution_context(&exec_ctx);
 
-        let result = context_tool.run_async(HashMap::new(), &context).await;
+        let result = context_tool.run_async(HashMap::new(), &tool_context).await;
         assert!(result.success);
 
         let data = result.data.as_object().unwrap();
@@ -406,11 +414,12 @@ mod tests {
         for i in 0..10 {
             let tool = concurrent_tool.clone();
             join_set.spawn(async move {
-                let context = create_test_context().await;
+                let exec_ctx = create_test_execution_context().await;
+                let tool_context = ToolContext::from_execution_context(&exec_ctx);
                 let mut args = HashMap::new();
                 args.insert("delay_ms".to_string(), json!(5 + i)); // Stagger delays
 
-                tool.run_async(args, &context).await
+                tool.run_async(args, &tool_context).await
             });
         }
 
@@ -467,8 +476,9 @@ mod tests {
         let declaration = tool.get_declaration().unwrap();
         assert_eq!(declaration.parameters, json!({})); // Should default to empty object
 
-        let context = create_test_context().await;
-        let result = tool.run_async(HashMap::new(), &context).await;
+        let exec_ctx = create_test_execution_context().await;
+        let tool_context = ToolContext::from_execution_context(&exec_ctx);
+        let result = tool.run_async(HashMap::new(), &tool_context).await;
         assert!(result.success);
         assert_eq!(result.data, json!({"no_args": true}));
     }

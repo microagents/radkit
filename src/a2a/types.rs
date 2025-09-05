@@ -303,7 +303,7 @@ pub struct TaskStatus {
     pub message: Option<Message>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Task {
     pub kind: String, // Always "task"
     pub id: String,

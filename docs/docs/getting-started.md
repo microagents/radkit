@@ -233,7 +233,7 @@ let agent = Agent::new(
 Create your own tools using `FunctionTool`:
 
 ```rust
-use radkit::tools::{FunctionTool, ToolResult};
+use radkit::tools::{FunctionTool, ToolResult, ToolContext};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -271,6 +271,45 @@ fn create_weather_tool() -> FunctionTool {
             }
         },
         "required": ["location"]
+    }))
+}
+
+// Example tool that uses ToolContext for state management
+fn create_preference_tool() -> FunctionTool {
+    FunctionTool::new(
+        "set_preference".to_string(),
+        "Set user preferences".to_string(),
+        |args: HashMap<String, Value>, context| Box::pin(async move {
+            let key = args
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let value = args
+                .get("value")
+                .cloned()
+                .unwrap_or(json!(null));
+
+            // Use the new ToolContext API for state management
+            match context.set_user_state(key.to_string(), value.clone()).await {
+                Ok(()) => ToolResult::success(json!({
+                    "message": format!("Set preference '{}' to: {}", key, value)
+                })),
+                Err(e) => ToolResult::error(format!("Failed to set preference: {}", e))
+            }
+        }),
+    )
+    .with_parameters_schema(json!({
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "Preference key"
+            },
+            "value": {
+                "description": "Preference value (any JSON type)"
+            }
+        },
+        "required": ["key", "value"]
     }))
 }
 
