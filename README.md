@@ -11,14 +11,14 @@ Radkit is an **agent framework** for building AI agents in Rust. It aims to prov
 
 Radkit offers:
 - 🚀 **A2A-Native Design**: Unlike other agent frameworks (Autogen, CrewAI, Langchain, ADK) where a2a is a secondary layer, Radkit is built from the ground up to support the protocol natively.
-- 🤖 **Multi-Provider LLM Support**: Anthropic Claude, Google Gemini, and more
-- 🔧 **Advanced Tool System**: Function calling with built-in task management tools
+- 🤖 **Multi-Provider LLM Support**: Anthropic Claude, Google Gemini, OpenAI and more coming soon
+- 🔧 **Advanced Tool System**: Function calling with built-in task management tools, MCP Tools
 
 ## Quick Example
 
 ```toml
 [dependencies]
-radkit = "0.0.1"
+radkit = "0.0.2"
 futures = "0.3.31"
 tokio = "1.47.1"
 uuid = "1.18.0"
@@ -182,13 +182,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - Multi-provider LLM support (Anthropic Claude, Google Gemini)
 - Task lifecycle management with A2A event streaming
 - Comprehensive tool system with built-in A2A tools
+- MCP (Model Context Protocol) tools integration
 - Secure ToolContext with capability-based access control
 - State management with three-tier state isolation (app/user/session)
 
 🚧 **Coming Soon**:
 - A2A Server mode (HTTP/gRPC endpoints for agent interoperability)
 - A2A Client mode (call other A2A agents via function calling)
-- MCP (Model Context Protocol) tools integration
 - OpenAPI tool generation and validation
 - Production persistent storage backends (PostgreSQL, Redis)
 - WebSocket streaming support for real-time clients
