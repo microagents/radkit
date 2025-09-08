@@ -77,6 +77,9 @@ pub enum AgentError {
     #[error("Tool timeout: {tool_name} exceeded {timeout_ms}ms")]
     ToolTimeout { tool_name: String, timeout_ms: u64 },
 
+    #[error("Tool setup failed: {tool_name}: {reason}")]
+    ToolSetupFailed { tool_name: String, reason: String },
+
     // === Security Errors ===
     #[error("Access denied: insufficient permissions for {app_name}/{user_id}")]
     AccessDenied { app_name: String, user_id: String },
@@ -150,6 +153,7 @@ impl AgentError {
             Self::ToolExecutionFailed { .. } => false,
             Self::ToolValidationError { .. } => false,
             Self::ToolTimeout { .. } => true,
+            Self::ToolSetupFailed { .. } => false,
             Self::SessionAccessDenied { .. } => false,
             Self::Serialization { .. } => false,
             Self::Internal { .. } => false,
@@ -180,7 +184,8 @@ impl AgentError {
             Self::ToolNotFound { .. }
             | Self::ToolExecutionFailed { .. }
             | Self::ToolValidationError { .. }
-            | Self::ToolTimeout { .. } => "tool",
+            | Self::ToolTimeout { .. }
+            | Self::ToolSetupFailed { .. } => "tool",
 
             Self::AccessDenied { .. }
             | Self::InvalidCredentials { .. }
