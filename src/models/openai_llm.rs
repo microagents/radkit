@@ -218,7 +218,7 @@ impl OpenAILlm {
                         name: declaration.name,
                         description: declaration.description,
                         parameters: declaration.parameters,
-                        strict: Some(true), // Enable structured outputs for better reliability
+                        strict: None,
                     },
                 });
             }
@@ -664,9 +664,9 @@ impl BaseLlm for OpenAILlm {
         let context_id = request.context_id.clone();
 
         // Convert byte stream to line-based stream using tokio-util
-        let byte_stream = response.bytes_stream().map_err(|e| {
-            std::io::Error::other(format!("Request error: {e}"))
-        });
+        let byte_stream = response
+            .bytes_stream()
+            .map_err(|e| std::io::Error::other(format!("Request error: {e}")));
 
         // Use tokio-util to handle proper line buffering
         let stream_reader = tokio_util::io::StreamReader::new(byte_stream);

@@ -839,6 +839,234 @@ fn create_progress_tool() -> FunctionTool {
 }
 ```
 
+## MCP (Model Context Protocol) Tools
+
+Radkit includes built-in support for MCP servers, which provide external tools and data sources for agents. MCP tools are automatically discovered and integrated into your agent's toolset.
+
+### Setting Up MCP Weather Agent
+
+Here's a complete example of creating an agent that uses an MCP weather server:
+
+```rust
+use radkit::agents::Agent;
+use radkit::models::AnthropicLlm;
+use radkit::sessions::InMemorySessionService;
+use radkit::tools::mcp::{MCPToolset, MCPConnectionParams};
+use radkit::a2a::{Message, MessageSendParams, Part};
+use std::sync::Arc;
+use std::collections::HashMap;
+use std::time::Duration;
+use tokio_stream::StreamExt;
+
+async fn create_weather_agent() -> Agent {
+    // Create LLM (Anthropic Claude in this example)
+    let llm = Arc::new(AnthropicLlm::new(
+        "claude-3-5-sonnet-20241022".to_string(),
+        std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY required")
+    ));
+    
+    // Create session service
+    let session_service = Arc::new(InMemorySessionService::new());
+    
+    // Configure MCP weather server connection
+    let mcp_connection = MCPConnectionParams::Stdio {
+        command: "uvx".to_string(),
+        args: vec![
+            "--from".to_string(),
+            "git+https://github.com/microagents/mcp-servers.git#subdirectory=mcp-weather-free".to_string(),
+            "mcp-weather-free".to_string(),
+        ],
+        env: HashMap::new(),
+        timeout: Duration::from_secs(30),
+    };
+    
+    // Create MCP toolset
+    let mcp_toolset = Arc::new(MCPToolset::new(mcp_connection));
+    
+    // Build weather agent with MCP tools
+    Agent::new(
+        "weather_agent".to_string(),
+        "Weather Assistant".to_string(),
+        "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather conditions, forecasts, or climate information.".to_string(),
+        llm,
+    )
+    .with_session_service(session_service)
+    .with_toolset(mcp_toolset)
+    .with_builtin_task_tools() // Include update_status and save_artifact tools
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create the weather agent
+    let agent = create_weather_agent().await;
+    
+    // Create user message asking for weather
+    let user_message = Message {
+        kind: "message".to_string(),
+        message_id: uuid::Uuid::new_v4().to_string(),
+        role: radkit::a2a::MessageRole::User,
+        parts: vec![Part::Text {
+            text: "What's the current weather in San Francisco, California?".to_string(),
+            metadata: None,
+        }],
+        context_id: None,
+        task_id: None,
+        reference_task_ids: vec![],
+        extensions: vec![],
+        metadata: None,
+    };
+    
+    // Send message and get streaming response
+    let params = MessageSendParams {
+        message: user_message,
+        configuration: None,
+        metadata: None,
+    };
+    
+    let mut execution = agent
+        .send_streaming_message(
+            "weather_app".to_string(),
+            "user_123".to_string(),
+            params,
+        )
+        .await?;
+    
+    // Process streaming response
+    println!("🌤️ Weather Assistant Response:");
+    while let Some(result) = execution.a2a_stream.next().await {
+        match result {
+            radkit::a2a::SendStreamingMessageResult::Message(message) => {
+                for part in &message.parts {
+                    if let Part::Text { text, .. } = part {
+                        print!("{}", text);
+                    }
+                }
+            }
+            radkit::a2a::SendStreamingMessageResult::Task(task) => {
+                println!("\n✅ Task completed: {:?}", task.status.state);
+                break;
+            }
+            _ => {}
+        }
+    }
+    
+    Ok(())
+}
+```
+
+### MCP Connection Types
+
+The `MCPConnectionParams` enum supports different MCP server connection methods:
+
+#### Stdio Connection (Local Process)
+
+```rust
+use radkit::tools::mcp::MCPConnectionParams;
+use std::time::Duration;
+use std::collections::HashMap;
+
+let stdio_connection = MCPConnectionParams::Stdio {
+    command: "python".to_string(),
+    args: vec!["-m".to_string(), "my_mcp_server".to_string()],
+    env: {
+        let mut env = HashMap::new();
+        env.insert("API_KEY".to_string(), "your_api_key".to_string());
+        env
+    },
+    timeout: Duration::from_secs(30),
+};
+```
+
+#### HTTP Connection (Remote Server)
+
+```rust
+let http_connection = MCPConnectionParams::Http {
+    url: "https://api.example.com/mcp".to_string(),
+    headers: {
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        headers
+    },
+    timeout: Duration::from_secs(10),
+};
+```
+
+### Tool Filtering
+
+You can control which MCP tools are available to your agent:
+
+```rust
+use radkit::tools::mcp::{MCPToolset, MCPToolFilter};
+
+// Include all tools (default)
+let all_tools = MCPToolset::new(mcp_connection)
+    .with_tool_filter(MCPToolFilter::All);
+
+// Include only specific tools
+let specific_tools = MCPToolset::new(mcp_connection)
+    .with_tool_filter(MCPToolFilter::Include(vec![
+        "get_weather".to_string(),
+        "get_forecast".to_string(),
+    ]));
+
+// Exclude certain tools
+let filtered_tools = MCPToolset::new(mcp_connection)
+    .with_tool_filter(MCPToolFilter::Exclude(vec![
+        "dangerous_tool".to_string(),
+    ]));
+```
+
+### Multiple MCP Servers
+
+You can combine multiple MCP toolsets for different capabilities:
+
+```rust
+use radkit::tools::{CombinedToolset, SimpleToolset};
+
+async fn create_multi_capability_agent() -> Agent {
+    // Weather MCP server
+    let weather_connection = MCPConnectionParams::Stdio {
+        command: "uvx".to_string(),
+        args: vec!["--from".to_string(), "mcp-weather".to_string(), "mcp-weather".to_string()],
+        env: HashMap::new(),
+        timeout: Duration::from_secs(30),
+    };
+    let weather_toolset = Arc::new(MCPToolset::new(weather_connection));
+    
+    // Database MCP server
+    let db_connection = MCPConnectionParams::Http {
+        url: "https://db-mcp.example.com".to_string(),
+        headers: {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), "Bearer db_token".to_string());
+            headers
+        },
+        timeout: Duration::from_secs(15),
+    };
+    let db_toolset = Arc::new(MCPToolset::new(db_connection));
+    
+    // Custom tools
+    let custom_toolset = Arc::new(SimpleToolset::new()
+        .add_tool(Arc::new(create_calculator_tool())));
+    
+    // Combine all toolsets
+    let combined_toolset = Arc::new(
+        CombinedToolset::new(weather_toolset)
+            .with_additional_toolset(db_toolset)
+            .with_additional_toolset(custom_toolset)
+    );
+    
+    Agent::new(
+        "multi_agent".to_string(),
+        "Multi-Capability Assistant".to_string(),
+        "You have access to weather data, database queries, and calculation tools.".to_string(),
+        llm,
+    )
+    .with_toolset(combined_toolset)
+}
+```
+
 ## Next Steps
 
 - [Getting Started Guide](./getting-started.md) - Learn basic agent setup
