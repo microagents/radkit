@@ -1,0 +1,6 @@
+.DS_Store
+/target
+.env
+.idea
+/temp
+CLAUDE.md
