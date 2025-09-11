@@ -4,11 +4,6 @@ use tokio::sync::mpsc;
 use tracing;
 use uuid::Uuid;
 
-use a2a_types::{
-    MessageRole, MessageSendParams, Part, SendStreamingMessageResult, Task, TaskQueryParams,
-    TaskStatusUpdateEvent,
-};
-
 use super::conversation_handler::{
     ConversationExecutor, StandardConversationHandler, StreamingConversationHandler,
 };
@@ -16,6 +11,10 @@ use crate::events::ExecutionContext;
 use crate::models::BaseLlm;
 use crate::sessions::{InMemorySessionService, SessionService};
 use crate::tools::{BaseTool, BaseToolset, CombinedToolset, SimpleToolset};
+use a2a_types::{
+    AgentCard, MessageRole, MessageSendParams, Part, SendStreamingMessageResult, Task,
+    TaskQueryParams, TaskStatusUpdateEvent,
+};
 
 use super::config::{AgentConfig, AuthenticatedAgent};
 
@@ -31,6 +30,7 @@ pub struct Agent {
     query_service: Arc<crate::sessions::QueryService>,
     event_processor: Arc<crate::events::EventProcessor>,
     config: AgentConfig,
+    agent_card: AgentCard,
 }
 
 impl std::fmt::Debug for Agent {
@@ -61,6 +61,14 @@ impl Agent {
             event_bus,
         ));
 
+        // Create default AgentCard from agent properties
+        let agent_card = AgentCard::new(
+            name.clone(),
+            description.clone(),
+            "", // empty version
+            "", // empty url
+        );
+
         Self {
             name,
             description,
@@ -71,6 +79,7 @@ impl Agent {
             query_service,
             event_processor,
             config: AgentConfig::default(),
+            agent_card,
         }
     }
 
@@ -102,6 +111,22 @@ impl Agent {
     /// Set custom agent configuration
     pub fn with_config(mut self, config: AgentConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Set the agent's AgentCard
+    pub fn with_agent_card(mut self, agent_card: AgentCard) -> Self {
+        self.agent_card = agent_card;
+        self
+    }
+
+    /// Build and set an AgentCard using the builder pattern
+    /// This allows modifying individual fields without replacing the entire card
+    pub fn with_agent_card_builder<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(AgentCard) -> AgentCard,
+    {
+        self.agent_card = f(self.agent_card);
         self
     }
 
@@ -153,6 +178,11 @@ impl Agent {
     /// Get the agent's description
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    /// Get the agent's AgentCard
+    pub fn agent_card(&self) -> &AgentCard {
+        &self.agent_card
     }
 
     /// Add a tool to the agent's toolset
@@ -282,6 +312,14 @@ impl Agent {
                 session_service.clone(), // Still need clone since we use session_service below
                 event_bus,
             ));
+            // Create default AgentCard for temporary agent
+            let agent_card = AgentCard::new(
+                name.clone(),
+                description.clone(),
+                "", // empty version
+                "", // empty url
+            );
+
             let agent = Agent {
                 name,
                 description,
@@ -292,6 +330,7 @@ impl Agent {
                 query_service: Arc::new(crate::sessions::QueryService::new(session_service)),
                 event_processor,
                 config,
+                agent_card,
             };
 
             // Execute the streaming conversation loop with event capture
