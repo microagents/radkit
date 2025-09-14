@@ -59,12 +59,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // Create an agent with built-in task management tools
-    let agent = Agent::new(
-        "research_assistant".to_string(),
-        "Research Assistant".to_string(),
-        "You are a helpful research assistant. When working on tasks, \
+    let agent = Agent::builder(
+        "You are a helpful research assistant. When working on tasks,
+        \
          always use update_status to indicate your progress (e.g., 'working' \
-         when processing, 'completed' when done). When you produce any \
+         when processing, 'completed' when done,
+    )
+    .with_card(|c| c.with_name("research_assistant".to_string()).with_description("Research Assistant".to_string()))
+    .build(). When you produce any \
          results or findings, save them using save_artifact so they can be \
          retrieved later."
             .to_string(),

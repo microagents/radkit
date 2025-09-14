@@ -18,6 +18,13 @@ use std::collections::HashMap;
 // JSON-RPC 2.0 Base Types (from schema)
 // ============================================================================
 
+// Re-export agent card types
+pub mod agent_card;
+pub use agent_card::{
+    AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension, AgentInterface,
+    AgentProvider, AgentSkill, TransportProtocol,
+};
+
 /// Defines the base structure for any JSON-RPC 2.0 request, response, or notification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JSONRPCMessage {
@@ -1028,182 +1035,6 @@ pub enum GetAuthenticatedExtendedCardResponse {
     Error(JSONRPCErrorResponse),
 }
 
-// ============================================================================
-// A2A Agent Card and Discovery Types (from schema)
-// ============================================================================
-
-/// Supported A2A transport protocols.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum TransportProtocol {
-    /// JSON-RPC 2.0 over HTTP
-    #[serde(rename = "JSONRPC")]
-    JsonRpc,
-    /// gRPC over HTTP/2
-    #[serde(rename = "GRPC")]
-    Grpc,
-    /// REST-style HTTP with JSON
-    #[serde(rename = "HTTP+JSON")]
-    HttpJson,
-}
-
-impl Default for TransportProtocol {
-    fn default() -> Self {
-        TransportProtocol::JsonRpc
-    }
-}
-
-/// Declares a combination of a target URL and a transport protocol for interacting with the agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentInterface {
-    /// The transport protocol supported at this URL.
-    pub transport: TransportProtocol,
-    /// The URL where this interface is available.
-    pub url: String,
-}
-
-/// A declaration of a protocol extension supported by an Agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentExtension {
-    /// The unique URI identifying the extension.
-    pub uri: String,
-    /// A human-readable description of how this agent uses the extension.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// If true, the client must understand and comply with the extension's requirements.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub required: Option<bool>,
-    /// Optional, extension-specific configuration parameters.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<HashMap<String, serde_json::Value>>,
-}
-
-/// Defines optional capabilities supported by an agent.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AgentCapabilities {
-    /// Indicates if the agent supports Server-Sent Events (SSE) for streaming responses.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub streaming: Option<bool>,
-    /// Indicates if the agent supports sending push notifications for asynchronous task updates.
-    #[serde(skip_serializing_if = "Option::is_none", rename = "pushNotifications")]
-    pub push_notifications: Option<bool>,
-    /// Indicates if the agent provides a history of state transitions for a task.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        rename = "stateTransitionHistory"
-    )]
-    pub state_transition_history: Option<bool>,
-    /// A list of protocol extensions supported by the agent.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub extensions: Vec<AgentExtension>,
-}
-
-/// Represents the service provider of an agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentProvider {
-    /// The name of the agent provider's organization.
-    pub organization: String,
-    /// A URL for the agent provider's website or relevant documentation.
-    pub url: String,
-}
-
-/// Represents a distinct capability or function that an agent can perform.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSkill {
-    /// A unique identifier for the agent's skill.
-    pub id: String,
-    /// A human-readable name for the skill.
-    pub name: String,
-    /// A detailed description of the skill.
-    pub description: String,
-    /// A set of keywords describing the skill's capabilities.
-    pub tags: Vec<String>,
-    /// Example prompts or scenarios that this skill can handle.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub examples: Vec<String>,
-    /// The set of supported input MIME types for this skill, overriding the agent's defaults.
-    #[serde(skip_serializing_if = "Vec::is_empty", rename = "inputModes", default)]
-    pub input_modes: Vec<String>,
-    /// The set of supported output MIME types for this skill, overriding the agent's defaults.
-    #[serde(skip_serializing_if = "Vec::is_empty", rename = "outputModes", default)]
-    pub output_modes: Vec<String>,
-    /// Security schemes necessary for the agent to leverage this skill.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub security: Vec<HashMap<String, Vec<String>>>,
-}
-
-/// Represents a JWS signature of an AgentCard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentCardSignature {
-    /// The protected JWS header for the signature (Base64url-encoded).
-    #[serde(rename = "protected")]
-    pub protected_header: String,
-    /// The computed signature (Base64url-encoded).
-    pub signature: String,
-    /// The unprotected JWS header values.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub header: Option<HashMap<String, serde_json::Value>>,
-}
-
-/// The AgentCard is a self-describing manifest for an agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentCard {
-    /// A human-readable name for the agent.
-    pub name: String,
-    /// A human-readable description of the agent.
-    pub description: String,
-    /// The agent's own version number.
-    pub version: String,
-    /// The version of the A2A protocol this agent supports.
-    #[serde(rename = "protocolVersion", default = "default_protocol_version")]
-    pub protocol_version: String,
-    /// The preferred endpoint URL for interacting with the agent.
-    pub url: String,
-    /// The transport protocol for the preferred endpoint.
-    #[serde(rename = "preferredTransport", default)]
-    pub preferred_transport: TransportProtocol,
-    /// A declaration of optional capabilities supported by the agent.
-    pub capabilities: AgentCapabilities,
-    /// Default set of supported input MIME types for all skills.
-    #[serde(rename = "defaultInputModes")]
-    pub default_input_modes: Vec<String>,
-    /// Default set of supported output MIME types for all skills.
-    #[serde(rename = "defaultOutputModes")]
-    pub default_output_modes: Vec<String>,
-    /// The set of skills that the agent can perform.
-    pub skills: Vec<AgentSkill>,
-    /// Information about the agent's service provider.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<AgentProvider>,
-    /// A list of additional supported interfaces (transport and URL combinations).
-    #[serde(
-        skip_serializing_if = "Vec::is_empty",
-        rename = "additionalInterfaces",
-        default
-    )]
-    pub additional_interfaces: Vec<AgentInterface>,
-    /// An optional URL to the agent's documentation.
-    #[serde(skip_serializing_if = "Option::is_none", rename = "documentationUrl")]
-    pub documentation_url: Option<String>,
-    /// An optional URL to an icon for the agent.
-    #[serde(skip_serializing_if = "Option::is_none", rename = "iconUrl")]
-    pub icon_url: Option<String>,
-    /// A list of security requirement objects that apply to all agent interactions.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub security: Vec<HashMap<String, Vec<String>>>,
-    /// A declaration of the security schemes available to authorize requests.
-    #[serde(skip_serializing_if = "Option::is_none", rename = "securitySchemes")]
-    pub security_schemes: Option<HashMap<String, SecurityScheme>>,
-    /// JSON Web Signatures computed for this AgentCard.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub signatures: Vec<AgentCardSignature>,
-    /// If true, the agent can provide an extended agent card to authenticated users.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        rename = "supportsAuthenticatedExtendedCard"
-    )]
-    pub supports_authenticated_extended_card: Option<bool>,
-}
-
 // Constants for type values
 pub const PROTOCOL_VERSION: &str = "0.3.0";
 pub const API_KEY_TYPE: &str = "apiKey";
@@ -1215,10 +1046,6 @@ pub const TASK_KIND: &str = "task";
 pub const MESSAGE_KIND: &str = "message";
 pub const STATUS_UPDATE_KIND: &str = "status-update";
 pub const ARTIFACT_UPDATE_KIND: &str = "artifact-update";
-
-fn default_protocol_version() -> String {
-    PROTOCOL_VERSION.to_string()
-}
 
 // ============================================================================
 // Security and Authentication Types (from schema)

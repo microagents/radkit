@@ -11,7 +11,6 @@ pub struct ExecutionContext {
     pub task_id: String,
     pub app_name: String,
     pub user_id: String,
-    pub current_params: MessageSendParams,
 
     // Event processing for state changes and streaming
     event_processor: Arc<EventProcessor>,
@@ -25,7 +24,6 @@ impl ExecutionContext {
         task_id: String,
         app_name: String,
         user_id: String,
-        params: MessageSendParams,
         event_processor: Arc<EventProcessor>,
         query_service: Arc<QueryService>,
     ) -> Self {
@@ -34,7 +32,6 @@ impl ExecutionContext {
             task_id,
             app_name,
             user_id,
-            current_params: params,
             event_processor,
             query_service,
         }

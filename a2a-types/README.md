@@ -39,7 +39,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-a2a-types = "0.1.0"
+a2a-types = "0.1.1"
 ```
 
 Then use the types in your code:

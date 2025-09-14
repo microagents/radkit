@@ -190,31 +190,11 @@ mod tests {
         let event_bus = Arc::new(InMemoryEventBus::new());
         let event_processor = Arc::new(EventProcessor::new(session_service, event_bus));
 
-        let params = MessageSendParams {
-            message: Message {
-                kind: "message".to_string(),
-                message_id: "test_msg".to_string(),
-                role: MessageRole::User,
-                parts: vec![Part::Text {
-                    text: "test".to_string(),
-                    metadata: None,
-                }],
-                context_id: Some(session.id.clone()),
-                task_id: Some("test_task".to_string()),
-                reference_task_ids: vec![],
-                extensions: vec![],
-                metadata: None,
-            },
-            configuration: None,
-            metadata: None,
-        };
-
         ExecutionContext::new(
             session.id.clone(),
             "test_task".to_string(),
             "test_app".to_string(),
             "test_user".to_string(),
-            params,
             event_processor,
             query_service,
         )

@@ -55,12 +55,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     
     // Create an agent (services are created automatically)
-    let agent = Agent::new(
-        "MyFirstAgent".to_string(),
-        "A helpful AI assistant".to_string(),
+    let agent = Agent::builder(
         "You are a knowledgeable and friendly assistant.".to_string(),
-        llm,
-    );
+        anthropic_llm,
+    )
+    .with_card(|c| c.with_name("MyFirstAgent".to_string()).with_description("A helpful AI assistant".to_string()))
+    .build();
     
     println!("✅ Agent created successfully!");
     
@@ -213,12 +213,12 @@ use radkit::agents::AgentConfig;
 
 let config = AgentConfig::default().with_max_iterations(10);
 
-let agent = Agent::new(
-    "builtin_agent".to_string(),
-    "Agent with built-in tools".to_string(),
-    "You can update task status and save artifacts using built-in tools.".to_string(),
-    llm,
-)
+let agent = Agent::builder(
+        "You can update task status and save artifacts using built-in tools.".to_string(),
+        anthropic_llm,
+    )
+    .with_card(|c| c.with_name("builtin_agent".to_string()).with_description("Agent with built-in tools".to_string()))
+    .build()
 .with_config(config)
 .with_builtin_task_tools();  // Adds update_status and save_artifact tools
 
@@ -363,12 +363,12 @@ let tools: Vec<Arc<dyn radkit::tools::BaseTool>> = vec![
     Arc::new(create_calculator_tool()),
 ];
 
-let agent = Agent::new(
-    "tool_agent".to_string(),
-    "Agent with custom tools".to_string(),
-    "You are a helpful assistant. Use the available tools when requested by the user.".to_string(),
-    llm,
-)
+let agent = Agent::builder(
+        "You are a helpful assistant. Use the available tools when requested by the user.".to_string(),
+        anthropic_llm,
+    )
+    .with_card(|c| c.with_name("tool_agent".to_string()).with_description("Agent with custom tools".to_string()))
+    .build()
 .with_config(config)
 .with_tools(tools);
 ```
@@ -781,16 +781,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("ANTHROPIC_API_KEY")?,
     ));
     
-    let agent = Agent::new(
-        "MathTutor".to_string(),
-        "An AI math tutor that explains concepts step-by-step".to_string(),
+    let agent = Agent::builder(
         r#"You are a patient math tutor. When solving problems:
         1. Break down the problem into steps
         2. Explain each step clearly
         3. Use the save_artifact tool to save the solution
         4. Update your status as you work through the problem"#.to_string(),
-        llm,
+        anthropic_llm,
     )
+    .with_card(|c| c.with_name("MathTutor".to_string()).with_description("An AI math tutor that explains concepts step-by-step".to_string()))
+    .build()
     .with_config(AgentConfig::default().with_max_iterations(10))
     .with_builtin_task_tools();
     

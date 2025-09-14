@@ -34,18 +34,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llm = AnthropicLlm::new("your-api-key", "claude-3-5-sonnet-latest");
     
     // Create agent with built-in tools
-    let agent = Agent::new(llm)
+    let agent = Agent::builder(
+        "app-789",
+        "Hello, how can you help me?",
+        None,
+    )
+    .with_card(|c| c.with_name(llm)
         .with_builtin_task_tools()
         .build();
     
     // Send a message
     let response = agent.send_message(
-        "task-123",
-        "user-456", 
-        "app-789",
-        "Hello, how can you help me?",
-        None
-    ).await?;
+        "task-123").with_description("user-456"))
+    .build().await?;
     
     println!("Agent response: {:?}", response);
     Ok(())

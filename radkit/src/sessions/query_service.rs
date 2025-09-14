@@ -224,7 +224,9 @@ impl QueryService {
                 }
                 SessionEventType::TaskCompleted { task }
                 | SessionEventType::TaskFailed { task, .. } => {
-                    current_task = Some(task.clone());
+                    if let Some(ref mut cur) = current_task {
+                        cur.status = task.status.clone();
+                    }
                 }
                 _ => {} // Other events don't affect task state
             }

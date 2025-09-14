@@ -135,7 +135,6 @@ mod tests {
             "test_task".to_string(),
             "test_app".to_string(),
             "test_user".to_string(),
-            params,
             event_processor,
             query_service,
         )

@@ -23,21 +23,6 @@ pub fn get_api_key(key_name: &str) -> Option<String> {
     std::env::var(key_name).ok()
 }
 
-/// Check if Anthropic API key is available
-pub fn has_anthropic_key() -> bool {
-    get_api_key("ANTHROPIC_API_KEY").is_some()
-}
-
-/// Check if Gemini API key is available  
-pub fn has_gemini_key() -> bool {
-    get_api_key("GEMINI_API_KEY").is_some()
-}
-
-/// Check if OpenAI API key is available
-pub fn has_openai_key() -> bool {
-    get_api_key("OPENAI_API_KEY").is_some()
-}
-
 /// Get Anthropic API key if available
 pub fn get_anthropic_key() -> Option<String> {
     get_api_key("ANTHROPIC_API_KEY")

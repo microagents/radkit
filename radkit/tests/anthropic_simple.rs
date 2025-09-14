@@ -23,13 +23,16 @@ fn create_test_agent() -> Option<Agent> {
         let anthropic_llm = AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
         let session_service = Arc::new(InMemorySessionService::new());
 
-        Agent::new(
-            "test_agent".to_string(),
-            "Test agent for simple conversation".to_string(),
-            "You are a helpful assistant. Respond briefly and clearly.".to_string(),
-            Arc::new(anthropic_llm),
+        Agent::builder(
+            "You are a helpful assistant. Respond briefly and clearly.",
+            anthropic_llm,
         )
+        .with_card(|c| {
+            c.with_name("test_agent")
+                .with_description("Test agent for simple conversation")
+        })
         .with_session_service(session_service)
+        .build()
     })
 }
 

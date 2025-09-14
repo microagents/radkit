@@ -226,31 +226,30 @@ async fn test_anthropic_tool_context_state_management() {
     };
 
     // Create LLM and agent with state management tool
-    let llm = Arc::new(AnthropicLlm::new(
-        "claude-3-5-sonnet-20241022".to_string(),
-        api_key,
-    ));
+    let llm = AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
 
     let state_tool = create_state_management_tool();
     let interactive_tool = create_interactive_tool();
 
-    let agent = Agent::new(
-        "tool_context_tester".to_string(),
-        "ToolContext Integration Tester".to_string(),
+    let agent = Agent::builder(
         r#"You are testing the ToolContext system. Use the manage_preferences tool to:
         1. Set user preference theme=dark
-        2. Set user preference language=english  
+        2. Set user preference language=english
         3. Set session data temp_data="test_session_data"
         4. Update task progress to 75%
         5. Get all state to verify everything was saved
         6. Complete the task using complete_task action
-        
-        Be systematic and report what you're doing at each step."#
-            .to_string(),
+
+        Be systematic and report what you're doing at each step."#,
         llm,
     )
+    .with_card(|c| {
+        c.with_name("tool_context_tester")
+            .with_description("ToolContext Integration Tester")
+    })
     .with_config(AgentConfig::default().with_max_iterations(15))
-    .with_tools(vec![state_tool, interactive_tool]);
+    .with_tools(vec![state_tool, interactive_tool])
+    .build();
 
     // Create message requesting state management operations
     let message = Message {
@@ -582,24 +581,26 @@ async fn test_gemini_tool_context_user_interaction() {
     };
 
     // Create LLM and agent with interactive tool
-    let llm = Arc::new(GeminiLlm::new("gemini-1.5-flash".to_string(), api_key));
+    let llm = GeminiLlm::new("gemini-1.5-flash".to_string(), api_key);
 
     let interactive_tool = create_interactive_tool();
     let state_tool = create_state_management_tool();
 
-    let agent = Agent::new(
-        "interactive_tester".to_string(),
-        "Interactive Tool Tester".to_string(),
-        r#"You are testing the interactive capabilities of ToolContext. 
-        Use the request_user_input tool to ask the user for their name, then use 
-        manage_preferences to save it as a user preference. After that, use 
-        update_status to mark the task as completed."#
-            .to_string(),
+    let agent = Agent::builder(
+        r#"You are testing the interactive capabilities of ToolContext.
+        Use the request_user_input tool to ask the user for their name, then use
+        manage_preferences to save it as a user preference. After that, use
+        update_status to mark the task as completed."#,
         llm,
     )
+    .with_card(|c| {
+        c.with_name("interactive_tester")
+            .with_description("Interactive Tool Tester")
+    })
     .with_config(AgentConfig::default().with_max_iterations(10))
     .with_tools(vec![interactive_tool, state_tool])
-    .with_builtin_task_tools();
+    .with_builtin_task_tools()
+    .build();
 
     // Create message requesting interactive workflow
     let message = Message {
@@ -759,29 +760,28 @@ async fn test_tool_context_concurrent_operations() {
         }
     };
 
-    let llm = Arc::new(AnthropicLlm::new(
-        "claude-3-5-sonnet-20241022".to_string(),
-        api_key,
-    ));
+    let llm = AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
 
     let state_tool = create_state_management_tool();
 
-    let agent = Agent::new(
-        "concurrent_tester".to_string(),
-        "Concurrent State Operations Tester".to_string(),
+    let agent = Agent::builder(
         r#"Test concurrent state operations. Use manage_preferences to:
         1. Set multiple user preferences (theme, language, timezone)
         2. Set multiple session data items (cache1, cache2, cache3)
         3. Update task progress multiple times (25%, 50%, 75%, 100%)
         4. Get all state to verify everything was saved correctly
-        
-        Work systematically and report your progress."#
-            .to_string(),
+
+        Work systematically and report your progress."#,
         llm,
     )
+    .with_card(|c| {
+        c.with_name("concurrent_tester")
+            .with_description("Concurrent State Operations Tester")
+    })
     .with_config(AgentConfig::default().with_max_iterations(20))
     .with_tools(vec![state_tool])
-    .with_builtin_task_tools();
+    .with_builtin_task_tools()
+    .build();
 
     let message = Message {
         kind: "message".to_string(),

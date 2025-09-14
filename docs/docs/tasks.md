@@ -162,12 +162,12 @@ use radkit::agents::AgentConfig;
 
 let config = AgentConfig::default().with_max_iterations(10);
 
-let agent = Agent::new(
-    "builtin_agent".to_string(),
-    "Agent with built-in tools".to_string(),
-    "You can update task status and save artifacts using built-in tools.".to_string(),
-    llm,
-)
+let agent = Agent::builder(
+        "You can update task status and save artifacts using built-in tools.".to_string(),
+        anthropic_llm,
+    )
+    .with_card(|c| c.with_name("builtin_agent".to_string()).with_description("Agent with built-in tools".to_string()))
+    .build()
 .with_config(config)
 .with_builtin_task_tools();  // Enables update_status and save_artifact
 ```

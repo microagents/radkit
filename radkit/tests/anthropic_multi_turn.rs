@@ -16,13 +16,15 @@ fn create_test_agent() -> Option<Agent> {
     get_anthropic_key().map(|api_key| {
         let anthropic_llm = AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
 
-        Agent::new(
-            "test_agent".to_string(),
-            "Test agent for multi-turn conversation".to_string(),
-            "You are a helpful assistant. Remember what we discuss and refer back to it."
-                .to_string(),
-            Arc::new(anthropic_llm),
+        Agent::builder(
+            "You are a helpful assistant. Remember what we discuss and refer back to it.",
+            anthropic_llm,
         )
+        .with_card(|c| {
+            c.with_name("test_agent")
+                .with_description("Test agent for multi-turn conversation")
+        })
+        .build()
     })
 }
 
