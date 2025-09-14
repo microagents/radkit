@@ -45,14 +45,17 @@ fn create_anthropic_weather_agent() -> Option<Agent> {
         let session_service = Arc::new(InMemorySessionService::new());
         let mcp_toolset = create_mcp_weather_toolset();
 
-        Agent::new(
-            "anthropic_weather_agent".to_string(),
-            "Weather agent with MCP server integration".to_string(),
-            "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather.".to_string(),
-            Arc::new(anthropic_llm),
+        Agent::builder(
+            "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather.",
+            anthropic_llm
+        )
+        .with_card(|c| c
+            .with_name("anthropic_weather_agent")
+            .with_description("Weather agent with MCP server integration")
         )
         .with_session_service(session_service)
-        .with_toolset(Arc::new(mcp_toolset))
+        .with_toolset(mcp_toolset)
+        .build()
     })
 }
 
@@ -63,14 +66,17 @@ fn create_gemini_weather_agent() -> Option<Agent> {
         let session_service = Arc::new(InMemorySessionService::new());
         let mcp_toolset = create_mcp_weather_toolset();
 
-        Agent::new(
-            "gemini_weather_agent".to_string(),
-            "Gemini weather agent with MCP server integration".to_string(),
-            "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather.".to_string(),
-            Arc::new(gemini_llm),
+        Agent::builder(
+            "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather.",
+            gemini_llm
+        )
+        .with_card(|c| c
+            .with_name("gemini_weather_agent")
+            .with_description("Gemini weather agent with MCP server integration")
         )
         .with_session_service(session_service)
-        .with_toolset(Arc::new(mcp_toolset))
+        .with_toolset(mcp_toolset)
+        .build()
     })
 }
 
@@ -82,14 +88,17 @@ fn create_openai_weather_agent() -> Option<Agent> {
         let session_service = Arc::new(InMemorySessionService::new());
         let mcp_toolset = create_mcp_weather_toolset();
 
-        Agent::new(
-            "openai_weather_agent".to_string(),
-            "OpenAI weather agent with MCP server integration".to_string(),
-            "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather.".to_string(),
-            Arc::new(openai_llm),
+        Agent::builder(
+            "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather.",
+            openai_llm
+        )
+        .with_card(|c| c
+            .with_name("openai_weather_agent")
+            .with_description("OpenAI weather agent with MCP server integration")
         )
         .with_session_service(session_service)
-        .with_toolset(Arc::new(mcp_toolset))
+        .with_toolset(mcp_toolset)
+        .build()
     })
 }
 

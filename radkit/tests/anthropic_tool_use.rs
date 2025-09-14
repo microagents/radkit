@@ -29,18 +29,20 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
 
         let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
             .into_iter()
-            .map(|tool| -> Arc<dyn radkit::tools::BaseTool> { tool })
+            .map(|tool| tool as Arc<dyn radkit::tools::BaseTool>)
             .collect();
 
-        Agent::new(
-            "test_agent".to_string(),
-            "Test agent for function calling".to_string(),
-            "You are a helpful assistant. Use the available tools when requested by the user. Always call tools when they can help answer the user's question."
-                .to_string(),
-            Arc::new(anthropic_llm),
+        Agent::builder(
+            "You are a helpful assistant. Use the available tools when requested by the user. Always call tools when they can help answer the user's question.",
+            anthropic_llm
+        )
+        .with_card(|c| c
+            .with_name("test_agent")
+            .with_description("Test agent for function calling")
         )
         .with_session_service(session_service)
         .with_tools(base_tools)
+        .build()
     })
 }
 

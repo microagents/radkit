@@ -15,34 +15,38 @@ use common::{get_anthropic_key, get_gemini_key};
 fn create_test_agent_with_builtin_tools(api_key: String, provider: &str) -> Agent {
     let config = AgentConfig::default().with_max_iterations(5); // Allow enough iterations for rejection scenarios
 
-    let agent = match provider {
+    match provider {
         "anthropic" => {
             let anthropic_llm =
                 AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
-            Agent::new(
-                "rejection_test_agent".to_string(),
-                "Rejection Test Agent".to_string(),
-                "You are a helpful assistant that can update task status. You should reject inappropriate requests and use the update_status tool to set appropriate status (rejected, failed, cancelled, etc).".to_string(),
-                Arc::new(anthropic_llm),
+            Agent::builder(
+                "You are a helpful assistant that can update task status. You should reject inappropriate requests and use the update_status tool to set appropriate status (rejected, failed, cancelled, etc).",
+                anthropic_llm
+            )
+            .with_card(|c| c
+                .with_name("rejection_test_agent")
+                .with_description("Rejection Test Agent")
             )
             .with_config(config)
             .with_builtin_task_tools() // Enable built-in status update tools
+            .build()
         }
         "gemini" => {
             let gemini_llm = GeminiLlm::new("gemini-2.0-flash-exp".to_string(), api_key);
-            Agent::new(
-                "rejection_test_agent".to_string(),
-                "Rejection Test Agent".to_string(),
-                "You are a helpful assistant that can update task status. You should reject inappropriate requests and use the update_status tool to set appropriate status (rejected, failed, cancelled, etc).".to_string(),
-                Arc::new(gemini_llm),
+            Agent::builder(
+                "You are a helpful assistant that can update task status. You should reject inappropriate requests and use the update_status tool to set appropriate status (rejected, failed, cancelled, etc).",
+                gemini_llm
+            )
+            .with_card(|c| c
+                .with_name("rejection_test_agent")
+                .with_description("Rejection Test Agent")
             )
             .with_config(config)
             .with_builtin_task_tools() // Enable built-in status update tools
+            .build()
         }
         _ => panic!("Unsupported provider: {}", provider),
-    };
-
-    agent
+    }
 }
 
 /// Helper function to create a user message

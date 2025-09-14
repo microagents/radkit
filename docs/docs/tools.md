@@ -412,13 +412,13 @@ Allows agents to control their task lifecycle:
 
 ```rust
 // Enable built-in tools on your agent
-let agent = Agent::new(
-    "task_agent".to_string(),
-    "Agent with task management".to_string(),
-    "You can use update_status to communicate your progress.".to_string(),
-    llm,
-)
-.with_builtin_task_tools();
+let agent = Agent::builder(
+        "You can use update_status to communicate your progress.".to_string(),
+        anthropic_llm,
+    )
+    .with_card(|c| c.with_name("task_agent".to_string()).with_description("Agent with task management".to_string()))
+    .with_builtin_task_tools()
+    .build();
 
 // Agent can then use the tool:
 // {"function_call": {"name": "update_status", "args": {"status": "working", "message": "Processing data..."}}}
@@ -479,8 +479,13 @@ let toolset = SimpleToolset::new()
     .add_tool(Arc::new(calculator_tool));
     
 // Add to agent
-let agent = Agent::new(/* ... */)
-    .with_toolset(Arc::new(toolset));
+let agent = Agent::builder(
+        "You have access to weather and calculator tools.".to_string(),
+        anthropic_llm,
+    )
+    .with_card(|c| c.with_name("multi_tool_agent".to_string()).with_description("Agent with multiple tools".to_string()))
+    .with_toolset(Arc::new(toolset))
+    .build();
 ```
 
 ### CombinedToolset
@@ -496,8 +501,12 @@ let specialized_toolset = create_domain_specific_toolset();
 let combined = CombinedToolset::new(base_toolset)
     .with_additional_toolset(specialized_toolset);
 
-let agent = Agent::new(/* ... */)
-    .with_toolset(Arc::new(combined));
+let agent = Agent::builder(
+        "You have access to multiple toolsets.".to_string(),
+        anthropic_llm,
+    )
+    .with_toolset(Arc::new(combined))
+    .build();
 ```
 
 ## Error Handling in Tools
@@ -507,10 +516,8 @@ let agent = Agent::new(/* ... */)
 ```rust
 fn create_robust_tool() -> FunctionTool {
     FunctionTool::new(
-        "robust_operation".to_string(),
-        "An operation that handles errors gracefully".to_string(),
-        |args, context| Box::pin(async move {
-            match perform_risky_operation(&args).await {
+        "robust_operation".to_string()).with_description("An operation that handles errors gracefully".to_string()))
+    .build().await {
                 Ok(result) => {
                     context.update_task_status(
                         TaskState::Completed,
@@ -884,15 +891,15 @@ async fn create_weather_agent() -> Agent {
     let mcp_toolset = Arc::new(MCPToolset::new(mcp_connection));
     
     // Build weather agent with MCP tools
-    Agent::new(
-        "weather_agent".to_string(),
-        "Weather Assistant".to_string(),
+    Agent::builder(
         "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather conditions, forecasts, or climate information.".to_string(),
         llm,
     )
+    .with_card(|c| c.with_name("weather_agent".to_string()).with_description("Weather Assistant".to_string()))
     .with_session_service(session_service)
     .with_toolset(mcp_toolset)
     .with_builtin_task_tools() // Include update_status and save_artifact tools
+    .build()
 }
 
 #[tokio::main]
@@ -1057,13 +1064,13 @@ async fn create_multi_capability_agent() -> Agent {
             .with_additional_toolset(custom_toolset)
     );
     
-    Agent::new(
-        "multi_agent".to_string(),
-        "Multi-Capability Assistant".to_string(),
+    Agent::builder(
         "You have access to weather data, database queries, and calculation tools.".to_string(),
         llm,
     )
+    .with_card(|c| c.with_name("multi_agent".to_string()).with_description("Multi-Capability Assistant".to_string()))
     .with_toolset(combined_toolset)
+    .build()
 }
 ```
 

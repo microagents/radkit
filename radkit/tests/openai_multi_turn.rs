@@ -165,18 +165,20 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
 
         let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
             .into_iter()
-            .map(|tool| -> Arc<dyn radkit::tools::BaseTool> { tool })
+            .map(|tool| tool as Arc<dyn radkit::tools::BaseTool>)
             .collect();
 
-        Agent::new(
-            "test_agent".to_string(),
-            "Test agent for multi-turn conversations".to_string(),
-            "You are a helpful assistant with access to tools. Use them when requested. Remember information from previous turns in the conversation."
-                .to_string(),
-            Arc::new(openai_llm),
+        Agent::builder(
+            "You are a helpful assistant with access to tools. Use them when requested. Remember information from previous turns in the conversation.",
+            openai_llm
+        )
+        .with_card(|c| c
+            .with_name("test_agent")
+            .with_description("Test agent for multi-turn conversations")
         )
         .with_session_service(session_service)
         .with_tools(base_tools)
+        .build()
     })
 }
 

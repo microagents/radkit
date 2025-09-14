@@ -20,34 +20,38 @@ use common::{get_anthropic_key, get_gemini_key};
 fn create_test_agent_with_builtin_tools(api_key: String, provider: &str) -> Agent {
     let config = AgentConfig::default().with_max_iterations(10);
 
-    let agent = match provider {
+    match provider {
         "anthropic" => {
             let anthropic_llm =
                 AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
-            Agent::new(
-                "builtin_test_agent".to_string(),
-                "Built-in Tools Test Agent".to_string(),
-                "You are a helpful assistant that can update task status and save artifacts. Use the update_status tool to update your progress as you work, and when you have final results, use the save_artifact tool to save them.".to_string(),
-                Arc::new(anthropic_llm),
+            Agent::builder(
+                "You are a helpful assistant that can update task status and save artifacts. Use the update_status tool to update your progress as you work, and when you have final results, use the save_artifact tool to save them.",
+                anthropic_llm
+            )
+            .with_card(|c| c
+                .with_name("builtin_test_agent")
+                .with_description("Built-in Tools Test Agent")
             )
             .with_config(config)
             .with_builtin_task_tools() // Enable built-in status and artifact tools
+            .build()
         }
         "gemini" => {
             let gemini_llm = GeminiLlm::new("gemini-2.0-flash-exp".to_string(), api_key);
-            Agent::new(
-                "builtin_test_agent".to_string(),
-                "Built-in Tool Test Agent".to_string(),
-                "You are a helpful assistant with access to task management tools. When asked to update status or save artifacts, you should use the appropriate built-in tools.".to_string(),
-                Arc::new(gemini_llm),
+            Agent::builder(
+                "You are a helpful assistant with access to task management tools. When asked to update status or save artifacts, you should use the appropriate built-in tools.",
+                gemini_llm
+            )
+            .with_card(|c| c
+                .with_name("builtin_test_agent")
+                .with_description("Built-in Tool Test Agent")
             )
             .with_config(config)
             .with_builtin_task_tools() // Enable built-in status and artifact tools
+            .build()
         }
         _ => panic!("Unsupported provider: {}", provider),
-    };
-
-    agent
+    }
 }
 
 /// Helper function to create a user message

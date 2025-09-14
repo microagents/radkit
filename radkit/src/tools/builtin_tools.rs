@@ -17,18 +17,17 @@ pub enum BuiltinTool {
     // LogMessage,
     // SetReminder,
 }
-use crate::tools::{BaseTool, FunctionTool, ToolArtifactAccess, ToolTaskAccess};
+use crate::tools::{FunctionTool, ToolArtifactAccess, ToolTaskAccess};
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 use uuid::Uuid;
 
 /// Create the built-in update_status tool
 ///
 /// This tool allows agents to control their task lifecycle states and automatically
 /// emits `TaskStatusUpdate` events for A2A protocol compliance.
-pub fn create_update_status_tool() -> Arc<dyn BaseTool> {
-    Arc::new(FunctionTool::new(
+pub fn create_update_status_tool() -> FunctionTool {
+    FunctionTool::new(
         "update_status".to_string(),
         "Update the current task status with a message. Use 'working' when starting work, 'completed' when finished successfully, 'failed' if there are errors. This communicates progress to users.".to_string(),
         |args, context| {
@@ -73,15 +72,15 @@ pub fn create_update_status_tool() -> Arc<dyn BaseTool> {
             }
         },
         "required": ["status"]
-    }))) as Arc<dyn BaseTool>
+    }))
 }
 
 /// Create the built-in save_artifact tool
 ///
 /// This tool allows agents to persist important outputs and automatically
 /// emits `TaskArtifactUpdate` events for A2A protocol compliance.
-pub fn create_save_artifact_tool() -> Arc<dyn BaseTool> {
-    Arc::new(FunctionTool::new(
+pub fn create_save_artifact_tool() -> FunctionTool {
+    FunctionTool::new(
         "save_artifact".to_string(),
         "Save an artifact (file, data, result) from the current task. Use this to persist important outputs.".to_string(),
         |args, context| {
@@ -163,7 +162,7 @@ pub fn create_save_artifact_tool() -> Arc<dyn BaseTool> {
             }
         },
         "required": ["name", "content"]
-    }))) as Arc<dyn BaseTool>
+    }))
 }
 
 #[cfg(test)]

@@ -22,17 +22,19 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
 
         let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
             .into_iter()
-            .map(|tool| -> Arc<dyn radkit::tools::BaseTool> { tool })
+            .map(|tool| tool as Arc<dyn radkit::tools::BaseTool>)
             .collect();
 
-        Agent::new(
-            "test_agent".to_string(),
-            "Test agent for Gemini function calling".to_string(),
-            "You are a helpful assistant. Use the available tools when requested by the user."
-                .to_string(),
-            Arc::new(gemini_llm),
+        Agent::builder(
+            "You are a helpful assistant. Use the available tools when requested by the user.",
+            gemini_llm,
         )
+        .with_card(|c| {
+            c.with_name("test_agent")
+                .with_description("Test agent for Gemini function calling")
+        })
         .with_tools(base_tools)
+        .build()
     })
 }
 

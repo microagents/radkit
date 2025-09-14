@@ -15,14 +15,14 @@ async fn test_complete_event_storage_pipeline() -> AgentResult<()> {
     println!("🚀 Testing Complete Event Storage Pipeline");
 
     // Create an agent with automatic event storage via StorageProjector
-    let mock_llm = Arc::new(MockLlm::new("test-model".to_string()));
+    let mock_llm = MockLlm::new("test-model".to_string());
 
-    let agent = Agent::new(
-        "test-agent".to_string(),
-        "Test agent for event storage".to_string(),
-        "You are a helpful assistant.".to_string(),
-        mock_llm,
-    );
+    let agent = Agent::builder("You are a helpful assistant.", mock_llm)
+        .with_card(|c| {
+            c.with_name("test-agent")
+                .with_description("Test agent for event storage")
+        })
+        .build();
 
     // Create a message to send
     let message = Message {
@@ -100,13 +100,13 @@ async fn test_complete_event_storage_pipeline() -> AgentResult<()> {
 async fn test_multi_turn_event_storage() -> AgentResult<()> {
     println!("🚀 Testing Multi-Turn Event Storage");
 
-    let mock_llm = Arc::new(MockLlm::new("test-model".to_string()));
-    let agent = Agent::new(
-        "multi-turn-agent".to_string(),
-        "Multi-turn test agent".to_string(),
-        "You are a helpful assistant.".to_string(),
-        mock_llm,
-    );
+    let mock_llm = MockLlm::new("test-model".to_string());
+    let agent = Agent::builder("You are a helpful assistant.", mock_llm)
+        .with_card(|c| {
+            c.with_name("multi-turn-agent")
+                .with_description("Multi-turn test agent")
+        })
+        .build();
 
     // First message - creates new session and task
     let message1 = Message {
@@ -209,7 +209,7 @@ async fn test_tool_event_storage() -> AgentResult<()> {
     use std::collections::HashMap;
 
     // Create a simple tool
-    let calculator_tool = Arc::new(FunctionTool::new(
+    let calculator_tool = FunctionTool::new(
         "calculate".to_string(),
         "Perform simple calculations".to_string(),
         |args: HashMap<String, serde_json::Value>, _context| {
@@ -227,16 +227,20 @@ async fn test_tool_event_storage() -> AgentResult<()> {
                 ToolResult::success(json!({ "result": result }))
             })
         },
-    ));
+    );
 
-    let mock_llm = Arc::new(MockLlm::new("test-model".to_string()));
-    let agent = Agent::new(
-        "tool-agent".to_string(),
-        "Tool test agent".to_string(),
-        "You are a helpful assistant with calculation tools.".to_string(),
+    let mock_llm = MockLlm::new("test-model".to_string());
+    let tool: Arc<dyn radkit::tools::BaseTool> = Arc::new(calculator_tool);
+    let agent = Agent::builder(
+        "You are a helpful assistant with calculation tools.",
         mock_llm,
     )
-    .with_tools(vec![calculator_tool]);
+    .with_card(|c| {
+        c.with_name("tool-agent")
+            .with_description("Tool test agent")
+    })
+    .with_tools(vec![tool])
+    .build();
 
     // Send a message that might trigger tool use
     let message = Message {

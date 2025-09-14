@@ -74,48 +74,6 @@ pub enum StateScope {
     Session,
 }
 
-/// Event filtering for different consumers
-pub enum EventFilter {
-    /// All events (debug/internal use)
-    All,
-    /// Only A2A protocol compliant events (for streaming)
-    A2A,
-    /// Only events for a specific task
-    TaskOnly(String),
-    /// Only conversation events (user/agent messages)
-    ConversationOnly,
-    /// Custom filter function
-    Custom(Box<dyn Fn(&SessionEvent) -> bool + Send + Sync>),
-}
-
-impl std::fmt::Debug for EventFilter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EventFilter::All => write!(f, "EventFilter::All"),
-            EventFilter::A2A => write!(f, "EventFilter::A2A"),
-            EventFilter::TaskOnly(task_id) => write!(f, "EventFilter::TaskOnly({task_id})"),
-            EventFilter::ConversationOnly => write!(f, "EventFilter::ConversationOnly"),
-            EventFilter::Custom(_) => write!(f, "EventFilter::Custom(<function>)"),
-        }
-    }
-}
-
-impl Clone for EventFilter {
-    fn clone(&self) -> Self {
-        match self {
-            EventFilter::All => EventFilter::All,
-            EventFilter::A2A => EventFilter::A2A,
-            EventFilter::TaskOnly(task_id) => EventFilter::TaskOnly(task_id.clone()),
-            EventFilter::ConversationOnly => EventFilter::ConversationOnly,
-            EventFilter::Custom(_) => {
-                // Custom filters can't be cloned, so we'll create a new "All" filter
-                // In practice, this should rarely be cloned
-                EventFilter::All
-            }
-        }
-    }
-}
-
 impl SessionEvent {
     /// Create a new session event with auto-generated ID
     pub fn new(session_id: String, task_id: String, event_type: SessionEventType) -> Self {
@@ -125,20 +83,6 @@ impl SessionEvent {
             session_id,
             task_id,
             event_type,
-        }
-    }
-
-    /// Check if this event matches the given filter
-    pub fn matches_filter(&self, filter: &EventFilter) -> bool {
-        match filter {
-            EventFilter::All => true,
-            EventFilter::A2A => self.is_a2a_compatible(),
-            EventFilter::TaskOnly(task_id) => self.task_id == *task_id,
-            EventFilter::ConversationOnly => matches!(
-                self.event_type,
-                SessionEventType::UserMessage { .. } | SessionEventType::AgentMessage { .. }
-            ),
-            EventFilter::Custom(f) => f(self),
         }
     }
 
@@ -291,44 +235,6 @@ mod tests {
 
         assert!(user_message.is_a2a_compatible());
         assert!(!state_change.is_a2a_compatible());
-    }
-
-    #[test]
-    fn test_event_filtering() {
-        let user_message = SessionEvent::new(
-            "session1".to_string(),
-            "task1".to_string(),
-            SessionEventType::UserMessage {
-                content: Content::new(
-                    "task1".to_string(),
-                    "session1".to_string(),
-                    "msg1".to_string(),
-                    MessageRole::User,
-                ),
-            },
-        );
-
-        let state_change = SessionEvent::new(
-            "session1".to_string(),
-            "task2".to_string(),
-            SessionEventType::StateChanged {
-                scope: StateScope::Session,
-                key: "theme".to_string(),
-                old_value: None,
-                new_value: serde_json::json!("dark"),
-            },
-        );
-
-        assert!(user_message.matches_filter(&EventFilter::All));
-        assert!(user_message.matches_filter(&EventFilter::A2A));
-        assert!(user_message.matches_filter(&EventFilter::ConversationOnly));
-        assert!(user_message.matches_filter(&EventFilter::TaskOnly("task1".to_string())));
-        assert!(!user_message.matches_filter(&EventFilter::TaskOnly("task2".to_string())));
-
-        assert!(state_change.matches_filter(&EventFilter::All));
-        assert!(!state_change.matches_filter(&EventFilter::A2A));
-        assert!(!state_change.matches_filter(&EventFilter::ConversationOnly));
-        assert!(state_change.matches_filter(&EventFilter::TaskOnly("task2".to_string())));
     }
 
     #[test]
