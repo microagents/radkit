@@ -16,14 +16,9 @@ mod common;
 use common::get_gemini_key;
 
 /// Helper function to create Agent with Gemini if API key is available
-fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> {
+fn create_test_agent_with_tools(tools: Vec<FunctionTool>) -> Option<Agent> {
     get_gemini_key().map(|api_key| {
         let gemini_llm = GeminiLlm::new("gemini-2.0-flash-exp".to_string(), api_key);
-
-        let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
-            .into_iter()
-            .map(|tool| tool as Arc<dyn radkit::tools::BaseTool>)
-            .collect();
 
         Agent::builder(
             "You are a helpful assistant. Use the available tools when requested by the user.",
@@ -33,7 +28,7 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
             c.with_name("test_agent")
                 .with_description("Test agent for Gemini function calling")
         })
-        .with_tools(base_tools)
+        .with_tools(tools)
         .build()
     })
 }
@@ -99,7 +94,7 @@ fn create_weather_tool() -> FunctionTool {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_gemini_single_function_call() {
-    let Some(agent) = create_test_agent_with_tools(vec![Arc::new(create_weather_tool())]) else {
+    let Some(agent) = create_test_agent_with_tools(vec![create_weather_tool()]) else {
         println!("⚠️  Skipping test: GEMINI_API_KEY not found");
         return;
     };

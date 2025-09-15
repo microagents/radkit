@@ -42,7 +42,7 @@ fn create_mcp_weather_toolset() -> MCPToolset {
 fn create_anthropic_weather_agent() -> Option<Agent> {
     get_anthropic_key().map(|api_key| {
         let anthropic_llm = AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
-        let session_service = Arc::new(InMemorySessionService::new());
+        let session_service = InMemorySessionService::new();
         let mcp_toolset = create_mcp_weather_toolset();
 
         Agent::builder(
@@ -63,7 +63,7 @@ fn create_anthropic_weather_agent() -> Option<Agent> {
 fn create_gemini_weather_agent() -> Option<Agent> {
     get_gemini_key().map(|api_key| {
         let gemini_llm = GeminiLlm::new("gemini-2.0-flash-exp".to_string(), api_key);
-        let session_service = Arc::new(InMemorySessionService::new());
+        let session_service = InMemorySessionService::new();
         let mcp_toolset = create_mcp_weather_toolset();
 
         Agent::builder(
@@ -85,7 +85,7 @@ fn create_openai_weather_agent() -> Option<Agent> {
     init_test_env();
     get_openai_key().map(|api_key| {
         let openai_llm = OpenAILlm::new("gpt-4o-mini".to_string(), api_key);
-        let session_service = Arc::new(InMemorySessionService::new());
+        let session_service = InMemorySessionService::new();
         let mcp_toolset = create_mcp_weather_toolset();
 
         Agent::builder(

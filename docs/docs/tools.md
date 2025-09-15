@@ -37,9 +37,8 @@ Tools in Radkit provide agents with the ability to perform actions beyond text g
 The `FunctionTool` wrapper is the easiest way to create tools:
 
 ```rust
-use radkit::tools::{FunctionTool, ToolResult, ToolStateAccess};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use radkit::tools::{FunctionTool, ToolResult};
+use serde_json::json;
 
 fn create_weather_tool() -> FunctionTool {
     FunctionTool::new(
@@ -413,10 +412,10 @@ Allows agents to control their task lifecycle:
 ```rust
 // Enable built-in tools on your agent
 let agent = Agent::builder(
-        "You can use update_status to communicate your progress.".to_string(),
+        "You can use update_status to communicate your progress.",
         anthropic_llm,
     )
-    .with_card(|c| c.with_name("task_agent".to_string()).with_description("Agent with task management".to_string()))
+    .with_card(|c| c.with_name("task_agent").with_description("Agent with task management"))
     .with_builtin_task_tools()
     .build();
 
@@ -468,23 +467,22 @@ Organize tools into reusable collections:
 ### SimpleToolset
 
 ```rust
-use radkit::tools::{SimpleToolset, BaseToolset};
-use std::sync::Arc;
+use radkit::tools::SimpleToolset;
 
 let weather_tool = create_weather_tool();
 let calculator_tool = create_calculator_tool();
 
 let toolset = SimpleToolset::new()
-    .add_tool(Arc::new(weather_tool))
-    .add_tool(Arc::new(calculator_tool));
-    
+    .add_tool(weather_tool)
+    .add_tool(calculator_tool);
+
 // Add to agent
 let agent = Agent::builder(
-        "You have access to weather and calculator tools.".to_string(),
+        "You have access to weather and calculator tools.",
         anthropic_llm,
     )
-    .with_card(|c| c.with_name("multi_tool_agent".to_string()).with_description("Agent with multiple tools".to_string()))
-    .with_toolset(Arc::new(toolset))
+    .with_card(|c| c.with_name("multi_tool_agent").with_description("Agent with multiple tools"))
+    .with_toolset(toolset)
     .build();
 ```
 
@@ -502,10 +500,10 @@ let combined = CombinedToolset::new(base_toolset)
     .with_additional_toolset(specialized_toolset);
 
 let agent = Agent::builder(
-        "You have access to multiple toolsets.".to_string(),
+        "You have access to multiple toolsets.",
         anthropic_llm,
     )
-    .with_toolset(Arc::new(combined))
+    .with_toolset(combined)
     .build();
 ```
 
@@ -858,23 +856,22 @@ Here's a complete example of creating an agent that uses an MCP weather server:
 use radkit::agents::Agent;
 use radkit::models::AnthropicLlm;
 use radkit::sessions::InMemorySessionService;
-use radkit::tools::mcp::{MCPToolset, MCPConnectionParams};
+use radkit::tools::{MCPConnectionParams, MCPToolset};
 use radkit::a2a::{Message, MessageSendParams, Part};
-use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio_stream::StreamExt;
 
 async fn create_weather_agent() -> Agent {
     // Create LLM (Anthropic Claude in this example)
-    let llm = Arc::new(AnthropicLlm::new(
+    let llm = AnthropicLlm::new(
         "claude-3-5-sonnet-20241022".to_string(),
         std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY required")
-    ));
-    
+    );
+
     // Create session service
-    let session_service = Arc::new(InMemorySessionService::new());
-    
+    let session_service = InMemorySessionService::new();
+
     // Configure MCP weather server connection
     let mcp_connection = MCPConnectionParams::Stdio {
         command: "uvx".to_string(),
@@ -886,16 +883,16 @@ async fn create_weather_agent() -> Agent {
         env: HashMap::new(),
         timeout: Duration::from_secs(30),
     };
-    
+
     // Create MCP toolset
-    let mcp_toolset = Arc::new(MCPToolset::new(mcp_connection));
-    
+    let mcp_toolset = MCPToolset::new(mcp_connection);
+
     // Build weather agent with MCP tools
     Agent::builder(
-        "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather conditions, forecasts, or climate information.".to_string(),
+        "You are a helpful weather assistant. Use the available weather tools to provide accurate weather information for any location requested by the user. Always call the weather tools when users ask about weather conditions, forecasts, or climate information.",
         llm,
     )
-    .with_card(|c| c.with_name("weather_agent".to_string()).with_description("Weather Assistant".to_string()))
+    .with_card(|c| c.with_name("weather_agent").with_description("Weather Assistant"))
     .with_session_service(session_service)
     .with_toolset(mcp_toolset)
     .with_builtin_task_tools() // Include update_status and save_artifact tools
@@ -968,7 +965,7 @@ The `MCPConnectionParams` enum supports different MCP server connection methods:
 #### Stdio Connection (Local Process)
 
 ```rust
-use radkit::tools::mcp::MCPConnectionParams;
+use radkit::tools::MCPConnectionParams;
 use std::time::Duration;
 use std::collections::HashMap;
 
@@ -1004,7 +1001,7 @@ let http_connection = MCPConnectionParams::Http {
 You can control which MCP tools are available to your agent:
 
 ```rust
-use radkit::tools::mcp::{MCPToolset, MCPToolFilter};
+use radkit::tools::{MCPToolset, MCPToolFilter};
 
 // Include all tools (default)
 let all_tools = MCPToolset::new(mcp_connection)
@@ -1039,8 +1036,8 @@ async fn create_multi_capability_agent() -> Agent {
         env: HashMap::new(),
         timeout: Duration::from_secs(30),
     };
-    let weather_toolset = Arc::new(MCPToolset::new(weather_connection));
-    
+    let weather_toolset = MCPToolset::new(weather_connection);
+
     // Database MCP server
     let db_connection = MCPConnectionParams::Http {
         url: "https://db-mcp.example.com".to_string(),
@@ -1051,24 +1048,22 @@ async fn create_multi_capability_agent() -> Agent {
         },
         timeout: Duration::from_secs(15),
     };
-    let db_toolset = Arc::new(MCPToolset::new(db_connection));
-    
+    let db_toolset = MCPToolset::new(db_connection);
+
     // Custom tools
-    let custom_toolset = Arc::new(SimpleToolset::new()
-        .add_tool(Arc::new(create_calculator_tool())));
-    
+    let custom_toolset = SimpleToolset::new()
+        .add_tool(create_calculator_tool());
+
     // Combine all toolsets
-    let combined_toolset = Arc::new(
-        CombinedToolset::new(weather_toolset)
-            .with_additional_toolset(db_toolset)
-            .with_additional_toolset(custom_toolset)
-    );
-    
+    let combined_toolset = CombinedToolset::new(weather_toolset)
+        .with_additional_toolset(db_toolset)
+        .with_additional_toolset(custom_toolset);
+
     Agent::builder(
-        "You have access to weather data, database queries, and calculation tools.".to_string(),
+        "You have access to weather data, database queries, and calculation tools.",
         llm,
     )
-    .with_card(|c| c.with_name("multi_agent".to_string()).with_description("Multi-Capability Assistant".to_string()))
+    .with_card(|c| c.with_name("multi_agent").with_description("Multi-Capability Assistant"))
     .with_toolset(combined_toolset)
     .build()
 }

@@ -20,17 +20,11 @@ mod common;
 use common::{get_openai_key, init_test_env};
 
 /// Helper function to create Agent with tools if API key is available
-fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> {
+fn create_test_agent_with_tools(tools: Vec<FunctionTool>) -> Option<Agent> {
     init_test_env();
     get_openai_key().map(|api_key| {
         let openai_llm = OpenAILlm::new("gpt-4o-mini".to_string(), api_key);
-        let session_service = Arc::new(InMemorySessionService::new());
-
-        let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
-            .into_iter()
-            .map(|tool| tool as Arc<dyn radkit::tools::BaseTool>)
-            .collect();
-
+        let session_service = InMemorySessionService::new();
         Agent::builder(
             "You are a helpful assistant. Use the available tools when requested by the user. Always call tools when they can help answer the user's question.",
             openai_llm
@@ -40,7 +34,7 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
             .with_description("Test agent for function calling")
         )
         .with_session_service(session_service)
-        .with_tools(base_tools)
+        .with_tools(tools)
         .build()
     })
 }
@@ -181,7 +175,7 @@ fn create_calculation_tool() -> FunctionTool {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_openai_single_tool_use() {
-    let weather_tool = Arc::new(create_weather_tool());
+    let weather_tool = create_weather_tool();
     let Some(agent) = create_test_agent_with_tools(vec![weather_tool]) else {
         println!("⚠️  Skipping test: OPENAI_API_KEY not found");
         return;
@@ -341,8 +335,8 @@ async fn test_openai_single_tool_use() {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_openai_multiple_tool_use() {
-    let weather_tool = Arc::new(create_weather_tool());
-    let calc_tool = Arc::new(create_calculation_tool());
+    let weather_tool = create_weather_tool();
+    let calc_tool = create_calculation_tool();
 
     let Some(agent) = create_test_agent_with_tools(vec![weather_tool, calc_tool]) else {
         println!("⚠️  Skipping test: OPENAI_API_KEY not found");
@@ -465,7 +459,7 @@ async fn test_openai_multiple_tool_use() {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_openai_streaming_with_tools() {
-    let weather_tool = Arc::new(create_weather_tool());
+    let weather_tool = create_weather_tool();
     let Some(agent) = create_test_agent_with_tools(vec![weather_tool]) else {
         println!("⚠️  Skipping test: OPENAI_API_KEY not found");
         return;
@@ -622,7 +616,7 @@ async fn test_openai_streaming_with_tools() {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_openai_tool_error_handling() {
-    let calc_tool = Arc::new(create_calculation_tool());
+    let calc_tool = create_calculation_tool();
 
     let Some(agent) = create_test_agent_with_tools(vec![calc_tool]) else {
         println!("⚠️  Skipping test: OPENAI_API_KEY not found");

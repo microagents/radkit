@@ -23,7 +23,7 @@ fn create_test_agent() -> Option<Agent> {
     init_test_env();
     get_openai_key().map(|api_key| {
         let openai_llm = OpenAILlm::new("gpt-4o-mini".to_string(), api_key);
-        let session_service = Arc::new(InMemorySessionService::new());
+        let session_service = InMemorySessionService::new();
 
         Agent::builder(
             "You are a helpful assistant. Respond briefly and clearly.",

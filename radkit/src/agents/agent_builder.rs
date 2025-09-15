@@ -21,8 +21,8 @@ pub struct AgentBuilder {
     model: Box<dyn BaseLlm>,
 
     // Optional execution components
-    session_service: Option<Arc<dyn SessionService>>,
-    tools: Vec<Arc<dyn BaseTool>>,
+    session_service: Option<Box<dyn SessionService>>,
+    tools: Vec<Box<dyn BaseTool>>,
     toolset: Option<Arc<dyn BaseToolset>>,
     config: AgentConfig,
 
@@ -59,16 +59,20 @@ impl AgentBuilder {
 
     // ===== Execution Component Configuration =====
 
-    /// Add a single tool - accepts owned tool, wraps in Arc
+    /// Add a single tool - accepts owned tool
     pub fn with_tool(mut self, tool: impl BaseTool + 'static) -> Self {
-        self.tools.push(Arc::new(tool));
+        self.tools.push(Box::new(tool));
         self.toolset = None; // Clear custom toolset if adding individual tools
         self
     }
 
     /// Add multiple tools at once
-    pub fn with_tools(mut self, tools: Vec<Arc<dyn BaseTool>>) -> Self {
-        self.tools.extend(tools);
+    pub fn with_tools(mut self, tools: Vec<impl BaseTool + 'static>) -> Self {
+        self.tools.extend(
+            tools
+                .into_iter()
+                .map(|tool| Box::new(tool) as Box<dyn BaseTool>),
+        );
         self.toolset = None;
         self
     }
@@ -80,10 +84,9 @@ impl AgentBuilder {
         self
     }
 
-    /// Set session service - takes Arc for shared ownership
-    /// Use Arc::clone() if you need to retain access to the session service
-    pub fn with_session_service(mut self, service: Arc<dyn SessionService>) -> Self {
-        self.session_service = Some(service);
+    /// Set session service - accepts owned service
+    pub fn with_session_service(mut self, service: impl SessionService + 'static) -> Self {
+        self.session_service = Some(Box::new(service));
         self
     }
 
@@ -96,14 +99,14 @@ impl AgentBuilder {
     /// Add the update_status built-in tool
     pub fn with_update_status_tool(mut self) -> Self {
         let tool = crate::tools::builtin_tools::create_update_status_tool();
-        self.tools.push(Arc::new(tool));
+        self.tools.push(Box::new(tool));
         self
     }
 
     /// Add the save_artifact built-in tool
     pub fn with_save_artifact_tool(mut self) -> Self {
         let tool = crate::tools::builtin_tools::create_save_artifact_tool();
-        self.tools.push(Arc::new(tool));
+        self.tools.push(Box::new(tool));
         self
     }
 
@@ -121,16 +124,19 @@ impl AgentBuilder {
         let toolset = if let Some(custom_toolset) = self.toolset {
             Some(custom_toolset)
         } else if !self.tools.is_empty() {
-            // Tools are already Arc<dyn BaseTool>, no conversion needed
-            Some(Arc::new(SimpleToolset::new(self.tools)) as Arc<dyn BaseToolset>)
+            // Convert owned tools to Arc for toolset
+            let arc_tools: Vec<Arc<dyn BaseTool>> =
+                self.tools.into_iter().map(|tool| Arc::from(tool)).collect();
+            Some(Arc::new(SimpleToolset::new(arc_tools)) as Arc<dyn BaseToolset>)
         } else {
             None
         };
 
         // Create or use provided session service
-        let session_service = self
-            .session_service
-            .unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
+        let session_service: Arc<dyn SessionService> = match self.session_service {
+            Some(service) => service.into(),
+            None => Arc::new(InMemorySessionService::new()),
+        };
 
         // Create dependent services
         let query_service = Arc::new(QueryService::new(session_service.clone()));

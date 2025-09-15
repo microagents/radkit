@@ -22,15 +22,10 @@ use common::get_anthropic_key;
 
 /// Helper function to create Agent with tools if API key is available
 /// Creates agent with proper session service and task store for comprehensive testing
-fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> {
+fn create_test_agent_with_tools(tools: Vec<FunctionTool>) -> Option<Agent> {
     get_anthropic_key().map(|api_key| {
         let anthropic_llm = AnthropicLlm::new("claude-3-5-sonnet-20241022".to_string(), api_key);
-        let session_service = Arc::new(InMemorySessionService::new());
-
-        let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
-            .into_iter()
-            .map(|tool| tool as Arc<dyn radkit::tools::BaseTool>)
-            .collect();
+        let session_service = InMemorySessionService::new();
 
         Agent::builder(
             "You are a helpful assistant. Use the available tools when requested by the user. Always call tools when they can help answer the user's question.",
@@ -41,7 +36,7 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
             .with_description("Test agent for function calling")
         )
         .with_session_service(session_service)
-        .with_tools(base_tools)
+        .with_tools(tools)
         .build()
     })
 }
@@ -153,7 +148,7 @@ fn create_calculator_tool() -> FunctionTool {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_anthropic_single_tool_call_comprehensive() {
-    let Some(agent) = create_test_agent_with_tools(vec![Arc::new(create_weather_tool())]) else {
+    let Some(agent) = create_test_agent_with_tools(vec![create_weather_tool()]) else {
         println!("⚠️  Skipping test: ANTHROPIC_API_KEY not found");
         return;
     };
@@ -516,10 +511,7 @@ async fn test_anthropic_single_tool_call_comprehensive() {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_anthropic_multi_tool_execution() {
-    let tools = vec![
-        Arc::new(create_weather_tool()),
-        Arc::new(create_calculator_tool()),
-    ];
+    let tools = vec![create_weather_tool(), create_calculator_tool()];
 
     let Some(agent) = create_test_agent_with_tools(tools) else {
         println!("⚠️  Skipping test: ANTHROPIC_API_KEY not found");
@@ -756,34 +748,32 @@ async fn test_anthropic_multi_tool_execution() {
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_anthropic_tool_error_handling() {
     // Create a tool that will fail for certain inputs
-    let error_tool = Arc::new(
-        FunctionTool::new(
-            "error_tool".to_string(),
-            "A tool that sometimes fails".to_string(),
-            |args: HashMap<String, serde_json::Value>, _context| {
-                Box::pin(async move {
-                    let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
+    let error_tool = FunctionTool::new(
+        "error_tool".to_string(),
+        "A tool that sometimes fails".to_string(),
+        |args: HashMap<String, serde_json::Value>, _context| {
+            Box::pin(async move {
+                let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
 
-                    if input == "fail" {
-                        ToolResult {
-                            success: false,
-                            data: json!(null),
-                            error_message: Some("Intentional failure for testing".to_string()),
-                        }
-                    } else {
-                        ToolResult::success(json!({ "result": "success" }))
+                if input == "fail" {
+                    ToolResult {
+                        success: false,
+                        data: json!(null),
+                        error_message: Some("Intentional failure for testing".to_string()),
                     }
-                })
-            },
-        )
-        .with_parameters_schema(json!({
-            "type": "object",
-            "properties": {
-                "input": {"type": "string", "description": "Input text"}
-            },
-            "required": ["input"]
-        })),
-    );
+                } else {
+                    ToolResult::success(json!({ "result": "success" }))
+                }
+            })
+        },
+    )
+    .with_parameters_schema(json!({
+        "type": "object",
+        "properties": {
+            "input": {"type": "string", "description": "Input text"}
+        },
+        "required": ["input"]
+    }));
 
     let Some(agent) = create_test_agent_with_tools(vec![error_tool]) else {
         println!("⚠️  Skipping test: ANTHROPIC_API_KEY not found");
@@ -884,7 +874,7 @@ async fn test_anthropic_tool_error_handling() {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_anthropic_non_streaming_tool_call() {
-    let Some(agent) = create_test_agent_with_tools(vec![Arc::new(create_weather_tool())]) else {
+    let Some(agent) = create_test_agent_with_tools(vec![create_weather_tool()]) else {
         println!("⚠️  Skipping test: ANTHROPIC_API_KEY not found");
         return;
     };

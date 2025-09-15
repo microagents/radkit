@@ -40,7 +40,6 @@ use radkit::a2a::{
 use radkit::agents::{Agent, AgentConfig};
 use radkit::models::AnthropicLlm;
 use radkit::sessions::InMemorySessionService;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -48,10 +47,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv()?;
 
     // Create an LLM provider (supports Anthropic, Gemini, and Mock providers)
-    let llm = Arc::new(AnthropicLlm::new(
+    let llm = AnthropicLlm::new(
         "claude-3-5-sonnet-20241022".to_string(),
         std::env::var("ANTHROPIC_API_KEY")?,
-    ));
+    );
 
     // Create an agent using the builder pattern with built-in task management tools
     let agent = Agent::builder(
@@ -59,8 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
          always use update_status to indicate your progress (e.g., 'working' \
          when processing, 'completed' when done). When you produce any \
          results or findings, save them using save_artifact so they can be \
-         retrieved later."
-            .to_string(),
+         retrieved later.",
         llm,
     )
     .with_card(|c| {
@@ -68,9 +66,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_description("Research Assistant")
     })
     .with_config(AgentConfig::default().with_max_iterations(10))
-    .with_session_service(Arc::new(InMemorySessionService::new()))
+    .with_session_service(InMemorySessionService::new())
     .with_builtin_task_tools() // Enables update_status and save_artifact tools
-    .build()?;
+    .build();
 
     // User simply asks for research - no mention of tools
     let message = Message {
