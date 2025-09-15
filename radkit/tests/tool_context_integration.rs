@@ -22,8 +22,8 @@ mod common;
 use common::{get_anthropic_key, get_gemini_key};
 
 /// Create a state management tool that uses the new ToolContext API
-fn create_state_management_tool() -> Arc<dyn radkit::tools::BaseTool> {
-    Arc::new(FunctionTool::new(
+fn create_state_management_tool() -> FunctionTool {
+    FunctionTool::new(
         "manage_preferences".to_string(),
         "Get or set user preferences and session data using the secure ToolContext API".to_string(),
         |args, context| Box::pin(async move {
@@ -146,70 +146,68 @@ fn create_state_management_tool() -> Arc<dyn radkit::tools::BaseTool> {
             }
         },
         "required": ["action"]
-    })))
+    }))
 }
 
 /// Create an interactive tool that uses add_user_input
-fn create_interactive_tool() -> Arc<dyn radkit::tools::BaseTool> {
-    Arc::new(
-        FunctionTool::new(
-            "request_user_input".to_string(),
-            "Request additional input from the user during task execution".to_string(),
-            |args, context| {
-                Box::pin(async move {
-                    let prompt = args
-                        .get("prompt")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Please provide additional information:");
-                    let input_type = args
-                        .get("input_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("text");
+fn create_interactive_tool() -> FunctionTool {
+    FunctionTool::new(
+        "request_user_input".to_string(),
+        "Request additional input from the user during task execution".to_string(),
+        |args, context| {
+            Box::pin(async move {
+                let prompt = args
+                    .get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Please provide additional information:");
+                let input_type = args
+                    .get("input_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("text");
 
-                    // Create user input content directly
-                    let mut content = radkit::models::content::Content::new(
-                        context.task_id().to_string(),
-                        context.context_id().to_string(),
-                        Uuid::new_v4().to_string(),
-                        MessageRole::User,
-                    );
+                // Create user input content directly
+                let mut content = radkit::models::content::Content::new(
+                    context.task_id().to_string(),
+                    context.context_id().to_string(),
+                    Uuid::new_v4().to_string(),
+                    MessageRole::User,
+                );
 
-                    content.add_text(format!("[TOOL GENERATED] {}", prompt), {
-                        let mut map = HashMap::new();
-                        map.insert("tool_generated".to_string(), json!(true));
-                        map.insert("interaction_type".to_string(), json!(input_type));
-                        map.insert("awaiting_response".to_string(), json!(true));
-                        Some(map)
-                    });
+                content.add_text(format!("[TOOL GENERATED] {}", prompt), {
+                    let mut map = HashMap::new();
+                    map.insert("tool_generated".to_string(), json!(true));
+                    map.insert("interaction_type".to_string(), json!(input_type));
+                    map.insert("awaiting_response".to_string(), json!(true));
+                    Some(map)
+                });
 
-                    match context.add_user_input(content).await {
-                        Ok(()) => ToolResult::success(json!({
-                            "action": "request_user_input",
-                            "prompt": prompt,
-                            "input_type": input_type,
-                            "message": "User input request sent successfully"
-                        })),
-                        Err(e) => ToolResult::error(format!("Failed to request user input: {}", e)),
-                    }
-                })
-            },
-        )
-        .with_parameters_schema(json!({
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "The prompt to show the user"
-                },
-                "input_type": {
-                    "type": "string",
-                    "enum": ["text", "confirmation", "choice"],
-                    "description": "Type of input expected from user"
+                match context.add_user_input(content).await {
+                    Ok(()) => ToolResult::success(json!({
+                        "action": "request_user_input",
+                        "prompt": prompt,
+                        "input_type": input_type,
+                        "message": "User input request sent successfully"
+                    })),
+                    Err(e) => ToolResult::error(format!("Failed to request user input: {}", e)),
                 }
-            },
-            "required": ["prompt"]
-        })),
+            })
+        },
     )
+    .with_parameters_schema(json!({
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "The prompt to show the user"
+            },
+            "input_type": {
+                "type": "string",
+                "enum": ["text", "confirmation", "choice"],
+                "description": "Type of input expected from user"
+            }
+        },
+        "required": ["prompt"]
+    }))
 }
 
 #[tokio::test]

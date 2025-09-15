@@ -41,7 +41,6 @@ GEMINI_API_KEY=your-gemini-key-here
 use radkit::a2a::{Message, MessageRole, MessageSendParams, Part, SendMessageResult};
 use radkit::agents::Agent;
 use radkit::models::AnthropicLlm;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,17 +48,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     
     // Create an LLM provider
-    let llm = Arc::new(AnthropicLlm::new(
+    let llm = AnthropicLlm::new(
         "claude-3-5-sonnet-20241022".to_string(),
         std::env::var("ANTHROPIC_API_KEY")?,
-    ));
-    
+    );
+
     // Create an agent (services are created automatically)
     let agent = Agent::builder(
-        "You are a knowledgeable and friendly assistant.".to_string(),
-        anthropic_llm,
+        "You are a knowledgeable and friendly assistant.",
+        llm,
     )
-    .with_card(|c| c.with_name("MyFirstAgent".to_string()).with_description("A helpful AI assistant".to_string()))
+    .with_card(|c| c
+        .with_name("MyFirstAgent")
+        .with_description("A helpful AI assistant")
+    )
     .build();
     
     println!("✅ Agent created successfully!");
@@ -214,13 +216,16 @@ use radkit::agents::AgentConfig;
 let config = AgentConfig::default().with_max_iterations(10);
 
 let agent = Agent::builder(
-        "You can update task status and save artifacts using built-in tools.".to_string(),
-        anthropic_llm,
+        "You can update task status and save artifacts using built-in tools.",
+        llm,
     )
-    .with_card(|c| c.with_name("builtin_agent".to_string()).with_description("Agent with built-in tools".to_string()))
-    .build()
-.with_config(config)
-.with_builtin_task_tools();  // Adds update_status and save_artifact tools
+    .with_card(|c| c
+        .with_name("builtin_agent")
+        .with_description("Agent with built-in tools")
+    )
+    .with_config(config)
+    .with_builtin_task_tools();  // Adds update_status and save_artifact tools
+    .build();
 
 // The agent can now use:
 // - update_status: Update task status (submitted, working, completed, failed, etc.)
@@ -233,16 +238,15 @@ let agent = Agent::builder(
 Create your own tools using `FunctionTool`:
 
 ```rust
-use radkit::tools::{FunctionTool, ToolResult, ToolContext};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use radkit::tools::{FunctionTool, ToolResult};
+use serde_json::json;
 
 // Create a weather tool
 fn create_weather_tool() -> FunctionTool {
     FunctionTool::new(
         "get_weather".to_string(),
         "Get the current weather for a location".to_string(),
-        |args: HashMap<String, Value>, _context| Box::pin(async move {
+        |args, _context| Box::pin(async move {
             let location = args
                 .get("location")
                 .and_then(|v| v.as_str())
@@ -255,11 +259,7 @@ fn create_weather_tool() -> FunctionTool {
                 "humidity": "45%"
             });
 
-            ToolResult {
-                success: true,
-                data: weather_data,
-                error_message: None,
-            }
+            ToolResult::success(weather_data)
         }),
     )
     .with_parameters_schema(json!({
@@ -279,7 +279,7 @@ fn create_preference_tool() -> FunctionTool {
     FunctionTool::new(
         "set_preference".to_string(),
         "Set user preferences".to_string(),
-        |args: HashMap<String, Value>, context| Box::pin(async move {
+        |args, context| Box::pin(async move {
             let key = args
                 .get("key")
                 .and_then(|v| v.as_str())
@@ -289,7 +289,7 @@ fn create_preference_tool() -> FunctionTool {
                 .cloned()
                 .unwrap_or(json!(null));
 
-            // Use the new ToolContext API for state management
+            // Use the ToolContext API for state management
             match context.set_user_state(key.to_string(), value.clone()).await {
                 Ok(()) => ToolResult::success(json!({
                     "message": format!("Set preference '{}' to: {}", key, value)
@@ -303,10 +303,11 @@ fn create_preference_tool() -> FunctionTool {
         "properties": {
             "key": {
                 "type": "string",
-                "description": "Preference key"
+                "description": "The preference key to set"
             },
             "value": {
-                "description": "Preference value (any JSON type)"
+                "type": "string",
+                "description": "The preference value to set"
             }
         },
         "required": ["key", "value"]
@@ -318,7 +319,7 @@ fn create_calculator_tool() -> FunctionTool {
     FunctionTool::new(
         "calculate".to_string(),
         "Perform basic mathematical calculations".to_string(),
-        |args: HashMap<String, Value>, _context| Box::pin(async move {
+        |args, _context| Box::pin(async move {
             let expression = args
                 .get("expression")
                 .and_then(|v| v.as_str())
@@ -330,19 +331,11 @@ fn create_calculator_tool() -> FunctionTool {
                 "100/4" => 25,
                 "15-3" => 12,
                 _ => {
-                    return ToolResult {
-                        success: false,
-                        data: json!(null),
-                        error_message: Some(format!("Cannot calculate: {}", expression)),
-                    };
+                    return ToolResult::error(format!("Cannot calculate: {}", expression));
                 }
             };
 
-            ToolResult {
-                success: true,
-                data: json!({"result": result, "expression": expression}),
-                error_message: None,
-            }
+            ToolResult::success(json!({"result": result, "expression": expression}))
         }),
     )
     .with_parameters_schema(json!({
@@ -357,20 +350,23 @@ fn create_calculator_tool() -> FunctionTool {
     }))
 }
 
-// Add tools to your agent
-let tools: Vec<Arc<dyn radkit::tools::BaseTool>> = vec![
-    Arc::new(create_weather_tool()),
-    Arc::new(create_calculator_tool()),
-];
+// Add tools to your agent using a toolset
+use radkit::tools::SimpleToolset;
+
+let toolset = SimpleToolset::new()
+    .add_tool(create_weather_tool())
+    .add_tool(create_calculator_tool());
 
 let agent = Agent::builder(
-        "You are a helpful assistant. Use the available tools when requested by the user.".to_string(),
-        anthropic_llm,
+        "You are a helpful assistant. Use the available tools when requested by the user.",
+        llm,
     )
-    .with_card(|c| c.with_name("tool_agent".to_string()).with_description("Agent with custom tools".to_string()))
-    .build()
-.with_config(config)
-.with_tools(tools);
+    .with_card(|c| c
+        .with_name("tool_agent")
+        .with_description("Agent with custom tools")
+    )
+    .with_toolset(toolset)
+    .build();
 ```
 
 ### 5. Monitoring Tool Calls and Responses
@@ -468,23 +464,23 @@ Handle tool failures gracefully:
 let error_tool = FunctionTool::new(
     "risky_operation".to_string(),
     "An operation that might fail".to_string(),
-    |args: HashMap<String, Value>, _context| Box::pin(async move {
+    |args, _context| Box::pin(async move {
         let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
 
         if input == "fail" {
-            ToolResult {
-                success: false,
-                data: json!(null),
-                error_message: Some("Operation failed as requested".to_string()),
-            }
+            ToolResult::error("Operation failed as requested".to_string())
         } else {
             ToolResult::success(json!({ "result": "Operation succeeded" }))
         }
     }),
-).with_parameters_schema(json!({
+)
+.with_parameters_schema(json!({
     "type": "object",
     "properties": {
-        "input": {"type": "string", "description": "Test input"}
+        "input": {
+            "type": "string",
+            "description": "Input parameter - use 'fail' to trigger error"
+        }
     },
     "required": ["input"]
 }));
@@ -769,30 +765,32 @@ use radkit::a2a::{Message, MessageRole, MessageSendParams, Part, SendMessageResu
 use radkit::agents::{Agent, AgentConfig};
 use radkit::models::AnthropicLlm;
 use radkit::sessions::SessionEventType;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     
     // Create a specialized math tutor agent
-    let llm = Arc::new(AnthropicLlm::new(
+    let llm = AnthropicLlm::new(
         "claude-3-5-sonnet-20241022".to_string(),
         std::env::var("ANTHROPIC_API_KEY")?,
-    ));
-    
+    );
+
     let agent = Agent::builder(
         r#"You are a patient math tutor. When solving problems:
         1. Break down the problem into steps
         2. Explain each step clearly
         3. Use the save_artifact tool to save the solution
-        4. Update your status as you work through the problem"#.to_string(),
-        anthropic_llm,
+        4. Update your status as you work through the problem"#,
+        llm,
     )
-    .with_card(|c| c.with_name("MathTutor".to_string()).with_description("An AI math tutor that explains concepts step-by-step".to_string()))
-    .build()
+    .with_card(|c| c
+        .with_name("MathTutor")
+        .with_description("An AI math tutor that explains concepts step-by-step")
+    )
     .with_config(AgentConfig::default().with_max_iterations(10))
-    .with_builtin_task_tools();
+    .with_builtin_task_tools()
+    .build();
     
     // Student asks a question
     let question = "A train travels 120 miles in 2 hours. What is its average speed?";

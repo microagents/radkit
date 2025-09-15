@@ -230,7 +230,7 @@ async fn test_tool_event_storage() -> AgentResult<()> {
     );
 
     let mock_llm = MockLlm::new("test-model".to_string());
-    let tool: Arc<dyn radkit::tools::BaseTool> = Arc::new(calculator_tool);
+    let tool = calculator_tool;
     let agent = Agent::builder(
         "You are a helpful assistant with calculation tools.",
         mock_llm,

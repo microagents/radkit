@@ -17,7 +17,7 @@ mod common;
 use common::{get_openai_key, init_test_env};
 
 /// Create a stateful counter tool that maintains state across calls
-fn create_counter_tool() -> (Arc<FunctionTool>, Arc<Mutex<i32>>) {
+fn create_counter_tool() -> (FunctionTool, Arc<Mutex<i32>>) {
     let counter = Arc::new(Mutex::new(0));
     let counter_clone = counter.clone();
 
@@ -57,116 +57,109 @@ fn create_counter_tool() -> (Arc<FunctionTool>, Arc<Mutex<i32>>) {
         "additionalProperties": false
     }));
 
-    (Arc::new(tool), counter)
+    (tool, counter)
 }
 
 /// Create a memory tool that can store and retrieve values
-fn create_memory_tool() -> Arc<FunctionTool> {
+fn create_memory_tool() -> FunctionTool {
     let memory = Arc::new(Mutex::new(HashMap::<String, String>::new()));
 
-    Arc::new(
-        FunctionTool::new(
-            "memory".to_string(),
-            "Store or retrieve a value from memory".to_string(),
-            move |args: HashMap<String, Value>, _context| {
-                let memory = memory.clone();
-                Box::pin(async move {
-                    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("get");
+    FunctionTool::new(
+        "memory".to_string(),
+        "Store or retrieve a value from memory".to_string(),
+        move |args: HashMap<String, Value>, _context| {
+            let memory = memory.clone();
+            Box::pin(async move {
+                let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("get");
 
-                    let key = args
-                        .get("key")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("default");
+                let key = args
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
 
-                    let mut mem = memory.lock().unwrap();
+                let mut mem = memory.lock().unwrap();
 
-                    match action {
-                        "set" => {
-                            let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                match action {
+                    "set" => {
+                        let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
 
-                            mem.insert(key.to_string(), value.to_string());
+                        mem.insert(key.to_string(), value.to_string());
 
-                            ToolResult {
-                                success: true,
-                                data: json!({
-                                    "action": "set",
-                                    "key": key,
-                                    "value": value,
-                                    "message": format!("Stored '{}' = '{}'", key, value)
-                                }),
-                                error_message: None,
-                            }
+                        ToolResult {
+                            success: true,
+                            data: json!({
+                                "action": "set",
+                                "key": key,
+                                "value": value,
+                                "message": format!("Stored '{}' = '{}'", key, value)
+                            }),
+                            error_message: None,
                         }
-                        "get" => {
-                            let value = mem.get(key).cloned();
-
-                            ToolResult {
-                                success: true,
-                                data: json!({
-                                    "action": "get",
-                                    "key": key,
-                                    "value": value,
-                                    "found": value.is_some()
-                                }),
-                                error_message: None,
-                            }
-                        }
-                        "list" => {
-                            let keys: Vec<String> = mem.keys().cloned().collect();
-
-                            ToolResult {
-                                success: true,
-                                data: json!({
-                                    "action": "list",
-                                    "keys": keys,
-                                    "count": keys.len()
-                                }),
-                                error_message: None,
-                            }
-                        }
-                        _ => ToolResult {
-                            success: false,
-                            data: json!(null),
-                            error_message: Some(format!("Unknown action: {}", action)),
-                        },
                     }
-                })
-            },
-        )
-        .with_parameters_schema(json!({
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["get", "set", "list"],
-                    "description": "The action to perform"
-                },
-                "key": {
-                    "type": "string",
-                    "description": "The key to store/retrieve"
-                },
-                "value": {
-                    "type": "string",
-                    "description": "The value to store (only for 'set' action)"
+                    "get" => {
+                        let value = mem.get(key).cloned();
+
+                        ToolResult {
+                            success: true,
+                            data: json!({
+                                "action": "get",
+                                "key": key,
+                                "value": value,
+                                "found": value.is_some()
+                            }),
+                            error_message: None,
+                        }
+                    }
+                    "list" => {
+                        let keys: Vec<String> = mem.keys().cloned().collect();
+
+                        ToolResult {
+                            success: true,
+                            data: json!({
+                                "action": "list",
+                                "keys": keys,
+                                "count": keys.len()
+                            }),
+                            error_message: None,
+                        }
+                    }
+                    _ => ToolResult {
+                        success: false,
+                        data: json!(null),
+                        error_message: Some(format!("Unknown action: {}", action)),
+                    },
                 }
-            },
-            "required": ["action", "key", "value"],
-            "additionalProperties": false
-        })),
+            })
+        },
     )
+    .with_parameters_schema(json!({
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["get", "set", "list"],
+                "description": "The action to perform"
+            },
+            "key": {
+                "type": "string",
+                "description": "The key to store/retrieve"
+            },
+            "value": {
+                "type": "string",
+                "description": "The value to store (only for 'set' action)"
+            }
+        },
+        "required": ["action", "key", "value"],
+        "additionalProperties": false
+    }))
 }
 
 /// Helper function to create Agent with tools
-fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> {
+fn create_test_agent_with_tools(tools: Vec<FunctionTool>) -> Option<Agent> {
     init_test_env();
     get_openai_key().map(|api_key| {
         let openai_llm = OpenAILlm::new("gpt-4o-mini".to_string(), api_key);
-        let session_service = Arc::new(InMemorySessionService::new());
-
-        let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
-            .into_iter()
-            .map(|tool| tool as Arc<dyn radkit::tools::BaseTool>)
-            .collect();
+        let session_service = InMemorySessionService::new();
 
         Agent::builder(
             "You are a helpful assistant with access to tools. Use them when requested. Remember information from previous turns in the conversation.",
@@ -177,7 +170,7 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
             .with_description("Test agent for multi-turn conversations")
         )
         .with_session_service(session_service)
-        .with_tools(base_tools)
+        .with_tools(tools)
         .build()
     })
 }

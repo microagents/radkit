@@ -17,16 +17,10 @@ mod common;
 use common::get_gemini_key;
 
 /// Helper function to create Agent with Gemini if API key is available
-fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> {
+fn create_test_agent_with_tools(tools: Vec<FunctionTool>) -> Option<Agent> {
     get_gemini_key().map(|api_key| {
         let gemini_llm = GeminiLlm::new("gemini-2.0-flash-exp".to_string(), api_key);
-        let session_service = Arc::new(InMemorySessionService::new());
-
-        let base_tools: Vec<Arc<dyn radkit::tools::BaseTool>> = tools
-            .into_iter()
-            .map(|tool| tool as Arc<dyn radkit::tools::BaseTool>)
-            .collect();
-
+        let session_service = InMemorySessionService::new();
         Agent::builder(
             "You are a helpful assistant. Use the available tools when requested by the user.",
             gemini_llm,
@@ -36,7 +30,7 @@ fn create_test_agent_with_tools(tools: Vec<Arc<FunctionTool>>) -> Option<Agent> 
                 .with_description("Test agent for Gemini multi-turn function calling")
         })
         .with_session_service(session_service)
-        .with_tools(base_tools)
+        .with_tools(tools)
         .build()
     })
 }
@@ -109,7 +103,7 @@ fn create_calculator_tool() -> FunctionTool {
 #[tokio::test]
 #[ignore] // Only run with --ignored flag when API key is available
 async fn test_gemini_multi_turn_calculation() {
-    let Some(agent) = create_test_agent_with_tools(vec![Arc::new(create_calculator_tool())]) else {
+    let Some(agent) = create_test_agent_with_tools(vec![create_calculator_tool()]) else {
         println!("⚠️  Skipping test: GEMINI_API_KEY not found");
         return;
     };
