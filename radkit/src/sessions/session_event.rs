@@ -34,24 +34,15 @@ pub enum SessionEventType {
     /// Agent sent a message (includes potential function calls)
     AgentMessage { content: Content },
 
-    /// Task was created
-    TaskCreated { task: Task },
-
     /// Task status changed (submitted -> working -> completed/failed, etc.)
-    TaskStatusChanged {
-        old_state: TaskState,
+    TaskStatusUpdate {
         new_state: TaskState,
         message: Option<String>,
+        task: Option<Task>,
     },
 
-    /// Task completed successfully
-    TaskCompleted { task: Task },
-
-    /// Task failed
-    TaskFailed { task: Task, reason: String },
-
     /// Artifact was saved
-    ArtifactSaved { artifact: Artifact },
+    TaskArtifactUpdate { artifact: Artifact },
 
     /// State was changed at app/user/session level
     StateChanged {
@@ -90,12 +81,9 @@ impl SessionEvent {
     pub fn is_a2a_compatible(&self) -> bool {
         matches!(
             self.event_type,
-            SessionEventType::UserMessage { .. }
-                | SessionEventType::AgentMessage { .. }
-                | SessionEventType::TaskStatusChanged { .. }
-                | SessionEventType::TaskCompleted { .. }
-                | SessionEventType::TaskFailed { .. }
-                | SessionEventType::ArtifactSaved { .. }
+            SessionEventType::AgentMessage { .. }
+                | SessionEventType::TaskStatusUpdate { .. }
+                | SessionEventType::TaskArtifactUpdate { .. }
         )
     }
 
@@ -107,15 +95,16 @@ impl SessionEvent {
         };
 
         match &self.event_type {
-            SessionEventType::UserMessage { content }
-            | SessionEventType::AgentMessage { content } => {
+            SessionEventType::AgentMessage { content } => {
                 // Function calls filtered out by to_a2a_message()
-                Some(SendStreamingMessageResult::Message(
-                    content.to_a2a_message(),
-                ))
+                let message = content.to_a2a_message();
+                if message.is_none() {
+                    return None;
+                }
+                Some(SendStreamingMessageResult::Message(message.unwrap()))
             }
 
-            SessionEventType::TaskStatusChanged {
+            SessionEventType::TaskStatusUpdate {
                 new_state, message, ..
             } => {
                 let task_status = TaskStatus {
@@ -155,7 +144,7 @@ impl SessionEvent {
                 ))
             }
 
-            SessionEventType::ArtifactSaved { artifact } => Some(
+            SessionEventType::TaskArtifactUpdate { artifact } => Some(
                 SendStreamingMessageResult::TaskArtifactUpdate(TaskArtifactUpdateEvent {
                     kind: "artifact-update".to_string(),
                     task_id: self.task_id.clone(),
@@ -167,10 +156,6 @@ impl SessionEvent {
                 }),
             ),
 
-            SessionEventType::TaskCompleted { task } => {
-                Some(SendStreamingMessageResult::Task(task.clone()))
-            }
-
             // Other events don't map to A2A streaming results
             _ => None,
         }
@@ -180,7 +165,7 @@ impl SessionEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::content::Content;
+    use crate::models::content::{Content, ContentPart};
     use a2a_types::MessageRole;
 
     #[test]
@@ -195,7 +180,7 @@ mod tests {
         let event = SessionEvent::new(
             "session1".to_string(),
             "task1".to_string(),
-            SessionEventType::UserMessage { content },
+            SessionEventType::AgentMessage { content },
         );
 
         assert_eq!(event.session_id, "session1");
@@ -203,7 +188,7 @@ mod tests {
         assert!(!event.id.is_empty());
         assert!(matches!(
             event.event_type,
-            SessionEventType::UserMessage { .. }
+            SessionEventType::AgentMessage { .. }
         ));
     }
 
@@ -212,12 +197,12 @@ mod tests {
         let user_message = SessionEvent::new(
             "session1".to_string(),
             "task1".to_string(),
-            SessionEventType::UserMessage {
+            SessionEventType::AgentMessage {
                 content: Content::new(
                     "task1".to_string(),
                     "session1".to_string(),
                     "msg1".to_string(),
-                    MessageRole::User,
+                    MessageRole::Agent,
                 ),
             },
         );
@@ -239,16 +224,21 @@ mod tests {
 
     #[test]
     fn test_a2a_streaming_conversion() {
+        let mut content = Content::new(
+            "task1".to_string(),
+            "session1".to_string(),
+            "msg1".to_string(),
+            MessageRole::Agent,
+        );
+        content.parts = vec![ContentPart::Text {
+            text: "Agent message".to_string(),
+            metadata: None,
+        }];
         let user_message = SessionEvent::new(
             "session1".to_string(),
             "task1".to_string(),
-            SessionEventType::UserMessage {
-                content: Content::new(
-                    "task1".to_string(),
-                    "session1".to_string(),
-                    "msg1".to_string(),
-                    MessageRole::User,
-                ),
+            SessionEventType::AgentMessage {
+                content,
             },
         );
 

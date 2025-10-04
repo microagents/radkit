@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::events::EventProcessor;
 use crate::sessions::{QueryService, SessionEvent, SessionEventType};
-use a2a_types::{MessageSendParams, Task, TaskState};
+use a2a_types::{Task, TaskState};
 
 /// Execution context that handles event processing and delegates reads to QueryService
 pub struct ExecutionContext {
@@ -64,17 +64,17 @@ impl ExecutionContext {
     /// Emit task status update event using unified SessionEvent
     pub async fn emit_task_status_update(
         &self,
-        old_state: TaskState,
         new_state: TaskState,
         message: Option<String>,
+        task: Option<Task>,
     ) -> AgentResult<()> {
         let event = SessionEvent::new(
             self.context_id.clone(),
             self.task_id.clone(),
-            SessionEventType::TaskStatusChanged {
-                old_state,
+            SessionEventType::TaskStatusUpdate {
                 new_state,
                 message,
+                task,
             },
         );
         self.event_processor.process_event(event).await
@@ -102,32 +102,11 @@ impl ExecutionContext {
     }
 
     /// Emit artifact saved event using unified SessionEvent
-    pub async fn emit_artifact_save(&self, artifact: a2a_types::Artifact) -> AgentResult<()> {
+    pub async fn emit_artifact_update(&self, artifact: a2a_types::Artifact) -> AgentResult<()> {
         let event = SessionEvent::new(
             self.context_id.clone(),
             self.task_id.clone(),
-            SessionEventType::ArtifactSaved { artifact },
-        );
-        self.event_processor.process_event(event).await
-    }
-
-    /// Emit task created event using unified SessionEvent
-    pub async fn emit_task_created(&self, task: a2a_types::Task) -> AgentResult<()> {
-        let event = SessionEvent::new(
-            self.context_id.clone(),
-            self.task_id.clone(),
-            SessionEventType::TaskCreated { task },
-        );
-        self.event_processor.process_event(event).await
-    }
-
-    /// Emit task completed event using unified SessionEvent
-    /// This will automatically send the final task through A2A streaming
-    pub async fn emit_task_completed(&self, task: a2a_types::Task) -> AgentResult<()> {
-        let event = SessionEvent::new(
-            self.context_id.clone(),
-            self.task_id.clone(),
-            SessionEventType::TaskCompleted { task },
+            SessionEventType::TaskArtifactUpdate { artifact },
         );
         self.event_processor.process_event(event).await
     }

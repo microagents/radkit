@@ -252,10 +252,19 @@ impl SessionService for InMemorySessionService {
 
     /// Store an event in the persistence layer (pure storage)
     async fn store_event(&self, event: &SessionEvent) -> AgentResult<()> {
-        // Handle task indexing for TaskCreated events
-        if let SessionEventType::TaskCreated { .. } = &event.event_type {
-            self.task_index
-                .insert(event.task_id.clone(), event.session_id.clone());
+        // Handle task indexing for TaskSubmitted events
+        if let SessionEventType::TaskStatusUpdate {
+            new_state,
+            message: _,
+            task,
+        } = &event.event_type
+        {
+            if matches!(new_state, a2a_types::TaskState::Submitted) {
+                if let Some(submitted_task) = task {
+                    self.task_index
+                        .insert(submitted_task.id.clone(), event.session_id.clone());
+                }
+            }
         }
 
         self.store_event_in_session(event).await

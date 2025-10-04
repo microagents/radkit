@@ -6,7 +6,7 @@
 use crate::events::{EventProcessor, InMemoryEventBus};
 use crate::models::BaseLlm;
 use crate::sessions::{InMemorySessionService, QueryService, SessionService};
-use crate::tools::{BaseTool, BaseToolset, SimpleToolset};
+use crate::tools::{BaseTool, BaseToolset, CombinedToolset, SimpleToolset};
 use a2a_types::AgentCard;
 use std::sync::Arc;
 
@@ -62,7 +62,6 @@ impl AgentBuilder {
     /// Add a single tool - accepts owned tool
     pub fn with_tool(mut self, tool: impl BaseTool + 'static) -> Self {
         self.tools.push(Box::new(tool));
-        self.toolset = None; // Clear custom toolset if adding individual tools
         self
     }
 
@@ -73,14 +72,12 @@ impl AgentBuilder {
                 .into_iter()
                 .map(|tool| Box::new(tool) as Box<dyn BaseTool>),
         );
-        self.toolset = None;
         self
     }
 
     /// Set a custom toolset (replaces individual tools)
     pub fn with_toolset(mut self, toolset: impl BaseToolset + 'static) -> Self {
         self.toolset = Some(Arc::new(toolset));
-        self.tools.clear(); // Clear individual tools
         self
     }
 
@@ -120,16 +117,26 @@ impl AgentBuilder {
         // Convert owned model to Arc
         let model = Arc::from(self.model);
 
-        // Create toolset - either custom or from individual tools
-        let toolset = if let Some(custom_toolset) = self.toolset {
-            Some(custom_toolset)
-        } else if !self.tools.is_empty() {
-            // Convert owned tools to Arc for toolset
-            let arc_tools: Vec<Arc<dyn BaseTool>> =
-                self.tools.into_iter().map(|tool| Arc::from(tool)).collect();
-            Some(Arc::new(SimpleToolset::new(arc_tools)) as Arc<dyn BaseToolset>)
-        } else {
-            None
+        let toolset: Option<Arc<dyn BaseToolset>> = {
+            let individual_tools: Vec<Arc<dyn BaseTool>> =
+                self.tools.into_iter().map(|t| Arc::from(t)).collect();
+            if let Some(base_toolset) = self.toolset {
+                if individual_tools.is_empty() {
+                    // Only a toolset is provided
+                    Some(base_toolset)
+                } else {
+                    Some(
+                        Arc::new(CombinedToolset::new(base_toolset, individual_tools))
+                            as Arc<dyn BaseToolset>,
+                    )
+                }
+            } else if !individual_tools.is_empty() {
+                // Only individual tools are provided
+                Some(Arc::new(SimpleToolset::new(individual_tools)) as Arc<dyn BaseToolset>)
+            } else {
+                // No tools or toolset
+                None
+            }
         };
 
         // Create or use provided session service
