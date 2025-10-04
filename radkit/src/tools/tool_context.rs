@@ -141,14 +141,8 @@ impl<'a> ToolTaskAccess for ToolContext<'a> {
         new_state: TaskState,
         message: Option<String>,
     ) -> AgentResult<()> {
-        // Get current task to determine old state
-        let current_task = self.get_current_task().await?;
-        let old_state = current_task
-            .map(|t| t.status.state)
-            .unwrap_or(TaskState::Working); // Default assumption
-
         self.execution_context
-            .emit_task_status_update(old_state, new_state, message)
+            .emit_task_status_update(new_state, message, None)
             .await
     }
 }
@@ -156,7 +150,7 @@ impl<'a> ToolTaskAccess for ToolContext<'a> {
 #[async_trait]
 impl<'a> ToolArtifactAccess for ToolContext<'a> {
     async fn save_artifact(&self, artifact: Artifact) -> AgentResult<()> {
-        self.execution_context.emit_artifact_save(artifact).await
+        self.execution_context.emit_artifact_update(artifact).await
     }
 }
 

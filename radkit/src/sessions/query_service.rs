@@ -201,31 +201,48 @@ impl QueryService {
             }
 
             match &event.event_type {
-                SessionEventType::TaskCreated { task } => {
-                    current_task = Some(task.clone());
-                }
-                SessionEventType::TaskStatusChanged { new_state, .. } => {
-                    if let Some(ref mut task) = current_task {
+                SessionEventType::TaskStatusUpdate {
+                    new_state,
+                    message,
+                    task,
+                } => {
+                    if matches!(new_state, a2a_types::TaskState::Submitted) {
+                        if let Some(submitted_task) = task {
+                            current_task = Some(submitted_task.clone());
+                        }
+                    } else if let Some(ref mut task) = current_task {
+                        // Update existing task status
                         task.status.state = new_state.clone();
                         task.status.timestamp = Some(event.timestamp.to_rfc3339());
+                        task.status.message = message.as_ref().map(|msg| a2a_types::Message {
+                            kind: "message".to_string(),
+                            message_id: uuid::Uuid::new_v4().to_string(),
+                            role: a2a_types::MessageRole::Agent,
+                            parts: vec![a2a_types::Part::Text {
+                                text: msg.clone(),
+                                metadata: None,
+                            }],
+                            context_id: Some(event.session_id.clone()),
+                            task_id: Some(event.task_id.clone()),
+                            reference_task_ids: Vec::new(),
+                            extensions: Vec::new(),
+                            metadata: None,
+                        });
                     }
                 }
                 SessionEventType::UserMessage { content }
                 | SessionEventType::AgentMessage { content } => {
                     if let Some(ref mut task) = current_task {
                         // Function calls filtered out by to_a2a_message()
-                        task.history.push(content.to_a2a_message());
+                        let message = content.to_a2a_message();
+                        if let Some(message) = message {
+                            task.history.push(message);
+                        }
                     }
                 }
-                SessionEventType::ArtifactSaved { artifact } => {
+                SessionEventType::TaskArtifactUpdate { artifact } => {
                     if let Some(ref mut task) = current_task {
                         task.artifacts.push(artifact.clone());
-                    }
-                }
-                SessionEventType::TaskCompleted { task }
-                | SessionEventType::TaskFailed { task, .. } => {
-                    if let Some(ref mut cur) = current_task {
-                        cur.status = task.status.clone();
                     }
                 }
                 _ => {} // Other events don't affect task state
@@ -239,8 +256,10 @@ impl QueryService {
     fn extract_task_ids_from_events(&self, events: &[SessionEvent]) -> Vec<String> {
         let mut task_ids = std::collections::HashSet::new();
         for event in events {
-            if let SessionEventType::TaskCreated { .. } = &event.event_type {
-                task_ids.insert(event.task_id.clone());
+            if let SessionEventType::TaskStatusUpdate { new_state, .. } = &event.event_type {
+                if matches!(new_state, a2a_types::TaskState::Submitted) {
+                    task_ids.insert(event.task_id.clone());
+                }
             }
         }
         task_ids.into_iter().collect()

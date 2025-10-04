@@ -136,14 +136,17 @@ impl Content {
     }
 
     /// Convert to A2A Message (filters out function call/response parts)
-    pub fn to_a2a_message(&self) -> Message {
+    pub fn to_a2a_message(&self) -> Option<Message> {
         let a2a_parts: Vec<Part> = self
             .parts
             .iter()
             .filter_map(|part| part.to_a2a_part())
             .collect();
 
-        Message {
+        if a2a_parts.is_empty() {
+            return None;
+        }
+        return Some(Message {
             kind: "message".to_string(),
             message_id: self.message_id.clone(),
             role: self.role.clone(),
@@ -153,7 +156,7 @@ impl Content {
             reference_task_ids: Vec::new(),
             extensions: Vec::new(),
             metadata: self.metadata.clone(),
-        }
+        });
     }
 
     /// Add a text part
@@ -364,8 +367,14 @@ mod tests {
         let message = content.to_a2a_message();
 
         // Only text part should be in A2A message
-        assert_eq!(message.parts.len(), 1);
-        assert!(matches!(&message.parts[0], Part::Text { text, .. } if text == "Response text"));
+        assert!(message.is_some());
+
+        if let Some(message) = message {
+            assert_eq!(message.parts.len(), 1);
+            assert!(
+                matches!(&message.parts[0], Part::Text { text, .. } if text == "Response text")
+            );
+        }
     }
 
     #[test]

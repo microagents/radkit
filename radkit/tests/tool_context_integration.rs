@@ -453,13 +453,12 @@ async fn test_anthropic_tool_context_state_management() {
 
                 state_changes_detected.push(format!("{:?}:{}", scope, key));
             }
-            SessionEventType::TaskStatusChanged {
-                old_state,
+            SessionEventType::TaskStatusUpdate {
                 new_state,
                 ..
             } => {
                 task_status_changes += 1;
-                println!("  📊 Task Status: {:?} → {:?}", old_state, new_state);
+                println!("  📊 Task Status: {:?}", new_state);
             }
             _ => {}
         }

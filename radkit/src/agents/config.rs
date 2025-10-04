@@ -6,10 +6,6 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::agents::Agent;
-use crate::errors::AgentResult;
-use a2a_types::{MessageSendParams, Task, TaskQueryParams};
-
 /// Configuration for agent execution behavior
 #[derive(Debug, Clone)]
 pub struct AgentConfig {

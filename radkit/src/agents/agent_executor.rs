@@ -14,7 +14,7 @@ use crate::sessions::{QueryService, SessionService};
 use crate::tools::BaseToolset;
 use a2a_types::{
     Message, MessageRole, MessageSendParams, SendStreamingMessageResult, Task, TaskState,
-    TaskStatus, TaskStatusUpdateEvent,
+    TaskStatus,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -108,7 +108,7 @@ impl AgentExecutor {
         let existing_task = self
             .get_task(app_name, user_id, &params.message.task_id)
             .await?;
-        let task_id = if let Some(mut existing_task) = existing_task {
+        let task_id = if let Some(existing_task) = existing_task {
             continuous_task = true;
             existing_task.id.clone()
         } else {
@@ -131,7 +131,6 @@ impl AgentExecutor {
             self.query_service.clone(),
         );
 
-        // emit TaskCreated event if not continuing existing task
         if continuous_task == false {
             let task = Task {
                 kind: "task".to_string(),
@@ -146,7 +145,9 @@ impl AgentExecutor {
                 artifacts: vec![],
                 metadata: None,
             };
-            context.emit_task_created(task).await?;
+            context
+                .emit_task_status_update(TaskState::Submitted, None, Some(task))
+                .await?;
         }
 
         // Run conversation loop
@@ -159,7 +160,21 @@ impl AgentExecutor {
             .ok_or_else(|| AgentError::TaskNotFound {
                 task_id: context.task_id.clone(),
             })?;
-        context.emit_task_completed(final_task.clone()).await?;
+
+        // unless the task is already in a terminal state, mark it as completed
+        if matches!(
+            final_task.status.state,
+            TaskState::Completed | TaskState::Failed | TaskState::Canceled | TaskState::Rejected
+        ) {
+            tracing::debug!(
+                "Task {} is already in terminal state, not marking as completed",
+                context.task_id
+            );
+        } else {
+            context
+                .emit_task_status_update(TaskState::Completed, None, None)
+                .await?;
+        }
 
         // Clean up all subscriptions for this task
         let event_bus = self.event_processor.event_bus();
@@ -279,32 +294,6 @@ impl AgentExecutor {
         Ok(())
     }
 
-    /// Set up execution context from MessageSendParams with optional event capture
-    async fn setup_execution_context(
-        &self,
-        app_name: &str,
-        user_id: &str,
-        context_id: &str,
-        task_id: &str,
-        capture_all_events: Option<mpsc::UnboundedSender<crate::sessions::SessionEvent>>,
-        capture_a2a: Option<mpsc::UnboundedSender<SendStreamingMessageResult>>,
-        stream_a2a: Option<mpsc::Sender<SendStreamingMessageResult>>,
-    ) -> AgentResult<ExecutionContext> {
-        // Create unified execution context with Executor's EventProcessor and QueryService
-        let context = ExecutionContext::new(
-            context_id.to_string(),
-            task_id.to_string(),
-            app_name.to_string(),
-            user_id.to_string(),
-            self.event_processor.clone(),
-            self.query_service.clone(),
-        );
-
-        // Set up event subscriptions if capture or streaming is requested
-
-        Ok(context)
-    }
-
     /// Run the main conversation loop with tool calling
     async fn run_conversation_loop(
         &self,
@@ -391,20 +380,10 @@ impl AgentExecutor {
         context: &ExecutionContext,
         _max_iterations: usize,
     ) -> AgentResult<()> {
-        // Get current task state and emit failure
-        let task = self
-            .query_service
-            .get_task(&context.app_name, &context.user_id, &context.task_id)
-            .await?;
-
-        let old_state = task
-            .map(|t| t.status.state)
-            .unwrap_or(a2a_types::TaskState::Working);
-
         // Emit to persistent storage
         // Todo: add message here says "Iteration limit exceeded"
         context
-            .emit_task_status_update(old_state, a2a_types::TaskState::Failed, None)
+            .emit_task_status_update(a2a_types::TaskState::Failed, None, None)
             .await
     }
 

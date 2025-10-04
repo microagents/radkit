@@ -263,9 +263,4 @@ impl LlmResponse {
             })
             .collect()
     }
-
-    /// Get the underlying A2A message (without function extensions)
-    pub fn to_a2a_message(&self) -> Message {
-        self.message.to_a2a_message()
-    }
 }
