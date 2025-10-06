@@ -1,6 +1,7 @@
 use super::{BaseLlm, LlmRequest, LlmResponse, ProviderCapabilities};
 use crate::errors::{AgentError, AgentResult};
 use crate::models::content::{Content, ContentPart};
+use crate::observability::utils as obs_utils;
 use a2a_types::MessageRole;
 use async_trait::async_trait;
 use futures::Stream;
@@ -24,6 +25,19 @@ impl BaseLlm for MockLlm {
         &self.model_name
     }
 
+    #[tracing::instrument(
+        name = "radkit.llm.generate_content",
+        skip(self, request),
+        fields(
+            llm.provider = "mock",
+            llm.model = %self.model_name,
+            llm.request.messages_count = request.messages.len(),
+            llm.response.prompt_tokens = 10,
+            llm.response.completion_tokens = 20,
+            llm.response.total_tokens = 30,
+            otel.kind = "client",
+        )
+    )]
     async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse> {
         // **PROPER CONVERSATION HISTORY**: Access full message history from LlmRequest
         let conversation_context = format!(
@@ -117,6 +131,7 @@ impl BaseLlm for MockLlm {
                 metadata: None,
             };
 
+            obs_utils::record_success();
             return Ok(LlmResponse::success(response_content));
         }
 
@@ -137,6 +152,7 @@ impl BaseLlm for MockLlm {
             metadata: None,
         };
 
+        obs_utils::record_success();
         Ok(LlmResponse::success(response_content))
     }
 

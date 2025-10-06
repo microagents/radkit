@@ -1,6 +1,7 @@
 use super::{BaseLlm, LlmRequest, LlmResponse, ProviderCapabilities};
 use crate::errors::{AgentError, AgentResult};
 use crate::models::content::{Content, ContentPart};
+use crate::observability::utils as obs_utils;
 use crate::tools::BaseToolset;
 use a2a_types::MessageRole;
 use async_trait::async_trait;
@@ -105,6 +106,13 @@ struct AnthropicResponse {
     model: String,
     #[allow(dead_code)]
     role: String,
+    usage: AnthropicUsage,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicUsage {
+    input_tokens: u64,
+    output_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -267,6 +275,20 @@ impl BaseLlm for AnthropicLlm {
         &self.model_name
     }
 
+    #[tracing::instrument(
+        name = "radkit.llm.generate_content",
+        skip(self, request),
+        fields(
+            llm.provider = "anthropic",
+            llm.model = %self.model_name,
+            llm.request.messages_count = request.messages.len(),
+            llm.response.prompt_tokens = tracing::field::Empty,
+            llm.response.completion_tokens = tracing::field::Empty,
+            llm.response.total_tokens = tracing::field::Empty,
+            llm.cost_usd = tracing::field::Empty,
+            otel.kind = "client",
+        )
+    )]
     async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse> {
         // Convert Content messages to Anthropic messages
         let anthropic_messages = Self::content_messages_to_anthropic_messages(
@@ -321,17 +343,20 @@ impl BaseLlm for AnthropicLlm {
             error!("Anthropic API error: {}", error_text);
 
             // Try to parse as structured error
-            if let Ok(error) = serde_json::from_str::<AnthropicError>(&error_text) {
-                return Err(AgentError::LlmProvider {
+            let err = if let Ok(error) = serde_json::from_str::<AnthropicError>(&error_text) {
+                AgentError::LlmProvider {
                     provider: "anthropic".to_string(),
                     message: error.error.message,
-                });
+                }
             } else {
-                return Err(AgentError::LlmProvider {
+                AgentError::LlmProvider {
                     provider: "anthropic".to_string(),
                     message: error_text,
-                });
-            }
+                }
+            };
+
+            obs_utils::record_error(&err);
+            return Err(err);
         }
 
         let anthropic_response: AnthropicResponse =
@@ -359,6 +384,22 @@ impl BaseLlm for AnthropicLlm {
             parts: content_parts,
             metadata: None,
         };
+
+        // Record token usage and cost
+        let prompt_tokens = anthropic_response.usage.input_tokens;
+        let completion_tokens = anthropic_response.usage.output_tokens;
+        let total_tokens = prompt_tokens + completion_tokens;
+
+        let span = tracing::Span::current();
+        span.record("llm.response.prompt_tokens", prompt_tokens);
+        span.record("llm.response.completion_tokens", completion_tokens);
+        span.record("llm.response.total_tokens", total_tokens);
+
+        let cost = obs_utils::calculate_llm_cost(&self.model_name, prompt_tokens, completion_tokens);
+        span.record("llm.cost_usd", cost);
+
+        obs_utils::record_llm_tokens_metric(&self.model_name, prompt_tokens, completion_tokens);
+        obs_utils::record_success();
 
         Ok(LlmResponse::success(response_content))
     }

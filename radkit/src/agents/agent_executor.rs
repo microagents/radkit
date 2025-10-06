@@ -10,6 +10,7 @@ use crate::models::{
     BaseLlm, LlmRequest,
     content::{Content, FunctionResponseParams},
 };
+use crate::observability::utils as obs_utils;
 use crate::sessions::{QueryService, SessionService};
 use crate::tools::BaseToolset;
 use a2a_types::{
@@ -295,6 +296,15 @@ impl AgentExecutor {
     }
 
     /// Run the main conversation loop with tool calling
+    #[tracing::instrument(
+        name = "radkit.conversation.execute_core",
+        skip(self, initial_message, context),
+        fields(
+            task.id = %context.task_id,
+            iteration.count = tracing::field::Empty,
+            otel.kind = "internal",
+        )
+    )]
     async fn run_conversation_loop(
         &self,
         mut initial_message: Message,
@@ -311,16 +321,26 @@ impl AgentExecutor {
             context.task_id.clone(),
             context.context_id.clone(),
         );
-        context.emit_user_input(initial_content).await?;
+        context.emit_user_input(initial_content).await.map_err(|e| {
+            obs_utils::record_error(&e);
+            e
+        })?;
 
         loop {
             if iteration >= max_iterations {
                 self.handle_iteration_limit_exceeded(context, max_iterations)
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        obs_utils::record_error(&e);
+                        e
+                    })?;
                 break;
             }
 
             iteration += 1;
+            // Update iteration count in span
+            tracing::Span::current().record("iteration.count", iteration);
+
             tracing::debug!(
                 "Conversation iteration {} for task {}",
                 iteration,
@@ -371,6 +391,7 @@ impl AgentExecutor {
             // Continue loop for next iteration
         }
 
+        obs_utils::record_success();
         Ok(())
     }
 
@@ -388,12 +409,24 @@ impl AgentExecutor {
     }
 
     /// Process tool calls in a message and emit function responses
+    #[tracing::instrument(
+        name = "radkit.tools.process_calls",
+        skip(self, content, context),
+        fields(
+            task.id = %context.task_id,
+            tools.count = tracing::field::Empty,
+            tools.total_duration_ms = tracing::field::Empty,
+            otel.kind = "internal",
+        )
+    )]
     async fn process_tool_calls(
         &self,
         content: &Content,
         context: &ExecutionContext,
     ) -> AgentResult<bool> {
         let mut has_function_calls = false;
+        let mut tool_count = 0;
+        let mut total_duration = 0u64;
 
         for part in &content.parts {
             if let crate::models::content::ContentPart::FunctionCall {
@@ -404,11 +437,28 @@ impl AgentExecutor {
             } = part
             {
                 has_function_calls = true;
+                tool_count += 1;
+
+                // Create individual span for each tool execution
+                let tool_span = tracing::info_span!(
+                    "radkit.tool.execute_call",
+                    tool.name = %name,
+                    tool.success = tracing::field::Empty,
+                    tool.duration_ms = tracing::field::Empty,
+                );
+
+                let _guard = tool_span.enter();
                 let start_time = std::time::Instant::now();
 
                 // Execute the tool
                 let tool_result = self.execute_tool_call(name, arguments, context).await;
                 let duration_ms = start_time.elapsed().as_millis() as u64;
+                total_duration += duration_ms;
+
+                // Record tool metrics
+                tool_span.record("tool.success", tool_result.success);
+                tool_span.record("tool.duration_ms", duration_ms);
+                obs_utils::record_tool_execution_metric(name, tool_result.success);
 
                 // Create and emit function response as UserMessage (it's input back to the agent)
                 let mut response_content = Content::new(
@@ -432,6 +482,11 @@ impl AgentExecutor {
                 context.emit_user_input(response_content).await?;
             }
         }
+
+        // Record aggregate metrics on parent span
+        let span = tracing::Span::current();
+        span.record("tools.count", tool_count);
+        span.record("tools.total_duration_ms", total_duration);
 
         Ok(has_function_calls)
     }

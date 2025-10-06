@@ -2,6 +2,7 @@ pub mod agents;
 pub mod errors;
 pub mod events;
 pub mod models;
+pub mod observability;
 pub mod sessions;
 pub mod tools;
 
