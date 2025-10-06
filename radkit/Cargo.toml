@@ -27,5 +27,18 @@ chrono = { version = "0.4.41", features = ["serde"] }
 dashmap = "6.1.0"
 rmcp = { version = "0.6.3", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
+# Observability dependencies
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "registry", "fmt"] }
+tracing-opentelemetry = "0.23.0"
+opentelemetry = "0.22.0"
+opentelemetry_sdk = { version = "0.22.1", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.15.0", features = ["tokio", "grpc-tonic", "http-proto"] }
+opentelemetry-semantic-conventions = "0.14.0"
+opentelemetry-stdout = { version = "0.3.0", features = ["trace"] }
+tonic = "0.11"
+sha2 = "0.10"
+regex = "1.10"
+once_cell = "1.19"
+
 [dev-dependencies]
 dotenvy = "0.15"

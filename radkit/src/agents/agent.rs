@@ -7,10 +7,12 @@ use super::agent_builder::AgentBuilder;
 use super::agent_executor::AgentExecutor;
 use crate::agents::{SendMessageResultWithEvents, SendStreamingMessageResultWithEvents};
 use crate::errors::AgentResult;
+use crate::observability::utils as obs_utils;
 use a2a_types::{AgentCard, MessageSendParams, SendMessageResult, Task};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
+use tracing::Instrument;
 
 pub struct Agent {
     /// Agent metadata (name, description, version, capabilities, etc.)
@@ -69,12 +71,29 @@ impl Agent {
     // ===== A2A Protocol Methods =====
 
     /// Send a message and get response with all events (non-streaming)
+    #[tracing::instrument(
+        name = "radkit.agent.send_message",
+        skip(self, params),
+        fields(
+            agent.name = %self.agent_card.name,
+            app.name = %app_name,
+            user.id = tracing::field::Empty,
+            agent.session_id = tracing::field::Empty,
+            message.role = ?params.message.role,
+            otel.kind = "server",
+            otel.status_code = tracing::field::Empty,
+            error.message = tracing::field::Empty,
+        )
+    )]
     pub async fn send_message(
         &self,
         app_name: String,
         user_id: String,
         params: MessageSendParams,
     ) -> AgentResult<SendMessageResultWithEvents> {
+        // Record PII-safe user ID
+        tracing::Span::current().record("user.id", obs_utils::hash_user_id(&user_id).as_str());
+
         // Create channels to capture events (dual capture system like original)
         let (all_tx, mut all_rx) = mpsc::unbounded_channel();
         let (a2a_tx, mut a2a_rx) = mpsc::unbounded_channel();
@@ -90,7 +109,17 @@ impl Agent {
                 Some(a2a_tx), // Capture A2A events separately
                 None,         // No streaming
             )
-            .await?;
+            .await
+            .map_err(|e| {
+                obs_utils::record_error(&e);
+                obs_utils::record_agent_message_metric(&self.agent_card.name, false);
+                e
+            })?;
+
+        // Record session_id now that we have the result
+        if let Some(ref task) = result.task {
+            tracing::Span::current().record("agent.session_id", &task.context_id);
+        }
 
         // Collect all events
         let mut all_events = Vec::new();
@@ -113,6 +142,9 @@ impl Agent {
             });
         };
 
+        obs_utils::record_success();
+        obs_utils::record_agent_message_metric(&self.agent_card.name, true);
+
         Ok(SendMessageResultWithEvents {
             result: task_result,
             all_events,
@@ -121,12 +153,35 @@ impl Agent {
     }
 
     /// Send a streaming message and get real-time event streams
+    #[tracing::instrument(
+        name = "radkit.agent.send_streaming_message",
+        skip(self, params),
+        fields(
+            agent.name = %self.agent_card.name,
+            app.name = %app_name,
+            user.id = tracing::field::Empty,
+            agent.session_id = tracing::field::Empty,
+            message.role = ?params.message.role,
+            streaming = true,
+            otel.kind = "server",
+            otel.status_code = tracing::field::Empty,
+            error.message = tracing::field::Empty,
+        )
+    )]
     pub async fn send_streaming_message(
         &self,
         app_name: String,
         user_id: String,
         params: MessageSendParams,
     ) -> AgentResult<SendStreamingMessageResultWithEvents> {
+        // Record PII-safe user ID
+        tracing::Span::current().record("user.id", obs_utils::hash_user_id(&user_id).as_str());
+
+        // Capture span context for background task
+        let span = tracing::Span::current();
+        let context_id = params.message.context_id.clone();
+        let agent_name = self.agent_card.name.clone();
+
         // Create channels for streaming
         let (stream_tx, stream_rx) = mpsc::channel(100);
         let (all_tx, all_rx) = mpsc::unbounded_channel();
@@ -135,24 +190,39 @@ impl Agent {
         let executor = Arc::clone(&self.executor);
 
         // Spawn background task to execute conversation
-        tokio::spawn(async move {
-            let result = executor
-                .execute_conversation(
-                    &app_name,
-                    &user_id,
-                    params,
-                    Some(all_tx),    // Capture all events
-                    None,            // A2A events go to stream, not capture
-                    Some(stream_tx), // Enable streaming
-                )
-                .await;
+        tokio::spawn(
+            async move {
+                let result = executor
+                    .execute_conversation(
+                        &app_name,
+                        &user_id,
+                        params,
+                        Some(all_tx),    // Capture all events
+                        None,            // A2A events go to stream, not capture
+                        Some(stream_tx), // Enable streaming
+                    )
+                    .await;
 
-            // Handle any errors (could send error event to stream)
-            if let Err(e) = result {
-                tracing::error!("Streaming conversation failed: {:?}", e);
-                // Could emit error event here if needed
+                // Handle any errors (could send error event to stream)
+                match result {
+                    Ok(_) => {
+                        obs_utils::record_success();
+                        obs_utils::record_agent_message_metric(&agent_name, true);
+                    }
+                    Err(e) => {
+                        obs_utils::record_error(&e);
+                        obs_utils::record_agent_message_metric(&agent_name, false);
+                        tracing::error!("Streaming conversation failed: {:?}", e);
+                    }
+                }
             }
-        });
+            .instrument(span),
+        );
+
+        // Record session_id if available
+        if let Some(ctx_id) = context_id {
+            tracing::Span::current().record("agent.session_id", &ctx_id);
+        }
 
         // Return streaming result with both channels
         Ok(SendStreamingMessageResultWithEvents {

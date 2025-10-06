@@ -1,6 +1,7 @@
 use super::{BaseLlm, LlmRequest, LlmResponse, ProviderCapabilities};
 use crate::errors::{AgentError, AgentResult};
 use crate::models::content::{Content, ContentPart};
+use crate::observability::utils as obs_utils;
 use crate::tools::BaseToolset;
 use a2a_types::MessageRole;
 use async_trait::async_trait;
@@ -99,6 +100,19 @@ struct GenerationConfig {
 #[derive(Debug, Deserialize)]
 struct GeminiResponse {
     candidates: Vec<Candidate>,
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiUsageMetadata {
+    #[serde(rename = "promptTokenCount")]
+    prompt_token_count: u64,
+    #[serde(rename = "candidatesTokenCount")]
+    candidates_token_count: u64,
+    #[serde(rename = "totalTokenCount")]
+    #[allow(dead_code)]
+    total_token_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -278,6 +292,20 @@ impl BaseLlm for GeminiLlm {
         &self.model_name
     }
 
+    #[tracing::instrument(
+        name = "radkit.llm.generate_content",
+        skip(self, request),
+        fields(
+            llm.provider = "gemini",
+            llm.model = %self.model_name,
+            llm.request.messages_count = request.messages.len(),
+            llm.response.prompt_tokens = tracing::field::Empty,
+            llm.response.completion_tokens = tracing::field::Empty,
+            llm.response.total_tokens = tracing::field::Empty,
+            llm.cost_usd = tracing::field::Empty,
+            otel.kind = "client",
+        )
+    )]
     async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse> {
         // Convert Content messages to Gemini contents
         let gemini_contents =
@@ -374,6 +402,25 @@ impl BaseLlm for GeminiLlm {
             parts: content_parts,
             metadata: None,
         };
+
+        // Record token usage and cost
+        let (prompt_tokens, completion_tokens) = if let Some(usage) = gemini_response.usage_metadata {
+            (usage.prompt_token_count, usage.candidates_token_count)
+        } else {
+            (0, 0)
+        };
+        let total_tokens = prompt_tokens + completion_tokens;
+
+        let span = tracing::Span::current();
+        span.record("llm.response.prompt_tokens", prompt_tokens);
+        span.record("llm.response.completion_tokens", completion_tokens);
+        span.record("llm.response.total_tokens", total_tokens);
+
+        let cost = obs_utils::calculate_llm_cost(&self.model_name, prompt_tokens, completion_tokens);
+        span.record("llm.cost_usd", cost);
+
+        obs_utils::record_llm_tokens_metric(&self.model_name, prompt_tokens, completion_tokens);
+        obs_utils::record_success();
 
         Ok(LlmResponse::success(response_content))
     }

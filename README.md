@@ -165,6 +165,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **A2A Events**: Automatic generation of protocol-compliant events
 - **Built-in Tools**: `update_status` and `save_artifact` with event emission
 
+### Production-Ready Observability
+- **OpenTelemetry Native**: Industry-standard distributed tracing and metrics
+- **Seamless Integration**: Works with your existing observability stack (Jaeger, Zipkin, Datadog, etc.)
+- **W3C Trace Context**: Automatic trace propagation across service boundaries
+- **4 Integration Patterns**: Standalone, embedded library, multi-agent, or use parent's telemetry
+- **Full Instrumentation**: Agent calls, LLM requests, tool executions, conversation loops
+- **PII Protection**: GDPR-compliant user ID hashing and sensitive data redaction
+- **Cost Tracking**: Built-in LLM cost calculation with configurable pricing
+
+## Observability Integration
+
+RadKit seamlessly integrates with your existing OpenTelemetry setup. If your service already has tracing configured, RadKit will automatically continue those traces:
+
+```rust
+// Your existing service with OpenTelemetry
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Your existing OpenTelemetry setup
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(opentelemetry_otlp::new_exporter().tonic())
+        .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+
+    // Configure RadKit to use your existing telemetry (Pattern 4)
+    radkit::observability::configure_radkit_telemetry(
+        radkit::observability::TelemetryConfig {
+            backend: radkit::observability::TelemetryBackend::UseGlobal,
+            redact_pii: true,
+            ..Default::default()
+        }
+    )?;
+
+    // Now all RadKit operations appear in your existing traces!
+    let agent = Agent::builder("You are helpful", llm).build();
+
+    // This will be a child span of any active trace in your service
+    agent.send_message(app, user, params).await?;
+
+    Ok(())
+}
+```
+
+**Result:** Your service → RadKit agent → LLM calls all appear as one distributed trace with the same trace ID.
+
+For more details, see the observability documentation in [`radkit/README.md`](radkit/README.md#production-observability).
+
 ## Quick Start Guide
 
 <div id="centered-install-tabs" class="install-command-container" markdown="1">
