@@ -1,7 +1,7 @@
 use axum::{
     extract::{Extension, State},
-    http::StatusCode,
-    response::{IntoResponse, Sse},
+    http::HeaderMap,
+    response::{IntoResponse, Response, Sse},
     routing::{get, post},
     Json, Router,
 };
@@ -12,8 +12,38 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use crate::{
     auth::AuthContext,
     error::{Error, Result},
-    json_rpc::{JsonRpcRequest, JsonRpcResponse},
 };
+
+use a2a_types::{JSONRPCErrorResponse, JSONRPCId, JSONRPCRequest, JSONRPCSuccessResponse};
+
+/// JSON-RPC 2.0 Response (can be either success or error)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum JsonRpcResponse {
+    Success(JSONRPCSuccessResponse),
+    Error(JSONRPCErrorResponse),
+}
+
+impl JsonRpcResponse {
+    /// Create a success response
+    fn success(id: Option<JSONRPCId>, result: serde_json::Value) -> Self {
+        JsonRpcResponse::Success(JSONRPCSuccessResponse {
+            jsonrpc: "2.0".to_string(),
+            result,
+            id,
+        })
+    }
+}
+
+/// Validate JSON-RPC request
+fn validate_request(req: &JSONRPCRequest) -> Result<()> {
+    if req.jsonrpc != "2.0" {
+        return Err(Error::InvalidRequest(
+            "Invalid JSON-RPC version".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 /// State shared across all routes
 #[derive(Clone)]
@@ -24,30 +54,90 @@ pub struct ServerState {
 /// Create all A2A protocol routes
 pub fn create_routes(state: ServerState) -> Router {
     Router::new()
-        // Core A2A protocol endpoints (JSON-RPC)
-        .route("/message/send", post(message_send))
-        .route("/message/stream", post(message_stream))
-        .route("/tasks/get", post(tasks_get))
-        .route("/tasks/cancel", post(tasks_cancel))
-        .route("/tasks/resubscribe", post(tasks_resubscribe))
+        // Standard A2A: Single endpoint with JSON-RPC method-based routing
+        .route("/", post(json_rpc_handler))
         // Agent Card endpoints
         .route("/.well-known/agent-card.json", get(agent_card))
-        .route(
-            "/agent/getAuthenticatedExtendedCard",
-            post(authenticated_agent_card),
-        )
         .with_state(state)
 }
 
-/// Handler for message/send
-async fn message_send(
+/// Main JSON-RPC handler that routes based on method field
+async fn json_rpc_handler(
     State(state): State<ServerState>,
     Extension(auth): Extension<AuthContext>,
-    Json(request): Json<JsonRpcRequest>,
-) -> Result<Json<JsonRpcResponse>> {
+    headers: HeaderMap,
+    Json(request): Json<JSONRPCRequest>,
+) -> Response {
     // Validate JSON-RPC request
-    crate::json_rpc::validate_request(&request)?;
+    if let Err(e) = validate_request(&request) {
+        return e.into_response();
+    }
 
+    // Check if client wants streaming based on Accept header
+    let wants_streaming = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/event-stream"))
+        .unwrap_or(false);
+
+    // Route based on method
+    match request.method.as_str() {
+        "message/send" => {
+            if wants_streaming {
+                // Handle as streaming
+                match handle_message_stream(state, auth, request).await {
+                    Ok(sse) => sse.into_response(),
+                    Err(e) => e.into_response(),
+                }
+            } else {
+                // Handle as non-streaming
+                match handle_message_send(state, auth, request).await {
+                    Ok(json) => json.into_response(),
+                    Err(e) => e.into_response(),
+                }
+            }
+        }
+        "message/stream" => {
+            // Always streaming
+            match handle_message_stream(state, auth, request).await {
+                Ok(sse) => sse.into_response(),
+                Err(e) => e.into_response(),
+            }
+        }
+        "tasks/get" => match handle_tasks_get(state, auth, request).await {
+            Ok(json) => json.into_response(),
+            Err(e) => e.into_response(),
+        },
+        "tasks/cancel" => match handle_tasks_cancel(request).await {
+            Ok(json) => json.into_response(),
+            Err(e) => e.into_response(),
+        },
+        "tasks/resubscribe" => match handle_tasks_resubscribe(request).await {
+            Ok(sse) => sse.into_response(),
+            Err(e) => e.into_response(),
+        },
+        "tasks/list" => match handle_tasks_list(state, auth, request).await {
+            Ok(json) => json.into_response(),
+            Err(e) => e.into_response(),
+        },
+        "agent/getAuthenticatedExtendedCard" => {
+            match handle_authenticated_agent_card(state, request).await {
+                Ok(json) => json.into_response(),
+                Err(e) => e.into_response(),
+            }
+        }
+        _ => {
+            Error::MethodNotFound(format!("Method '{}' not found", request.method)).into_response()
+        }
+    }
+}
+
+/// Handle message/send
+async fn handle_message_send(
+    state: ServerState,
+    auth: AuthContext,
+    request: JSONRPCRequest,
+) -> Result<Json<JsonRpcResponse>> {
     // Parse params
     let params: a2a_types::MessageSendParams = if let Some(p) = request.params {
         serde_json::from_value(p).map_err(|e| Error::InvalidParams(e.to_string()))?
@@ -72,15 +162,12 @@ async fn message_send(
     )))
 }
 
-/// Handler for message/stream (SSE)
-async fn message_stream(
-    State(state): State<ServerState>,
-    Extension(auth): Extension<AuthContext>,
-    Json(request): Json<JsonRpcRequest>,
+/// Handle message/stream (SSE)
+async fn handle_message_stream(
+    state: ServerState,
+    auth: AuthContext,
+    request: JSONRPCRequest,
 ) -> Result<Sse<impl Stream<Item = std::result::Result<axum::response::sse::Event, Infallible>>>> {
-    // Validate JSON-RPC request
-    crate::json_rpc::validate_request(&request)?;
-
     // Parse params
     let params: a2a_types::MessageSendParams = if let Some(p) = request.params {
         serde_json::from_value(p).map_err(|e| Error::InvalidParams(e.to_string()))?
@@ -116,15 +203,12 @@ async fn message_stream(
     ))
 }
 
-/// Handler for tasks/get
-async fn tasks_get(
-    State(state): State<ServerState>,
-    Extension(auth): Extension<AuthContext>,
-    Json(request): Json<JsonRpcRequest>,
+/// Handle tasks/get
+async fn handle_tasks_get(
+    state: ServerState,
+    auth: AuthContext,
+    request: JSONRPCRequest,
 ) -> Result<Json<JsonRpcResponse>> {
-    // Validate JSON-RPC request
-    crate::json_rpc::validate_request(&request)?;
-
     // Parse params
     let params: a2a_types::TaskQueryParams = if let Some(p) = request.params {
         serde_json::from_value(p).map_err(|e| Error::InvalidParams(e.to_string()))?
@@ -146,26 +230,37 @@ async fn tasks_get(
     )))
 }
 
-/// Handler for tasks/cancel
-async fn tasks_cancel(
-    State(_state): State<ServerState>,
-    Extension(_auth): Extension<AuthContext>,
-    Json(request): Json<JsonRpcRequest>,
+/// Handle tasks/list (non-standard but commonly implemented)
+async fn handle_tasks_list(
+    state: ServerState,
+    auth: AuthContext,
+    request: JSONRPCRequest,
 ) -> Result<Json<JsonRpcResponse>> {
-    // Validate JSON-RPC request
-    crate::json_rpc::validate_request(&request)?;
+    // Call agent (context_id filtering not yet implemented in radkit)
+    let tasks = state
+        .agent
+        .list_tasks(&auth.app_name, &auth.user_id)
+        .await
+        .map_err(Error::Agent)?;
 
+    // Return JSON-RPC response
+    Ok(Json(JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(tasks)?,
+    )))
+}
+
+/// Handle tasks/cancel
+async fn handle_tasks_cancel(_request: JSONRPCRequest) -> Result<Json<JsonRpcResponse>> {
     // Task cancellation not yet implemented in radkit
     Err(Error::MethodNotFound(
         "tasks/cancel not yet implemented".to_string(),
     ))
 }
 
-/// Handler for tasks/resubscribe (SSE)
-async fn tasks_resubscribe(
-    State(_state): State<ServerState>,
-    Extension(_auth): Extension<AuthContext>,
-    Json(_request): Json<JsonRpcRequest>,
+/// Handle tasks/resubscribe (SSE)
+async fn handle_tasks_resubscribe(
+    _request: JSONRPCRequest,
 ) -> Result<Sse<impl Stream<Item = std::result::Result<axum::response::sse::Event, Infallible>>>> {
     // For now, return an error stream
     use futures::stream;
@@ -179,17 +274,20 @@ async fn tasks_resubscribe(
     Ok(Sse::new(error_stream))
 }
 
-/// Handler for agent card (public)
-async fn agent_card(State(state): State<ServerState>) -> Json<a2a_types::AgentCard> {
-    Json(state.agent.agent_card.clone())
-}
-
-/// Handler for authenticated agent card
-async fn authenticated_agent_card(
-    State(state): State<ServerState>,
-    Extension(_auth): Extension<AuthContext>,
-) -> Json<a2a_types::AgentCard> {
+/// Handle authenticated agent card
+async fn handle_authenticated_agent_card(
+    state: ServerState,
+    request: JSONRPCRequest,
+) -> Result<Json<JsonRpcResponse>> {
     // For now, return the same card
     // In production, might return additional skills or configuration
+    Ok(Json(JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(&state.agent.agent_card)?,
+    )))
+}
+
+/// Handler for agent card (public)
+async fn agent_card(State(state): State<ServerState>) -> Json<a2a_types::AgentCard> {
     Json(state.agent.agent_card.clone())
 }
