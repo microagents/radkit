@@ -210,6 +210,57 @@ impl A2AClient {
         })
     }
 
+    /// Create a new A2A client from an agent card with custom headers
+    ///
+    /// This is a convenience method that builds a reqwest::Client with the provided
+    /// headers and uses it to create the A2AClient.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use a2a_client::A2AClient;
+    /// use a2a_types::AgentCard;
+    /// use std::collections::HashMap;
+    ///
+    /// # fn example(agent_card: AgentCard) -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut headers = HashMap::new();
+    /// headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+    /// headers.insert("X-API-Key".to_string(), "my-api-key".to_string());
+    ///
+    /// let client = A2AClient::from_card_with_headers(agent_card, headers)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_card_with_headers(
+        agent_card: AgentCard,
+        headers: std::collections::HashMap<String, String>,
+    ) -> A2AResult<Self> {
+        use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+        use std::str::FromStr;
+
+        let mut header_map = HeaderMap::new();
+        for (key, value) in headers {
+            let header_name =
+                HeaderName::from_str(&key).map_err(|e| A2AError::InvalidParameter {
+                    message: format!("Invalid header name '{}': {}", key, e),
+                })?;
+            let header_value =
+                HeaderValue::from_str(&value).map_err(|e| A2AError::InvalidParameter {
+                    message: format!("Invalid header value for '{}': {}", key, e),
+                })?;
+            header_map.insert(header_name, header_value);
+        }
+
+        let http_client = Client::builder()
+            .default_headers(header_map)
+            .build()
+            .map_err(|e| A2AError::NetworkError {
+                message: format!("Failed to build HTTP client with headers: {}", e),
+            })?;
+
+        Self::from_card_with_client(agent_card, http_client)
+    }
+
     /// Set authentication token (builder pattern)
     pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
         self.auth_token = Some(token.into());
@@ -786,5 +837,72 @@ mod tests {
         };
 
         assert!(A2AClient::from_card(card_without_url).is_err());
+    }
+
+    #[test]
+    fn test_from_card_with_headers() {
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+        headers.insert("X-API-Key".to_string(), "my-api-key".to_string());
+
+        let card = AgentCard {
+            name: "Test".to_string(),
+            description: "Test agent".to_string(),
+            version: "1.0.0".to_string(),
+            protocol_version: "0.3.0".to_string(),
+            url: "https://example.com".to_string(),
+            preferred_transport: a2a_types::TransportProtocol::JsonRpc,
+            capabilities: a2a_types::AgentCapabilities::default(),
+            default_input_modes: vec![],
+            default_output_modes: vec![],
+            skills: vec![],
+            provider: None,
+            additional_interfaces: vec![],
+            documentation_url: None,
+            icon_url: None,
+            security: vec![],
+            security_schemes: None,
+            signatures: vec![],
+            supports_authenticated_extended_card: None,
+        };
+
+        let result = A2AClient::from_card_with_headers(card, headers);
+        assert!(result.is_ok());
+
+        let client = result.unwrap();
+        assert_eq!(client.service_endpoint_url, "https://example.com");
+    }
+
+    #[test]
+    fn test_from_card_with_invalid_header_name() {
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("Invalid Header Name!".to_string(), "value".to_string());
+
+        let card = AgentCard {
+            name: "Test".to_string(),
+            description: "Test agent".to_string(),
+            version: "1.0.0".to_string(),
+            protocol_version: "0.3.0".to_string(),
+            url: "https://example.com".to_string(),
+            preferred_transport: a2a_types::TransportProtocol::JsonRpc,
+            capabilities: a2a_types::AgentCapabilities::default(),
+            default_input_modes: vec![],
+            default_output_modes: vec![],
+            skills: vec![],
+            provider: None,
+            additional_interfaces: vec![],
+            documentation_url: None,
+            icon_url: None,
+            security: vec![],
+            security_schemes: None,
+            signatures: vec![],
+            supports_authenticated_extended_card: None,
+        };
+
+        let result = A2AClient::from_card_with_headers(card, headers);
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert!(matches!(err, A2AError::InvalidParameter { .. }));
+        }
     }
 }
