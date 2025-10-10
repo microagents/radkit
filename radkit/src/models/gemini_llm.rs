@@ -404,7 +404,8 @@ impl BaseLlm for GeminiLlm {
         };
 
         // Record token usage and cost
-        let (prompt_tokens, completion_tokens) = if let Some(usage) = gemini_response.usage_metadata {
+        let (prompt_tokens, completion_tokens) = if let Some(usage) = gemini_response.usage_metadata
+        {
             (usage.prompt_token_count, usage.candidates_token_count)
         } else {
             (0, 0)
@@ -416,7 +417,8 @@ impl BaseLlm for GeminiLlm {
         span.record("llm.response.completion_tokens", completion_tokens);
         span.record("llm.response.total_tokens", total_tokens);
 
-        let cost = obs_utils::calculate_llm_cost(&self.model_name, prompt_tokens, completion_tokens);
+        let cost =
+            obs_utils::calculate_llm_cost(&self.model_name, prompt_tokens, completion_tokens);
         span.record("llm.cost_usd", cost);
 
         obs_utils::record_llm_tokens_metric(&self.model_name, prompt_tokens, completion_tokens);

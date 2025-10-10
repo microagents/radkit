@@ -138,7 +138,11 @@ pub fn record_agent_message_metric(agent_name: &str, success: bool) {
 
 /// Record LLM token usage metric
 pub fn record_llm_tokens_metric(model: &str, prompt_tokens: u64, completion_tokens: u64) {
-    crate::observability::metrics::record_llm_tokens_metric(model, prompt_tokens, completion_tokens);
+    crate::observability::metrics::record_llm_tokens_metric(
+        model,
+        prompt_tokens,
+        completion_tokens,
+    );
 }
 
 /// Record tool execution metric

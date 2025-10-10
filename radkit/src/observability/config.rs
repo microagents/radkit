@@ -154,8 +154,7 @@ impl Default for TelemetryConfig {
                 default_ratio: sample_rate,
             },
             enable_console: cfg!(debug_assertions),
-            log_level: std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "info".to_string()),
+            log_level: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
             redact_pii: true,
             llm_pricing: vec![],
             trusted_trace_sources: HashSet::new(),

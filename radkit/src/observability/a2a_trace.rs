@@ -154,10 +154,7 @@ pub fn extract_trace_context_safe(
         }
 
         // Check if sender is in whitelist
-        if !config
-            .trusted_trace_sources
-            .contains(sender_agent_name)
-        {
+        if !config.trusted_trace_sources.contains(sender_agent_name) {
             tracing::warn!(
                 "Rejecting trace from untrusted source: '{}' (not in whitelist)",
                 sender_agent_name
