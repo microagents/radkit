@@ -237,9 +237,7 @@ mod tests {
         let user_message = SessionEvent::new(
             "session1".to_string(),
             "task1".to_string(),
-            SessionEventType::AgentMessage {
-                content,
-            },
+            SessionEventType::AgentMessage { content },
         );
 
         let streaming_result = user_message.to_a2a_streaming_result();

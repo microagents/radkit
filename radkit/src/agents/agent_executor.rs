@@ -321,10 +321,13 @@ impl AgentExecutor {
             context.task_id.clone(),
             context.context_id.clone(),
         );
-        context.emit_user_input(initial_content).await.map_err(|e| {
-            obs_utils::record_error(&e);
-            e
-        })?;
+        context
+            .emit_user_input(initial_content)
+            .await
+            .map_err(|e| {
+                obs_utils::record_error(&e);
+                e
+            })?;
 
         loop {
             if iteration >= max_iterations {

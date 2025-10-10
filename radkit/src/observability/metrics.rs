@@ -4,7 +4,7 @@
 //! Metrics work via cached instruments for performance, with fallback to on-demand lookup.
 
 use once_cell::sync::Lazy;
-use opentelemetry::{global, metrics::Counter, KeyValue};
+use opentelemetry::{KeyValue, global, metrics::Counter};
 use std::sync::RwLock;
 
 /// Cached metric instruments for performance

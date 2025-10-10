@@ -72,8 +72,8 @@ pub use config::{LlmPricing, SamplingStrategy, TelemetryBackend, TelemetryConfig
 
 // Re-export telemetry initialization
 pub use telemetry::{
-    configure_radkit_telemetry, create_telemetry_layer, init_telemetry, ObservabilityError,
-    TelemetryGuard, TelemetryLayerGuard,
+    ObservabilityError, TelemetryGuard, TelemetryLayerGuard, configure_radkit_telemetry,
+    create_telemetry_layer, init_telemetry,
 };
 
 // Re-export utility functions

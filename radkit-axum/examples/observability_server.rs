@@ -37,7 +37,9 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use radkit::agents::Agent;
 use radkit::models::MockLlm;
-use radkit::observability::{configure_radkit_telemetry, LlmPricing, TelemetryBackend, TelemetryConfig};
+use radkit::observability::{
+    configure_radkit_telemetry, LlmPricing, TelemetryBackend, TelemetryConfig,
+};
 use radkit_axum::{async_trait, A2AServer, AuthContext, AuthExtractor};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -85,9 +87,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_endpoint("http://localhost:4317"),
         )
         .with_trace_config(
-            opentelemetry_sdk::trace::config().with_resource(Resource::new(vec![
-                KeyValue::new("service.name", "radkit-a2a-server"),
-            ])),
+            opentelemetry_sdk::trace::config().with_resource(Resource::new(vec![KeyValue::new(
+                "service.name",
+                "radkit-a2a-server",
+            )])),
         )
         .install_batch(opentelemetry_sdk::runtime::Tokio)?;
 
@@ -96,7 +99,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(telemetry_layer)
         .with(tracing_subscriber::fmt::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env().add_directive("radkit=debug".parse()?))
+        .with(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("radkit=debug".parse()?),
+        )
         .init();
 
     // 2. Configure RadKit to use your OpenTelemetry setup (Pattern 4)
@@ -106,12 +112,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Note: service_name is set on the tracer above, not here
         // UseGlobal uses the parent's tracer, so service.name comes from the Resource
         backend: TelemetryBackend::UseGlobal, // Use parent's telemetry
-        redact_pii: true, // Hash user IDs for GDPR compliance
+        redact_pii: true,                     // Hash user IDs for GDPR compliance
         llm_pricing: vec![
             LlmPricing {
                 model: "mock-model".to_string(),
-                prompt_price: 0.001,      // $0.001 per 1K tokens
-                completion_price: 0.002,  // $0.002 per 1K tokens
+                prompt_price: 0.001,     // $0.001 per 1K tokens
+                completion_price: 0.002, // $0.002 per 1K tokens
             },
             LlmPricing {
                 model: "claude-3-5-sonnet-20241022".to_string(),
@@ -150,9 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Create A2A server
     println!("🚀 Starting A2A server with observability...");
 
-    let server = A2AServer::builder(agent)
-        .with_auth(HeaderAuth)
-        .build();
+    let server = A2AServer::builder(agent).with_auth(HeaderAuth).build();
 
     // Print usage instructions
     println!("\n✅ Server ready on http://localhost:3000");

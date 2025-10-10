@@ -1,6 +1,5 @@
 pub mod auth;
 pub mod error;
-pub mod json_rpc;
 pub mod routes;
 pub mod server;
 

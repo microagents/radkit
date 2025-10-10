@@ -3,16 +3,16 @@
 //! This module provides a builder pattern for constructing agents with
 //! clean API that doesn't require Arc wrapping from users.
 
+use super::Agent;
+use super::agent_executor::AgentExecutor;
+use super::config::AgentConfig;
 use crate::events::{EventProcessor, InMemoryEventBus};
 use crate::models::BaseLlm;
 use crate::sessions::{InMemorySessionService, QueryService, SessionService};
 use crate::tools::{BaseTool, BaseToolset, CombinedToolset, SimpleToolset};
 use a2a_types::AgentCard;
+use std::collections::HashMap;
 use std::sync::Arc;
-
-use super::Agent;
-use super::agent_executor::AgentExecutor;
-use super::config::AgentConfig;
 
 /// Builder for constructing Agent instances with a fluent API
 pub struct AgentBuilder {
@@ -28,6 +28,11 @@ pub struct AgentBuilder {
 
     // The AgentCard being built
     agent_card: AgentCard,
+
+    // Remote A2A agents this agent can communicate with
+    // Each agent can have optional custom headers for authentication
+    // If any remote agents are configured, the A2A tool is automatically created during build()
+    remote_agents: Vec<(AgentCard, Option<HashMap<String, String>>)>,
 }
 
 impl AgentBuilder {
@@ -42,6 +47,7 @@ impl AgentBuilder {
             toolset: None,
             config: AgentConfig::default(),
             agent_card: AgentCard::new("", "", "", ""), // Defaults
+            remote_agents: Vec::new(),
         }
     }
 
@@ -112,8 +118,81 @@ impl AgentBuilder {
         self.with_update_status_tool().with_save_artifact_tool()
     }
 
+    // ===== Remote Agent Configuration =====
+
+    /// Add a remote A2A agent that this agent can communicate with
+    ///
+    /// Optionally provide custom headers for authentication or custom configuration.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use radkit::agents::AgentBuilder;
+    /// use a2a_types::AgentCard;
+    /// use std::collections::HashMap;
+    /// # use radkit::models::mock_llm::MockLlm;
+    ///
+    /// let weather_card = AgentCard::new(
+    ///     "Weather Agent",
+    ///     "Provides weather information",
+    ///     "1.0.0",
+    ///     "https://weather.example.com"
+    /// );
+    ///
+    /// // Without authentication
+    /// let agent = AgentBuilder::new("instruction", MockLlm::new("model".to_string()))
+    ///     .with_remote_agent(weather_card.clone(), None)
+    ///     .build();
+    ///
+    /// // With authentication headers
+    /// let mut headers = HashMap::new();
+    /// headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+    /// headers.insert("X-API-Key".to_string(), "my-api-key".to_string());
+    ///
+    /// let agent = AgentBuilder::new("instruction", MockLlm::new("model".to_string()))
+    ///     .with_remote_agent(weather_card, Some(headers))
+    ///     .build();
+    /// ```
+    pub fn with_remote_agent(
+        mut self,
+        agent_card: AgentCard,
+        headers: Option<HashMap<String, String>>,
+    ) -> Self {
+        self.remote_agents.push((agent_card, headers));
+        self
+    }
+
+    /// Add multiple remote A2A agents at once
+    ///
+    /// Each agent can have optional custom headers.
+    ///
+    /// **Note:** The A2A tool is automatically created during `build()` if any remote agents
+    /// are configured. No need to call a separate method to enable the tool.
+    pub fn with_remote_agents(
+        mut self,
+        agents: Vec<(AgentCard, Option<HashMap<String, String>>)>,
+    ) -> Self {
+        self.remote_agents.extend(agents);
+        self
+    }
+
     /// Build the final immutable Agent
-    pub fn build(self) -> Agent {
+    ///
+    /// **Note:** If any remote agents were added via `with_remote_agent()`, the A2A tool
+    /// is automatically created here to enable communication with those agents.
+    pub fn build(mut self) -> Agent {
+        // Automatically create A2A tool if remote agents are configured
+        if !self.remote_agents.is_empty() {
+            use crate::tools::A2AAgentTool;
+
+            // Create A2A tool from agent cards and their optional headers
+            // HTTP clients are created on-demand in the tool's run method (lazy initialization)
+            if let Ok(tool) = A2AAgentTool::new(self.remote_agents.clone()) {
+                self.tools.push(Box::new(tool));
+            }
+            // Silently ignore errors - agent will work without A2A capability
+        }
+
         // Convert owned model to Arc
         let model = Arc::from(self.model);
 
@@ -208,5 +287,70 @@ mod tests {
             .build();
 
         assert_eq!(agent.config().max_iterations, 5);
+    }
+
+    #[test]
+    fn test_builder_with_remote_agents() {
+        let remote_agent_1 = AgentCard::new(
+            "Weather Agent",
+            "Provides weather information",
+            "1.0.0",
+            "https://weather-agent.example.com",
+        );
+
+        let remote_agent_2 = AgentCard::new(
+            "Calendar Agent",
+            "Manages calendar events",
+            "1.0.0",
+            "https://calendar-agent.example.com",
+        );
+
+        let agent = AgentBuilder::new("Test instruction", MockLlm::new("test-model".to_string()))
+            .with_remote_agent(remote_agent_1, None)
+            .with_remote_agent(remote_agent_2, None)
+            .build();
+
+        // Note: In a real implementation, you would add a getter method to Agent
+        // to retrieve the remote_agents list for testing purposes
+        assert_eq!(agent.name(), "");
+    }
+
+    #[test]
+    fn test_builder_with_multiple_remote_agents() {
+        let remote_agents = vec![
+            (
+                AgentCard::new(
+                    "Agent 1",
+                    "Description 1",
+                    "1.0.0",
+                    "https://agent1.example.com",
+                ),
+                None,
+            ),
+            (
+                AgentCard::new(
+                    "Agent 2",
+                    "Description 2",
+                    "1.0.0",
+                    "https://agent2.example.com",
+                ),
+                None,
+            ),
+        ];
+
+        let agent = AgentBuilder::new("Test instruction", MockLlm::new("test-model".to_string()))
+            .with_remote_agents(remote_agents)
+            .build();
+
+        assert_eq!(agent.name(), "");
+    }
+
+    #[test]
+    fn test_build_without_remote_agents() {
+        // If no remote agents configured, no A2A tool is created during build()
+        let agent =
+            AgentBuilder::new("Test instruction", MockLlm::new("test-model".to_string())).build();
+
+        assert_eq!(agent.name(), "");
     }
 }

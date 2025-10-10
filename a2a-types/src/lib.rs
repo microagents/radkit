@@ -55,6 +55,9 @@ pub struct JSONRPCRequest {
     /// A structured value holding the parameter values to be used during the method invocation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
+    /// A unique identifier established by the client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<JSONRPCId>,
 }
 
 /// Represents a successful JSON-RPC 2.0 Response object.

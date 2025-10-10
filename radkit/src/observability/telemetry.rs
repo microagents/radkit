@@ -6,10 +6,10 @@
 //! - Pattern 4: `configure_radkit_telemetry()` - Use existing parent telemetry
 
 use opentelemetry::KeyValue;
-use opentelemetry_sdk::trace::{Sampler, TracerProvider};
+use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::runtime;
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::trace::{Sampler, TracerProvider};
 use tracing_subscriber::Layer;
 
 use crate::observability::config::{SamplingStrategy, TelemetryBackend, TelemetryConfig};
