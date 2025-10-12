@@ -27,11 +27,14 @@ static METRICS: Lazy<RwLock<Option<RadkitMetrics>>> = Lazy::new(|| RwLock::new(N
 ///
 /// # Example
 /// ```rust,no_run
-/// // Pattern 4 (use-global)
-/// opentelemetry::global::set_meter_provider(parent_meter_provider);
+/// use radkit::observability::{TelemetryConfig, TelemetryBackend};
+///
+/// // Pattern 4 (use-global) - parent has already set up meter provider
+/// // opentelemetry::global::set_meter_provider(your_meter_provider);
 /// radkit::observability::initialize_metrics();  // Optional but recommended
 ///
 /// // Pattern 1 (standalone)
+/// let config = TelemetryConfig::default();
 /// let _guard = radkit::observability::init_telemetry(config)?;
 /// radkit::observability::initialize_metrics();  // Optional but recommended
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -43,15 +46,15 @@ pub fn initialize_metrics() {
         llm_tokens: meter
             .u64_counter("radkit.llm.tokens")
             .with_description("Total LLM tokens consumed")
-            .init(),
+            .build(),
         agent_messages: meter
             .u64_counter("radkit.agent.messages")
             .with_description("Total agent messages processed")
-            .init(),
+            .build(),
         tool_executions: meter
             .u64_counter("radkit.tool.executions")
             .with_description("Total tool executions")
-            .init(),
+            .build(),
     };
 
     if let Ok(mut m) = METRICS.write() {
@@ -82,7 +85,7 @@ pub fn record_llm_tokens_metric(model: &str, prompt_tokens: u64, completion_toke
     let counter = meter
         .u64_counter("radkit.llm.tokens")
         .with_description("Total LLM tokens consumed")
-        .init();
+        .build();
     counter.add(total, &attrs);
 }
 
@@ -108,7 +111,7 @@ pub fn record_agent_message_metric(agent_name: &str, success: bool) {
     let counter = meter
         .u64_counter("radkit.agent.messages")
         .with_description("Total agent messages processed")
-        .init();
+        .build();
     counter.add(1, &attrs);
 }
 
@@ -134,7 +137,7 @@ pub fn record_tool_execution_metric(tool_name: &str, success: bool) {
     let counter = meter
         .u64_counter("radkit.tool.executions")
         .with_description("Total tool executions")
-        .init();
+        .build();
     counter.add(1, &attrs);
 }
 

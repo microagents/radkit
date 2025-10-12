@@ -44,9 +44,8 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tower = { version = "0.5", features = ["util"] }
 base64 = "0.22"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# OpenTelemetry for observability example
-opentelemetry = "0.22"
-opentelemetry_sdk = { version = "0.22", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.15", features = ["tokio", "grpc-tonic"] }
-opentelemetry-http = "0.11"
-tracing-opentelemetry = "0.23"
+# OpenTelemetry for observability example (updated to 0.31/0.32)
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["tokio", "grpc-tonic"] }
+tracing-opentelemetry = "0.32"

@@ -310,6 +310,29 @@ impl A2AClient {
         JSONRPCId::Integer(id as i64)
     }
 
+    /// Inject W3C Trace Context into HTTP headers for distributed tracing
+    ///
+    /// Extracts the OpenTelemetry context from the current tracing span and
+    /// injects it into a carrier (HashMap) that can be used as HTTP headers.
+    /// This enables trace propagation across service boundaries.
+    fn inject_trace_context() -> std::collections::HashMap<String, String> {
+        use opentelemetry::global;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        let mut carrier = std::collections::HashMap::new();
+
+        // Get the OpenTelemetry context from the current tracing span
+        let context = tracing::Span::current().context();
+
+        // Inject the context into the carrier (adds traceparent, tracestate headers)
+        // OpenTelemetry 0.31+ uses a closure-based API
+        global::get_text_map_propagator(|propagator| {
+            propagator.inject_context(&context, &mut carrier);
+        });
+
+        carrier
+    }
+
     /// Helper method to make a generic JSON-RPC POST request
     async fn post_rpc_request<TParams, TResponse>(
         &self,
@@ -334,6 +357,11 @@ impl A2AClient {
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .json(&rpc_request);
+
+        // Inject distributed tracing headers (W3C Trace Context)
+        for (key, value) in Self::inject_trace_context() {
+            req = req.header(key, value);
+        }
 
         if let Some(token) = &self.auth_token {
             req = req.bearer_auth(token);
@@ -419,6 +447,11 @@ impl A2AClient {
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .json(&rpc_request);
+
+        // Inject distributed tracing headers (W3C Trace Context)
+        for (key, value) in Self::inject_trace_context() {
+            req = req.header(key, value);
+        }
 
         if let Some(token) = &self.auth_token {
             req = req.bearer_auth(token);
@@ -645,6 +678,11 @@ impl A2AClient {
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .json(&rpc_request);
+
+        // Inject distributed tracing headers (W3C Trace Context)
+        for (key, value) in Self::inject_trace_context() {
+            req = req.header(key, value);
+        }
 
         if let Some(token) = &self.auth_token {
             req = req.bearer_auth(token);

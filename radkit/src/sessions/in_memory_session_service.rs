@@ -1,4 +1,5 @@
 use crate::errors::AgentResult;
+use crate::observability::utils as obs_utils;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use serde_json::Value;
@@ -113,22 +114,40 @@ impl Default for InMemorySessionService {
 
 #[async_trait]
 impl SessionService for InMemorySessionService {
+    #[tracing::instrument(
+        name = "radkit.session.get",
+        skip(self),
+        fields(
+            app_name = %app_name,
+            user_id = obs_utils::hash_user_id(user_id),
+            session_id = %session_id,
+            session.found = tracing::field::Empty,
+        )
+    )]
     async fn get_session(
         &self,
         app_name: &str,
         user_id: &str,
         session_id: &str,
     ) -> AgentResult<Option<Session>> {
-        if let Some(app_users) = self.sessions.get(app_name) {
+        let result = if let Some(app_users) = self.sessions.get(app_name) {
             if let Some(user_sessions) = app_users.get(user_id) {
                 if let Some(session_ref) = user_sessions.get(session_id) {
                     let mut merged_session = session_ref.clone();
                     self.merge_state(&mut merged_session).await?;
-                    return Ok(Some(merged_session));
+                    Some(merged_session)
+                } else {
+                    None
                 }
+            } else {
+                None
             }
-        }
-        Ok(None)
+        } else {
+            None
+        };
+
+        tracing::Span::current().record("session.found", result.is_some());
+        Ok(result)
     }
 
     async fn save_session(&self, session: &Session) -> AgentResult<()> {
@@ -141,8 +160,18 @@ impl SessionService for InMemorySessionService {
         self.save_session_raw(&raw_session).await
     }
 
+    #[tracing::instrument(
+        name = "radkit.session.create",
+        skip(self),
+        fields(
+            app_name = %app_name,
+            user_id = obs_utils::hash_user_id(&user_id),
+            session_id = tracing::field::Empty,
+        )
+    )]
     async fn create_session(&self, app_name: String, user_id: String) -> AgentResult<Session> {
         let session = Session::new(app_name, user_id);
+        tracing::Span::current().record("session_id", &session.id);
         self.save_session_raw(&session).await?;
         // Return the merged version
         let mut merged_session = session.clone();
@@ -251,6 +280,14 @@ impl SessionService for InMemorySessionService {
     // ===== New Unified Event System Implementation =====
 
     /// Store an event in the persistence layer (pure storage)
+    #[tracing::instrument(
+        name = "radkit.session.store_event",
+        skip(self, event),
+        fields(
+            session_id = %event.session_id,
+            event.type = ?event.event_type,
+        )
+    )]
     async fn store_event(&self, event: &SessionEvent) -> AgentResult<()> {
         // Handle task indexing for TaskSubmitted events
         if let SessionEventType::TaskStatusUpdate {
@@ -276,6 +313,16 @@ impl SessionService for InMemorySessionService {
     }
 
     /// Get all events for a session (for debugging and business logic)
+    #[tracing::instrument(
+        name = "radkit.session.get_events",
+        skip(self),
+        fields(
+            app_name = %app_name,
+            user_id = obs_utils::hash_user_id(user_id),
+            session_id = %session_id,
+            event.count = tracing::field::Empty,
+        )
+    )]
     async fn get_session_events(
         &self,
         app_name: &str,
@@ -291,7 +338,9 @@ impl SessionService for InMemorySessionService {
                 user_id: user_id.to_string(),
             })?;
 
-        Ok(session.events.clone())
+        let events = session.events.clone();
+        tracing::Span::current().record("event.count", events.len());
+        Ok(events)
     }
 }
 

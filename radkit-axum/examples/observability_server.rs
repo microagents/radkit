@@ -1,7 +1,7 @@
 //! Complete observability example with OpenTelemetry, distributed tracing, and cost tracking
 //!
 //! This example demonstrates:
-//! - OpenTelemetry OTLP export to Jaeger
+//! - OpenTelemetry OTLP export to Jaeger (using OpenTelemetry 0.31 API)
 //! - Automatic distributed tracing across RadKit operations
 //! - LLM cost tracking with configurable pricing
 //! - Multi-tenant support with PII redaction
@@ -23,7 +23,7 @@
 //!
 //! 3. Send a request:
 //! ```bash
-//! curl -X POST http://localhost:3000/message/send \
+//! curl -X POST http://localhost:3000/ \
 //!   -H 'X-App-Name: myapp' \
 //!   -H 'X-User-Id: user1' \
 //!   -H 'Content-Type: application/json' \
@@ -33,7 +33,8 @@
 //! 4. View traces at http://localhost:16686
 
 use opentelemetry::KeyValue;
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
 use radkit::agents::Agent;
 use radkit::models::MockLlm;
@@ -76,23 +77,32 @@ impl AuthExtractor for HeaderAuth {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Setup OpenTelemetry for your Axum server
+    // 1. Setup OpenTelemetry for your Axum server (OpenTelemetry 0.31 API)
     println!("🔧 Setting up OpenTelemetry...");
 
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint("http://localhost:4317"),
+    // Build OTLP gRPC exporter
+    let exporter = SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint("http://localhost:4317")
+        .build()?;
+
+    // Create tracer provider with resource attributes
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(
+            Resource::builder()
+                .with_service_name("radkit-a2a-server")
+                .with_attribute(KeyValue::new("service.version", "1.0.0"))
+                .build(),
         )
-        .with_trace_config(
-            opentelemetry_sdk::trace::config().with_resource(Resource::new(vec![KeyValue::new(
-                "service.name",
-                "radkit-a2a-server",
-            )])),
-        )
-        .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+        .build();
+
+    // Set as global provider
+    opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+
+    // Get tracer from provider
+    use opentelemetry::trace::TracerProvider as _;
+    let tracer = tracer_provider.tracer("radkit-a2a-server");
 
     let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
@@ -170,14 +180,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔍 View traces at: http://localhost:16686");
 
     println!("\n📝 Example request:");
-    println!("  curl -X POST http://localhost:3000/message/send \\");
+    println!("  curl -X POST http://localhost:3000/ \\");
     println!("    -H 'X-App-Name: myapp' \\");
     println!("    -H 'X-User-Id: user123' \\");
     println!("    -H 'Content-Type: application/json' \\");
-    println!("    -d '{{\"jsonrpc\":\"2.0\",\"method\":\"message/send\",\"params\":{{\"message\":{{\"role\":\"user\", \"messageId\": \"1\", \"parts\":[{{\"kind\":\"text\",\"text\":\"What can you help me with?\"}}]}}}},\"id\":1}}'");
+    println!("    -d '{{\"jsonrpc\":\"2.0\",\"method\":\"message/send\",\"params\":{{\"message\":{{\"role\":\"user\",\"messageId\":\"1\",\"parts\":[{{\"kind\":\"text\",\"text\":\"What can you help me with?\"}}]}}}},\"id\":1}}'");
 
     println!("\n📊 What you'll see in Jaeger:");
-    println!("  • HTTP Request → POST /message/send");
+    println!("  • HTTP Request → POST /");
     println!("  • RadKit Agent → radkit.agent.send_message");
     println!("  • Conversation → radkit.conversation.execute_core");
     println!("  • LLM Call → radkit.llm.generate_content");
@@ -193,8 +203,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start the server
     server.serve("0.0.0.0:3000").await?;
 
-    // Shutdown OpenTelemetry
-    opentelemetry::global::shutdown_tracer_provider();
+    // Shutdown OpenTelemetry (automatic via Drop in OTel 0.31+)
+    // The tracer_provider's Drop impl will handle shutdown when it goes out of scope
+    drop(tracer_provider);
 
     Ok(())
 }
