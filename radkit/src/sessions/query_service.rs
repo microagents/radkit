@@ -5,6 +5,7 @@
 
 use crate::errors::AgentResult;
 use crate::models::content::Content;
+use crate::observability::utils as obs_utils;
 use crate::sessions::{SessionEvent, SessionEventType, SessionService, StateScope};
 use a2a_types::Task;
 use serde_json::Value;
@@ -24,6 +25,16 @@ impl QueryService {
     // ===== Task Query Methods =====
 
     /// Get task by ID using event sourcing (A2A Protocol: tasks/get)
+    #[tracing::instrument(
+        name = "radkit.query.get_task",
+        skip(self),
+        fields(
+            app_name = %app_name,
+            user_id = obs_utils::hash_user_id(user_id),
+            task_id = %task_id,
+            task.found = tracing::field::Empty,
+        )
+    )]
     pub async fn get_task(
         &self,
         app_name: &str,
@@ -42,10 +53,12 @@ impl QueryService {
                 .get_session_events(app_name, user_id, &session.id)
                 .await?;
             if let Some(task) = self.rebuild_task_from_events(&events, task_id).await? {
+                tracing::Span::current().record("task.found", true);
                 return Ok(Some(task));
             }
         }
 
+        tracing::Span::current().record("task.found", false);
         Ok(None)
     }
 
@@ -96,6 +109,16 @@ impl QueryService {
     }
 
     /// Get LLM conversation history from session events
+    #[tracing::instrument(
+        name = "radkit.query.get_conversation",
+        skip(self),
+        fields(
+            app_name = %app_name,
+            user_id = obs_utils::hash_user_id(user_id),
+            session_id = %session_id,
+            message.count = tracing::field::Empty,
+        )
+    )]
     pub async fn get_conversation(
         &self,
         app_name: &str,
@@ -117,6 +140,7 @@ impl QueryService {
                 _ => {} // Other events don't contribute to conversation history
             }
         }
+        tracing::Span::current().record("message.count", content_messages.len());
         Ok(content_messages)
     }
 
@@ -188,6 +212,15 @@ impl QueryService {
     // ===== Private Helper Methods =====
 
     /// Rebuild a Task object from events (business logic)
+    #[tracing::instrument(
+        name = "radkit.query.rebuild_task",
+        skip(self, events),
+        fields(
+            task_id = %task_id,
+            events.count = events.len(),
+            task.rebuilt = tracing::field::Empty,
+        )
+    )]
     async fn rebuild_task_from_events(
         &self,
         events: &[SessionEvent],
@@ -249,6 +282,7 @@ impl QueryService {
             }
         }
 
+        tracing::Span::current().record("task.rebuilt", current_task.is_some());
         Ok(current_task)
     }
 

@@ -176,9 +176,18 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard, Observa
 /// ```
 pub fn create_telemetry_layer<S>(
     config: TelemetryConfig,
-) -> Result<(Option<Box<dyn Layer<S> + Send + Sync>>, Option<TelemetryLayerGuard>), ObservabilityError>
+) -> Result<
+    (
+        Option<Box<dyn Layer<S> + Send + Sync>>,
+        Option<TelemetryLayerGuard>,
+    ),
+    ObservabilityError,
+>
 where
-    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span> + Send + Sync,
+    S: tracing::Subscriber
+        + for<'span> tracing_subscriber::registry::LookupSpan<'span>
+        + Send
+        + Sync,
 {
     if !config.is_enabled() {
         return Ok((None, None));
@@ -243,7 +252,13 @@ pub fn configure_radkit_telemetry(config: TelemetryConfig) -> Result<(), Observa
 /// Returns BoxedTracer from global provider for type consistency with UseGlobal
 fn create_tracer_global(
     config: &TelemetryConfig,
-) -> Result<(opentelemetry::global::BoxedTracer, Option<SdkTracerProvider>), ObservabilityError> {
+) -> Result<
+    (
+        opentelemetry::global::BoxedTracer,
+        Option<SdkTracerProvider>,
+    ),
+    ObservabilityError,
+> {
     let (_tracer, provider) = create_tracer_impl(config)?;
     // Set global provider and get BoxedTracer from it
     if let Some(ref p) = provider {
@@ -251,7 +266,9 @@ fn create_tracer_global(
         let boxed_tracer = opentelemetry::global::tracer(config.service_name.clone());
         Ok((boxed_tracer, provider))
     } else {
-        Err(ObservabilityError::Config("No tracer provider created".to_string()))
+        Err(ObservabilityError::Config(
+            "No tracer provider created".to_string(),
+        ))
     }
 }
 
@@ -298,7 +315,7 @@ fn create_tracer_impl(
             // UseGlobal should be handled by caller (init_telemetry/create_telemetry_layer)
             // If we get here, it's a programming error
             return Err(ObservabilityError::Config(
-                "UseGlobal backend must be handled by caller, not create_tracer_impl".to_string()
+                "UseGlobal backend must be handled by caller, not create_tracer_impl".to_string(),
             ));
         }
 
@@ -359,7 +376,8 @@ fn create_tracer_impl(
             use std::collections::HashMap;
 
             // Build HTTP headers map
-            let headers_map: HashMap<String, String> = headers.iter()
+            let headers_map: HashMap<String, String> = headers
+                .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
 

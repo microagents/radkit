@@ -16,7 +16,7 @@ use a2a_types::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing;
+use tracing::{self, Instrument};
 use uuid::Uuid;
 
 use super::config::AgentConfig;
@@ -86,6 +86,17 @@ impl AgentExecutor {
     // ===== Core Execution Methods =====
 
     /// Execute a conversation (unified for streaming/non-streaming)
+    #[tracing::instrument(
+        name = "radkit.agent.execute_conversation",
+        skip(self, params, capture_all_events, capture_a2a_events, stream_tx),
+        fields(
+            app_name = %app_name,
+            user_id = obs_utils::hash_user_id(user_id),
+            task.id = tracing::field::Empty,
+            context.id = tracing::field::Empty,
+            otel.kind = "internal",
+        )
+    )]
     pub async fn execute_conversation(
         &self,
         app_name: &str,
@@ -137,6 +148,11 @@ impl AgentExecutor {
             self.event_processor.clone(),
             self.query_service.clone(),
         );
+
+        // Record task.id and context.id on parent span
+        let span = tracing::Span::current();
+        span.record("task.id", context.task_id.as_str());
+        span.record("context.id", context.context_id.as_str());
 
         if !continuous_task {
             let task = Task {
@@ -223,13 +239,23 @@ impl AgentExecutor {
     }
 
     /// Get or create session based on context_id presence
+    #[tracing::instrument(
+        name = "radkit.session.get_or_create",
+        skip(self),
+        fields(
+            app_name = %app_name,
+            user_id = obs_utils::hash_user_id(user_id),
+            context.id = tracing::field::Empty,
+            otel.kind = "internal",
+        )
+    )]
     async fn get_or_create_session(
         &self,
         app_name: &str,
         user_id: &str,
         context_id: &Option<String>,
     ) -> AgentResult<crate::sessions::Session> {
-        if let Some(context_id) = context_id {
+        let session = if let Some(context_id) = context_id {
             // context_id provided - must find existing session or error
             match self
                 .session_service
@@ -248,17 +274,34 @@ impl AgentExecutor {
             self.session_service
                 .create_session(app_name.to_string(), user_id.to_string())
                 .await
-        }
+        }?;
+
+        // Record context.id on span
+        let span = tracing::Span::current();
+        span.record("context.id", session.id.as_str());
+
+        Ok(session)
     }
 
     /// Get existing task or generate new task ID
+    #[tracing::instrument(
+        name = "radkit.task.get",
+        skip(self),
+        fields(
+            app_name = %app_name,
+            user_id = obs_utils::hash_user_id(user_id),
+            task.id = tracing::field::Empty,
+            task.continuous = false,
+            otel.kind = "internal",
+        )
+    )]
     async fn get_task(
         &self,
         app_name: &str,
         user_id: &str,
         task_id: &Option<String>,
     ) -> AgentResult<Option<Task>> {
-        if let Some(task_id) = task_id {
+        let result = if let Some(task_id) = task_id {
             // Continue existing task - check if it exists and is not terminal
             match self
                 .query_service
@@ -278,6 +321,12 @@ impl AgentExecutor {
                             to: "Working".to_string(),
                         });
                     }
+
+                    // Record task.id and mark as continuous
+                    let span = tracing::Span::current();
+                    span.record("task.id", task.id.as_str());
+                    span.record("task.continuous", true);
+
                     Ok(Some(task))
                 }
                 None => Err(AgentError::TaskNotFound {
@@ -286,7 +335,9 @@ impl AgentExecutor {
             }
         } else {
             Ok(None)
-        }
+        }?;
+
+        Ok(result)
     }
 
     /// Set up event forwarding for streaming and capture
@@ -302,30 +353,36 @@ impl AgentExecutor {
         // Subscribe to all events for this task
         let mut event_receiver = event_bus.subscribe(task_id.to_string()).await?;
 
+        // Capture current span for trace propagation
+        let forward_span = tracing::Span::current();
+
         // Spawn task to forward events to appropriate channels
-        tokio::spawn(async move {
-            while let Some(event) = event_receiver.recv().await {
-                // Forward to all events capture if requested
-                if let Some(ref all_events_tx) = capture_all_events {
-                    let _ = all_events_tx.send(event.clone());
-                }
+        tokio::spawn(
+            async move {
+                while let Some(event) = event_receiver.recv().await {
+                    // Forward to all events capture if requested
+                    if let Some(ref all_events_tx) = capture_all_events {
+                        let _ = all_events_tx.send(event.clone());
+                    }
 
-                // Convert and forward A2A events
-                if event.is_a2a_compatible() {
-                    if let Some(a2a_result) = event.to_a2a_streaming_result() {
-                        // Send to capture channel if requested
-                        if let Some(ref a2a_tx) = capture_a2a {
-                            let _ = a2a_tx.send(a2a_result.clone());
-                        }
+                    // Convert and forward A2A events
+                    if event.is_a2a_compatible() {
+                        if let Some(a2a_result) = event.to_a2a_streaming_result() {
+                            // Send to capture channel if requested
+                            if let Some(ref a2a_tx) = capture_a2a {
+                                let _ = a2a_tx.send(a2a_result.clone());
+                            }
 
-                        // Send to streaming channel if requested
-                        if let Some(ref stream_tx) = stream_a2a {
-                            let _ = stream_tx.send(a2a_result).await;
+                            // Send to streaming channel if requested
+                            if let Some(ref stream_tx) = stream_a2a {
+                                let _ = stream_tx.send(a2a_result).await;
+                            }
                         }
                     }
                 }
             }
-        });
+            .instrument(forward_span),
+        );
 
         Ok(())
     }
