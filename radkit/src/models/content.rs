@@ -146,7 +146,7 @@ impl Content {
         if a2a_parts.is_empty() {
             return None;
         }
-        return Some(Message {
+        Some(Message {
             kind: "message".to_string(),
             message_id: self.message_id.clone(),
             role: self.role.clone(),
@@ -156,7 +156,7 @@ impl Content {
             reference_task_ids: Vec::new(),
             extensions: Vec::new(),
             metadata: self.metadata.clone(),
-        });
+        })
     }
 
     /// Add a text part

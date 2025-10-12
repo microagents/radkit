@@ -2,6 +2,7 @@ use crate::errors::{AgentError, AgentResult};
 use dashmap::DashMap;
 use rmcp::{
     ServiceExt,
+    model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam},
     transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess},
 };
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,8 @@ use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 /// Type alias for the MCP client - based on rmcp examples
-pub type MCPClient = rmcp::service::RunningService<rmcp::service::RoleClient, ()>;
+pub type MCPClient =
+    rmcp::service::RunningService<rmcp::service::RoleClient, InitializeRequestParam>;
 
 /// Connection parameters for MCP servers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,13 +151,25 @@ impl MCPSessionManager {
                     }
                 })?;
 
-                let client =
-                    ().serve(transport)
-                        .await
-                        .map_err(|e| AgentError::ToolSetupFailed {
-                            tool_name: "mcp_stdio".to_string(),
-                            reason: format!("Failed to connect to MCP server: {e:?}"),
-                        })?;
+                // Create proper client info for MCP handshake
+                let client_info = ClientInfo {
+                    protocol_version: Default::default(),
+                    capabilities: ClientCapabilities::default(),
+                    client_info: Implementation {
+                        name: "radkit-mcp-client".to_string(),
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                        title: None,
+                        website_url: None,
+                        icons: None,
+                    },
+                };
+
+                let client = client_info.serve(transport).await.map_err(|e| {
+                    AgentError::ToolSetupFailed {
+                        tool_name: "mcp_stdio".to_string(),
+                        reason: format!("Failed to connect to MCP server: {e:?}"),
+                    }
+                })?;
 
                 info!("Connected to MCP server via stdio");
                 Ok(client)
@@ -170,13 +184,25 @@ impl MCPSessionManager {
                 // Create HTTP transport using rmcp's StreamableHttpClientTransport
                 let transport = StreamableHttpClientTransport::from_uri(url.clone());
 
-                let client =
-                    ().serve(transport)
-                        .await
-                        .map_err(|e| AgentError::ToolSetupFailed {
-                            tool_name: "mcp_http".to_string(),
-                            reason: format!("Failed to connect to MCP HTTP server: {e:?}"),
-                        })?;
+                // Create proper client info for MCP handshake
+                let client_info = ClientInfo {
+                    protocol_version: Default::default(),
+                    capabilities: ClientCapabilities::default(),
+                    client_info: Implementation {
+                        name: "radkit-mcp-client".to_string(),
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                        title: None,
+                        website_url: None,
+                        icons: None,
+                    },
+                };
+
+                let client = client_info.serve(transport).await.map_err(|e| {
+                    AgentError::ToolSetupFailed {
+                        tool_name: "mcp_http".to_string(),
+                        reason: format!("Failed to connect to MCP HTTP server: {e:?}"),
+                    }
+                })?;
 
                 info!("Connected to MCP server via HTTP: {}", url);
                 Ok(client)

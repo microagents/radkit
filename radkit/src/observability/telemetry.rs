@@ -253,7 +253,7 @@ fn create_tracer_impl(
     };
 
     match &config.backend {
-        TelemetryBackend::Disabled => return Err(ObservabilityError::Disabled),
+        TelemetryBackend::Disabled => Err(ObservabilityError::Disabled),
 
         TelemetryBackend::UseGlobal => {
             // Use existing global tracer provider
@@ -261,7 +261,7 @@ fn create_tracer_impl(
             use opentelemetry::trace::TracerProvider as _;
             let provider = TracerProvider::builder().build();
             let tracer = provider.tracer(config.service_name.clone());
-            return Ok((tracer, None));
+            Ok((tracer, None))
         }
 
         TelemetryBackend::OtlpGrpc {

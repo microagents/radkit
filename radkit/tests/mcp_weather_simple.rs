@@ -23,16 +23,10 @@ use common::{get_anthropic_key, get_gemini_key, get_openai_key, init_test_env};
 
 /// Helper function to create MCP weather toolset
 fn create_mcp_weather_toolset() -> MCPToolset {
-    let mcp_connection = MCPConnectionParams::Stdio {
-        command: "uvx".to_string(),
-        args: vec![
-            "--from".to_string(),
-            "git+https://github.com/microagents/mcp-servers.git#subdirectory=mcp-weather-free"
-                .to_string(),
-            "mcp-weather-free".to_string(),
-        ],
-        env: HashMap::new(),
+    let mcp_connection = MCPConnectionParams::Http {
+        url: "https://mcp-servers.ag6.ai/weather".to_string(),
         timeout: Duration::from_secs(30),
+        headers: Default::default(),
     };
 
     MCPToolset::new(mcp_connection)

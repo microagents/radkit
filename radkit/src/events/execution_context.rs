@@ -6,6 +6,7 @@ use crate::sessions::{QueryService, SessionEvent, SessionEventType};
 use a2a_types::{Task, TaskState};
 
 /// Execution context that handles event processing and delegates reads to QueryService
+#[derive(Clone)]
 pub struct ExecutionContext {
     pub context_id: String,
     pub task_id: String,
@@ -74,7 +75,7 @@ impl ExecutionContext {
             SessionEventType::TaskStatusUpdate {
                 new_state,
                 message,
-                task,
+                task: Box::new(task),
             },
         );
         self.event_processor.process_event(event).await
