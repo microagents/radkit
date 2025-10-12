@@ -154,6 +154,7 @@ curl -X POST http://localhost:3000/message/send \
     "params": {
       "message": {
         "role": "user",
+        "messageId": "1",
         "parts": [{"kind": "text", "text": "Hello!"}]
       }
     },
@@ -173,27 +174,39 @@ When you set up OpenTelemetry for your Axum server, RadKit automatically continu
 use radkit_axum::A2AServer;
 use radkit::observability::{configure_radkit_telemetry, TelemetryConfig, TelemetryBackend};
 use opentelemetry::KeyValue;
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Setup OpenTelemetry for your Axum server
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint("http://localhost:4317")
+    // 1. Setup OpenTelemetry for your Axum server (OpenTelemetry 0.31 API)
+
+    // Build OTLP gRPC exporter
+    let exporter = SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint("http://localhost:4317")
+        .build()?;
+
+    // Create tracer provider with resource attributes
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(
+            Resource::builder()
+                .with_service_name("my-a2a-server")
+                .with_attribute(KeyValue::new("service.version", "1.0.0"))
+                .build(),
         )
-        .with_trace_config(
-            opentelemetry_sdk::trace::config().with_resource(Resource::new(vec![
-                KeyValue::new("service.name", "my-a2a-server"),
-            ]))
-        )
-        .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+        .build();
+
+    // Set as global provider
+    opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+
+    // Get tracer from provider
+    use opentelemetry::trace::TracerProvider as _;
+    let tracer = tracer_provider.tracer("my-a2a-server");
 
     let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
@@ -203,7 +216,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     // 2. Configure RadKit to use your OpenTelemetry setup
-    // Note: When using UseGlobal, set service.name on the tracer (above), not here
     configure_radkit_telemetry(TelemetryConfig {
         backend: TelemetryBackend::UseGlobal,  // Use parent's telemetry
         redact_pii: true,
@@ -218,6 +230,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Start A2A server - all traces automatically connected!
     let server = A2AServer::builder(agent).build();
     server.serve("0.0.0.0:3000").await?;
+
+    // Cleanup on shutdown
+    drop(tracer_provider);
 
     Ok(())
 }
@@ -271,10 +286,12 @@ let server = A2AServer::builder(agent)
 
 Now external clients can send trace context:
 ```bash
-curl -X POST http://localhost:3000/message/send \
+curl -X POST http://localhost:3000/ \
   -H 'traceparent: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01' \
+  -H 'X-App-Name: myapp' \
+  -H 'X-User-Id: user1' \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"message/send","params":{...},"id":1}'
+  -d '{"jsonrpc":"2.0","method":"message/send","params":{"message":{"role":"user","messageId":"1","parts":[{"kind":"text","text":"Hello!"}]}},"id":1}'
 ```
 
 And your traces will continue from the client's trace ID!
@@ -298,30 +315,45 @@ Every request automatically records:
 
 Send traces to any OpenTelemetry backend:
 
-**Jaeger:**
+**Jaeger via OTLP (Recommended):**
 ```rust
-let tracer = opentelemetry_jaeger::new_agent_pipeline()
-    .with_service_name("my-a2a-server")
-    .install_batch(opentelemetry_sdk::runtime::Tokio)?;
-```
+use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 
-**Zipkin:**
-```rust
-let tracer = opentelemetry_zipkin::new_pipeline()
-    .with_service_name("my-a2a-server")
-    .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+let exporter = SpanExporter::builder()
+    .with_tonic()
+    .with_endpoint("http://localhost:4317")  // Jaeger OTLP endpoint
+    .build()?;
+
+let tracer_provider = SdkTracerProvider::builder()
+    .with_batch_exporter(exporter)
+    .with_resource(
+        Resource::builder()
+            .with_service_name("my-a2a-server")
+            .build(),
+    )
+    .build();
+
+opentelemetry::global::set_tracer_provider(tracer_provider.clone());
 ```
 
 **Datadog, Honeycomb, New Relic, etc.:**
 ```rust
-let tracer = opentelemetry_otlp::new_pipeline()
-    .tracing()
-    .with_exporter(
-        opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_endpoint("https://your-backend.com:4317")
+let exporter = SpanExporter::builder()
+    .with_tonic()
+    .with_endpoint("https://your-backend.com:4317")
+    .build()?;
+
+let tracer_provider = SdkTracerProvider::builder()
+    .with_batch_exporter(exporter)
+    .with_resource(
+        Resource::builder()
+            .with_service_name("my-a2a-server")
+            .build(),
     )
-    .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+    .build();
+
+opentelemetry::global::set_tracer_provider(tracer_provider.clone());
 ```
 
 ### Security & Privacy
@@ -366,7 +398,7 @@ cargo run --example observability_server
 
 3. Send a request:
 ```bash
-curl -X POST http://localhost:3000/message/send \
+curl -X POST http://localhost:3000/ \
   -H 'X-App-Name: myapp' \
   -H 'X-User-Id: user1' \
   -H 'Content-Type: application/json' \
@@ -380,7 +412,7 @@ curl -X POST http://localhost:3000/message/send \
 
 | radkit-axum | axum  | radkit | opentelemetry |
 |-------------|-------|--------|---------------|
-| 0.1.x       | 0.7.x | 0.1.x  | 0.22.x        |
+| 0.1.x       | 0.7.x | 0.1.x  | 0.31.x        |
 
 ## License
 
