@@ -6,16 +6,12 @@
 
 use crate::errors::{AgentError, AgentResult};
 use crate::events::{EventProcessor, ExecutionContext};
-use crate::models::{
-    BaseLlm, LlmRequest,
-    content::{Content, FunctionResponseParams},
-};
+use crate::models::{BaseLlm, LlmRequest, content::Content};
 use crate::observability::utils as obs_utils;
 use crate::sessions::{QueryService, SessionService};
 use crate::tools::BaseToolset;
 use a2a_types::{
-    Message, MessageRole, MessageSendParams, SendStreamingMessageResult, Task, TaskState,
-    TaskStatus,
+    MessageRole, MessageSendParams, SendStreamingMessageResult, Task, TaskState, TaskStatus,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -96,9 +92,10 @@ impl AgentExecutor {
         user_id: &str,
         params: MessageSendParams,
         capture_all_events: Option<mpsc::UnboundedSender<crate::sessions::SessionEvent>>,
-        capture_a2a: Option<mpsc::UnboundedSender<SendStreamingMessageResult>>,
+        capture_a2a_events: Option<mpsc::UnboundedSender<SendStreamingMessageResult>>,
         stream_tx: Option<mpsc::Sender<SendStreamingMessageResult>>,
     ) -> AgentResult<ExecutionResult> {
+        use tokio::sync::oneshot;
         // Handle context_id from message
         let session = self
             .get_or_create_session(app_name, user_id, &params.message.context_id)
@@ -117,9 +114,18 @@ impl AgentExecutor {
         };
 
         // Setup event forwarding for streaming and capture
-        if capture_all_events.is_some() || capture_a2a.is_some() || stream_tx.is_some() {
-            self.setup_event_forwarding(&task_id, capture_all_events, capture_a2a, stream_tx)
-                .await?;
+        // Clone the channels to use later for final Task emission
+        let capture_a2a_clone = capture_a2a_events.clone();
+        let stream_tx_clone = stream_tx.clone();
+
+        if capture_all_events.is_some() || capture_a2a_events.is_some() || stream_tx.is_some() {
+            self.setup_event_forwarding(
+                &task_id,
+                capture_all_events,
+                capture_a2a_events,
+                stream_tx,
+            )
+            .await?;
         }
 
         // Setup execution context
@@ -132,7 +138,7 @@ impl AgentExecutor {
             self.query_service.clone(),
         );
 
-        if continuous_task == false {
+        if !continuous_task {
             let task = Task {
                 kind: "task".to_string(),
                 id: context.task_id.clone(),
@@ -151,8 +157,34 @@ impl AgentExecutor {
                 .await?;
         }
 
-        // Run conversation loop
-        self.run_conversation_loop(params.message, &context).await?;
+        // Create oneshot channel for completion notification
+        let (completion_tx, completion_rx) = oneshot::channel();
+
+        // Setup tool completion handler for resumption BEFORE emitting any events
+        // This ensures the handler is listening before any tool completions can fire
+        self.setup_tool_completion_handler(&context, completion_tx)
+            .await?;
+
+        // Emit initial user message
+        let mut initial_message = params.message.clone();
+        initial_message.context_id = Some(context.context_id.clone());
+        initial_message.task_id = Some(context.task_id.clone());
+        let initial_content = Content::from_message(
+            initial_message,
+            context.task_id.clone(),
+            context.context_id.clone(),
+        );
+        context.emit_user_input(initial_content).await?;
+
+        // Execute first turn (non-blocking)
+        self.execute_turn(&context).await?;
+
+        // Wait for completion notification from handler
+        // Handler will send when execution reaches terminal state
+        completion_rx.await.map_err(|_| AgentError::Internal {
+            component: "agent_executor".to_string(),
+            reason: "Completion notification channel closed unexpectedly".to_string(),
+        })?;
 
         // Get final task
         let final_task = context
@@ -162,19 +194,22 @@ impl AgentExecutor {
                 task_id: context.task_id.clone(),
             })?;
 
-        // unless the task is already in a terminal state, mark it as completed
-        if matches!(
-            final_task.status.state,
-            TaskState::Completed | TaskState::Failed | TaskState::Canceled | TaskState::Rejected
-        ) {
-            tracing::debug!(
-                "Task {} is already in terminal state, not marking as completed",
-                context.task_id
-            );
-        } else {
-            context
-                .emit_task_status_update(TaskState::Completed, None, None)
-                .await?;
+        // NOTE: Do NOT automatically mark task as completed
+        // Tasks should remain in their current state (Submitted, Working, etc.)
+        // unless tools explicitly changed the state using update_status
+        // This matches the original behavior before event-driven execution
+
+        // Emit final Task object directly to A2A streams
+        // (TaskStatusUpdate events don't convert to Task results, so we send manually)
+        // Send this AFTER other events have propagated so clients receive them in order
+        let final_task_result = SendStreamingMessageResult::Task(final_task.clone());
+
+        if let Some(ref capture_tx) = capture_a2a_clone {
+            let _ = capture_tx.send(final_task_result.clone());
+        }
+
+        if let Some(ref stream) = stream_tx_clone {
+            let _ = stream.send(final_task_result).await;
         }
 
         // Clean up all subscriptions for this task
@@ -295,203 +330,258 @@ impl AgentExecutor {
         Ok(())
     }
 
-    /// Run the main conversation loop with tool calling
+    // ===== Event-Driven Turn-Based Execution =====
+
+    /// Execute a single turn of conversation (non-blocking)
+    /// Returns true if more turns are needed, false if complete
     #[tracing::instrument(
-        name = "radkit.conversation.execute_core",
-        skip(self, initial_message, context),
+        name = "radkit.conversation.execute_turn",
+        skip(self, context),
         fields(
             task.id = %context.task_id,
-            iteration.count = tracing::field::Empty,
             otel.kind = "internal",
         )
     )]
-    async fn run_conversation_loop(
-        &self,
-        mut initial_message: Message,
-        context: &ExecutionContext,
-    ) -> AgentResult<()> {
-        let max_iterations = self.config.max_iterations;
-        let mut iteration = 0;
+    async fn execute_turn(&self, context: &ExecutionContext) -> AgentResult<bool> {
+        // Get conversation history for LLM
+        let history = context.get_llm_conversation().await?;
 
-        // Emit the initial user message now that the task exists
-        initial_message.context_id = Some(context.context_id.clone());
-        initial_message.task_id = Some(context.task_id.clone());
-        let initial_content = Content::from_message(
-            initial_message,
+        // Build LLM request
+        let llm_request = LlmRequest {
+            messages: history,
+            current_task_id: context.task_id.clone(),
+            context_id: context.context_id.clone(),
+            system_instruction: Some(self.instruction.clone()),
+            config: crate::models::GenerateContentConfig::default(),
+            toolset: self.toolset.clone(),
+            metadata: HashMap::new(),
+        };
+
+        // Call LLM (async but we await here - LLM calls are typically fast)
+        let response = self
+            .model
+            .generate_content(llm_request)
+            .await
+            .map_err(|e| AgentError::LlmError {
+                source: Box::new(e),
+            })?;
+
+        // Convert response to content
+        let response_content = Content::from_llm_response(
+            response,
             context.task_id.clone(),
             context.context_id.clone(),
         );
-        context
-            .emit_user_input(initial_content)
-            .await
-            .map_err(|e| {
-                obs_utils::record_error(&e);
-                e
-            })?;
 
-        loop {
-            if iteration >= max_iterations {
-                self.handle_iteration_limit_exceeded(context, max_iterations)
-                    .await
-                    .map_err(|e| {
-                        obs_utils::record_error(&e);
-                        e
-                    })?;
-                break;
-            }
+        // Emit agent message
+        context.emit_message(response_content.clone()).await?;
 
-            iteration += 1;
-            // Update iteration count in span
-            tracing::Span::current().record("iteration.count", iteration);
+        // Check for function calls
+        let has_function_calls = response_content.has_function_calls();
 
-            tracing::debug!(
-                "Conversation iteration {} for task {}",
-                iteration,
-                context.task_id
-            );
-
-            // Get conversation history from EventProcessor for each iteration
-            let content_messages = context.get_llm_conversation().await?;
-
-            let llm_request = LlmRequest {
-                messages: content_messages,
-                current_task_id: context.task_id.clone(),
-                context_id: context.context_id.clone(),
-                system_instruction: Some(self.instruction.clone()),
-                config: crate::models::GenerateContentConfig::default(),
-                toolset: self.toolset.clone(),
-                metadata: HashMap::new(),
-            };
-
-            // Generate response from LLM
-            let response = self
-                .model
-                .generate_content(llm_request)
-                .await
-                .map_err(|e| AgentError::LlmError {
-                    source: Box::new(e),
-                })?;
-
-            // Convert LLM response to Content and emit
-            let response_content = Content::from_llm_response(
-                response,
-                context.task_id.clone(),
-                context.context_id.clone(),
-            );
-
-            context.emit_message(response_content.clone()).await?;
-
-            // Process tool calls if any
-            let has_function_calls = self.process_tool_calls(&response_content, context).await?;
-
-            if !has_function_calls {
-                // No more tool calls, conversation complete
-                // Task state will remain in its current state (likely Working or whatever tools set it to)
-                // Tools are responsible for marking tasks as Completed/Failed using update_status
-                break;
-            }
-
-            // Continue loop for next iteration
+        if has_function_calls {
+            // Dispatch tools asynchronously
+            // When tools complete, they emit UserMessage with FunctionResponse
+            // The completion handler will call execute_turn again
+            self.dispatch_tool_calls(&response_content, context).await?;
+            Ok(true)
+        } else {
+            // No more function calls - conversation complete
+            // NOTE: Do NOT change task state here - leave it in current state
+            // Tools are responsible for updating task state if needed
+            Ok(false)
         }
-
-        obs_utils::record_success();
-        Ok(())
     }
 
-    /// Handle iteration limit exceeded scenario
-    async fn handle_iteration_limit_exceeded(
-        &self,
-        context: &ExecutionContext,
-        _max_iterations: usize,
-    ) -> AgentResult<()> {
-        // Emit to persistent storage
-        // Todo: add message here says "Iteration limit exceeded"
-        context
-            .emit_task_status_update(a2a_types::TaskState::Failed, None, None)
-            .await
-    }
-
-    /// Process tool calls in a message and emit function responses
+    /// Dispatch tool calls asynchronously (non-blocking)
     #[tracing::instrument(
-        name = "radkit.tools.process_calls",
+        name = "radkit.tools.dispatch_calls",
         skip(self, content, context),
         fields(
             task.id = %context.task_id,
             tools.count = tracing::field::Empty,
-            tools.total_duration_ms = tracing::field::Empty,
             otel.kind = "internal",
         )
     )]
-    async fn process_tool_calls(
+    async fn dispatch_tool_calls(
         &self,
         content: &Content,
         context: &ExecutionContext,
-    ) -> AgentResult<bool> {
-        let mut has_function_calls = false;
-        let mut tool_count = 0;
-        let mut total_duration = 0u64;
+    ) -> AgentResult<()> {
+        use crate::models::content::ContentPart;
 
-        for part in &content.parts {
-            if let crate::models::content::ContentPart::FunctionCall {
+        let function_calls = content.get_function_calls();
+        let tool_count = function_calls.len();
+
+        // Record tool count on parent span
+        let span = tracing::Span::current();
+        span.record("tools.count", tool_count);
+
+        for part in function_calls {
+            if let ContentPart::FunctionCall {
                 name,
                 arguments,
                 tool_use_id,
                 ..
             } = part
             {
-                has_function_calls = true;
-                tool_count += 1;
+                let tool_use_id = tool_use_id
+                    .clone()
+                    .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-                // Create individual span for each tool execution
-                let tool_span = tracing::info_span!(
-                    "radkit.tool.execute_call",
-                    tool.name = %name,
-                    tool.success = tracing::field::Empty,
-                    tool.duration_ms = tracing::field::Empty,
-                );
+                // Spawn async tool execution (fire and forget)
+                let executor = self.clone();
+                let name = name.clone();
+                let arguments = arguments.clone();
+                let context_clone = context.clone();
 
-                let _guard = tool_span.enter();
-                let start_time = std::time::Instant::now();
+                tokio::spawn(async move {
+                    // Create individual span for this tool execution
+                    let tool_span = tracing::info_span!(
+                        "radkit.tool.execute_call",
+                        tool.name = %name,
+                        tool.success = tracing::field::Empty,
+                        tool.duration_ms = tracing::field::Empty,
+                        otel.kind = "internal",
+                    );
+                    let _guard = tool_span.enter();
 
-                // Execute the tool
-                let tool_result = self.execute_tool_call(name, arguments, context).await;
-                let duration_ms = start_time.elapsed().as_millis() as u64;
-                total_duration += duration_ms;
+                    let start_time = std::time::Instant::now();
 
-                // Record tool metrics
-                tool_span.record("tool.success", tool_result.success);
-                tool_span.record("tool.duration_ms", duration_ms);
-                obs_utils::record_tool_execution_metric(name, tool_result.success);
+                    // Execute tool
+                    let tool_result = executor
+                        .execute_tool_call(&name, &arguments, &context_clone)
+                        .await;
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
 
-                // Create and emit function response as UserMessage (it's input back to the agent)
-                let mut response_content = Content::new(
-                    context.task_id.clone(),
-                    context.context_id.clone(),
-                    Uuid::new_v4().to_string(),
-                    MessageRole::User,
-                );
+                    // Record tool metrics on span
+                    tool_span.record("tool.success", tool_result.success);
+                    tool_span.record("tool.duration_ms", duration_ms);
+                    obs_utils::record_tool_execution_metric(&name, tool_result.success);
 
-                response_content.add_function_response(FunctionResponseParams {
-                    name: name.clone(),
-                    success: tool_result.success,
-                    result: tool_result.data.clone(),
-                    error_message: tool_result.error_message.clone(),
-                    tool_use_id: tool_use_id.clone(),
-                    duration_ms: Some(duration_ms),
-                    metadata: None,
+                    // Create and emit function response as UserMessage (input back to agent)
+                    let mut response_content = Content::new(
+                        context_clone.task_id.clone(),
+                        context_clone.context_id.clone(),
+                        Uuid::new_v4().to_string(),
+                        MessageRole::User,
+                    );
+
+                    // Create function response part
+                    let function_response = ContentPart::FunctionResponse {
+                        name: name.clone(),
+                        success: tool_result.success,
+                        result: tool_result.data.clone(),
+                        error_message: tool_result.error_message.clone(),
+                        tool_use_id: Some(tool_use_id.clone()),
+                        duration_ms: Some(duration_ms),
+                        metadata: None,
+                    };
+
+                    response_content.parts.push(function_response.clone());
+
+                    // Emit function response as UserMessage
+                    // This will trigger the completion handler to execute next turn
+                    let _ = context_clone.emit_user_input(response_content).await;
                 });
-
-                // Function responses are UserMessage events (input to agent from tools)
-                context.emit_user_input(response_content).await?;
             }
         }
 
-        // Record aggregate metrics on parent span
-        let span = tracing::Span::current();
-        span.record("tools.count", tool_count);
-        span.record("tools.total_duration_ms", total_duration);
+        Ok(())
+    }
 
-        Ok(has_function_calls)
+    /// Setup handler for tool completion events and automatic resumption
+    #[tracing::instrument(
+        name = "radkit.conversation.setup_handler",
+        skip(self, context, completion_tx),
+        fields(
+            task.id = %context.task_id,
+            otel.kind = "internal",
+        )
+    )]
+    async fn setup_tool_completion_handler(
+        &self,
+        context: &ExecutionContext,
+        completion_tx: tokio::sync::oneshot::Sender<()>,
+    ) -> AgentResult<()> {
+        let event_bus = self.event_processor.event_bus();
+        let mut event_receiver = event_bus.subscribe(context.task_id.clone()).await?;
+
+        let executor = self.clone();
+        let context_clone = context.clone();
+        let task_id = context.task_id.clone();
+        let max_iterations = self.config.max_iterations;
+
+        tokio::spawn(async move {
+            let handler_span = tracing::info_span!(
+                "radkit.conversation.handler_loop",
+                task.id = %task_id,
+                max_iterations = max_iterations,
+                otel.kind = "internal",
+            );
+            let _guard = handler_span.enter();
+
+            let mut turn_count = 1; // Initial turn already executed before handler setup
+
+            while let Some(event) = event_receiver.recv().await {
+                // Listen for UserMessage events containing FunctionResponse parts
+                if let crate::sessions::SessionEventType::UserMessage { content } =
+                    &event.event_type
+                {
+                    // If this message has function responses, execute next turn
+                    if content.has_function_responses() {
+                        turn_count += 1;
+
+                        if turn_count > max_iterations {
+                            // Iteration limit exceeded
+                            tracing::warn!(
+                                turn_count = turn_count,
+                                max_iterations = max_iterations,
+                                "Iteration limit exceeded"
+                            );
+
+                            // Emit task failed status
+                            let error_msg = format!(
+                                "Maximum iteration limit ({}) exceeded. The agent made {} turns without completing.",
+                                max_iterations,
+                                turn_count - 1
+                            );
+                            let _ = context_clone
+                                .emit_task_status_update(TaskState::Failed, Some(error_msg), None)
+                                .await;
+
+                            // Signal completion
+                            let _ = completion_tx.send(());
+                            break;
+                        }
+
+                        tracing::debug!(
+                            turn_count = turn_count,
+                            max_iterations = max_iterations,
+                            "Function response received, executing next turn"
+                        );
+                        let _ = executor.execute_turn(&context_clone).await;
+                    }
+                }
+
+                // Check if conversation is complete (no more function calls in last agent message)
+                if let crate::sessions::SessionEventType::AgentMessage { content } =
+                    &event.event_type
+                {
+                    if !content.has_function_calls() {
+                        // No function calls - conversation complete
+                        tracing::info!(
+                            turn_count = turn_count,
+                            "Conversation complete, no more function calls"
+                        );
+                        let _ = completion_tx.send(());
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(())
     }
 
     /// Execute a tool call and return the result
