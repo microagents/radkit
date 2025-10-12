@@ -292,7 +292,7 @@ fn create_tracer_impl(
     };
 
     match &config.backend {
-        TelemetryBackend::Disabled => return Err(ObservabilityError::Disabled),
+        TelemetryBackend::Disabled => Err(ObservabilityError::Disabled),
 
         TelemetryBackend::UseGlobal => {
             // UseGlobal should be handled by caller (init_telemetry/create_telemetry_layer)

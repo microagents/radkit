@@ -38,7 +38,7 @@ pub enum SessionEventType {
     TaskStatusUpdate {
         new_state: TaskState,
         message: Option<String>,
-        task: Option<Task>,
+        task: Box<Option<Task>>,
     },
 
     /// Artifact was saved
@@ -98,9 +98,7 @@ impl SessionEvent {
             SessionEventType::AgentMessage { content } => {
                 // Function calls filtered out by to_a2a_message()
                 let message = content.to_a2a_message();
-                if message.is_none() {
-                    return None;
-                }
+                message.as_ref()?;
                 Some(SendStreamingMessageResult::Message(message.unwrap()))
             }
 

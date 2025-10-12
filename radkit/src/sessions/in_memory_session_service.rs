@@ -260,7 +260,7 @@ impl SessionService for InMemorySessionService {
         } = &event.event_type
         {
             if matches!(new_state, a2a_types::TaskState::Submitted) {
-                if let Some(submitted_task) = task {
+                if let Some(submitted_task) = &**task {
                     self.task_index
                         .insert(submitted_task.id.clone(), event.session_id.clone());
                 }
