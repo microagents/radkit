@@ -130,10 +130,7 @@ impl A2AAgentTool {
 
             // Validate agent card has URL
             if card.url.is_empty() {
-                return Err(format!(
-                    "Agent card '{}' does not contain a valid URL",
-                    name
-                ));
+                return Err(format!("Agent card '{name}' does not contain a valid URL"));
             }
 
             cards.insert(name.clone(), card);
@@ -155,21 +152,21 @@ impl A2AAgentTool {
         let card = self
             .agent_cards
             .get(agent_name)
-            .ok_or_else(|| format!("Agent '{}' not found", agent_name))?;
+            .ok_or_else(|| format!("Agent '{agent_name}' not found"))?;
 
         let headers = self.agent_headers.get(agent_name).and_then(|h| h.as_ref());
 
         match headers {
             Some(headers) => A2AClient::from_card_with_headers(card.clone(), headers.clone())
-                .map_err(|e| format!("Failed to create A2A client for {}: {}", agent_name, e)),
+                .map_err(|e| format!("Failed to create A2A client for {agent_name}: {e}")),
             None => A2AClient::from_card(card.clone())
-                .map_err(|e| format!("Failed to create A2A client for {}: {}", agent_name, e)),
+                .map_err(|e| format!("Failed to create A2A client for {agent_name}: {e}")),
         }
     }
 
     /// Get session state key for storing remote context
     fn context_state_key(agent_name: &str) -> String {
-        format!("a2a_context:{}", agent_name)
+        format!("a2a_context:{agent_name}")
     }
 
     /// Get or create remote context for an agent
@@ -284,6 +281,12 @@ impl BaseTool for A2AAgentTool {
         "Call a remote agent to delegate a task or ask a question."
     }
 
+    fn is_long_running(&self) -> bool {
+        // A2A agent calls can be long-running (hours/days)
+        // Mark as long-running so execution doesn't block
+        true
+    }
+
     fn get_declaration(&self) -> Option<FunctionDeclaration> {
         // Build enum of available agent names
         let agent_names: Vec<String> = self.agent_cards.keys().cloned().collect();
@@ -354,8 +357,7 @@ impl BaseTool for A2AAgentTool {
                     .collect::<Vec<_>>()
                     .join(", ");
                 return ToolResult::error(format!(
-                    "Failed to create client for '{}': {}. Available agents: {}",
-                    agent_name, e, available
+                    "Failed to create client for '{agent_name}': {e}. Available agents: {available}"
                 ));
             }
         };
@@ -364,7 +366,7 @@ impl BaseTool for A2AAgentTool {
         let mut remote_context = match self.get_or_create_remote_context(agent_name, context).await
         {
             Ok(ctx) => ctx,
-            Err(e) => return ToolResult::error(format!("Failed to get context: {}", e)),
+            Err(e) => return ToolResult::error(format!("Failed to get context: {e}")),
         };
 
         // 4. Build A2A message
@@ -381,8 +383,7 @@ impl BaseTool for A2AAgentTool {
             Ok(resp) => resp,
             Err(e) => {
                 return ToolResult::error(format!(
-                    "Failed to call remote agent '{}': {}",
-                    agent_name, e
+                    "Failed to call remote agent '{agent_name}': {e}"
                 ));
             }
         };
@@ -415,8 +416,7 @@ impl BaseTool for A2AAgentTool {
 /// This ensures consistent naming in the tool interface.
 fn normalize_agent_name(name: &str) -> String {
     name.to_lowercase()
-        .replace(' ', "_")
-        .replace('-', "_")
+        .replace([' ', '-'], "_")
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '_')
         .collect()

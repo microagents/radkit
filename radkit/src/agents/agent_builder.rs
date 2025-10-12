@@ -198,7 +198,7 @@ impl AgentBuilder {
 
         let toolset: Option<Arc<dyn BaseToolset>> = {
             let individual_tools: Vec<Arc<dyn BaseTool>> =
-                self.tools.into_iter().map(|t| Arc::from(t)).collect();
+                self.tools.into_iter().map(Arc::from).collect();
             if let Some(base_toolset) = self.toolset {
                 if individual_tools.is_empty() {
                     // Only a toolset is provided

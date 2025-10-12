@@ -207,7 +207,7 @@ impl QueryService {
                     task,
                 } => {
                     if matches!(new_state, a2a_types::TaskState::Submitted) {
-                        if let Some(submitted_task) = task {
+                        if let Some(submitted_task) = &**task {
                             current_task = Some(submitted_task.clone());
                         }
                     } else if let Some(ref mut task) = current_task {

@@ -110,10 +110,9 @@ impl Agent {
                 None,         // No streaming
             )
             .await
-            .map_err(|e| {
-                obs_utils::record_error(&e);
+            .inspect_err(|e| {
+                obs_utils::record_error(e);
                 obs_utils::record_agent_message_metric(&self.agent_card.name, false);
-                e
             })?;
 
         // Record session_id now that we have the result

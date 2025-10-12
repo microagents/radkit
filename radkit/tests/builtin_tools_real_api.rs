@@ -131,6 +131,7 @@ async fn test_anthropic_status_update() {
     let mut final_task = None;
 
     // Process streaming results to capture A2A events
+    let mut found_working_status = false;
     while let Some(event) = execution.a2a_stream.next().await {
         match event {
             SendStreamingMessageResult::TaskStatusUpdate(status_event) => {
@@ -140,7 +141,11 @@ async fn test_anthropic_status_update() {
                     status_event.task_id, status_event.status.state, status_event.is_final
                 );
                 assert_eq!(status_event.kind, "status-update");
-                assert_eq!(status_event.status.state, radkit::a2a::TaskState::Working);
+
+                // Check if this is the Working status from the tool call (skip initial Submitted)
+                if status_event.status.state == radkit::a2a::TaskState::Working {
+                    found_working_status = true;
+                }
             }
             SendStreamingMessageResult::Task(task) => {
                 println!("✅ Final task with {} messages", task.history.len());
@@ -150,6 +155,12 @@ async fn test_anthropic_status_update() {
             _ => {} // Skip other events
         }
     }
+
+    // Verify we received the Working status update from the tool
+    assert!(
+        found_working_status,
+        "Should have received Working status update from update_status tool"
+    );
 
     let final_task = final_task.expect("Should receive final task");
     println!("✅ Final task state: {:?}", final_task.status.state);
