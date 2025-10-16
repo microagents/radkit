@@ -26,7 +26,7 @@ impl Default for TransportProtocol {
 }
 
 /// Declares a combination of a target URL and a transport protocol for interacting with the agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentInterface {
     /// The transport protocol supported at this URL.
     pub transport: TransportProtocol,
@@ -35,7 +35,7 @@ pub struct AgentInterface {
 }
 
 /// A declaration of a protocol extension supported by an Agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentExtension {
     /// The unique URI identifying the extension.
     pub uri: String,
@@ -51,7 +51,7 @@ pub struct AgentExtension {
 }
 
 /// Defines optional capabilities supported by an agent.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentCapabilities {
     /// Indicates if the agent supports Server-Sent Events (SSE) for streaming responses.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,7 +71,7 @@ pub struct AgentCapabilities {
 }
 
 /// Represents the service provider of an agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentProvider {
     /// The name of the agent provider's organization.
     pub organization: String,
@@ -80,7 +80,7 @@ pub struct AgentProvider {
 }
 
 /// Represents a distinct capability or function that an agent can perform.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSkill {
     /// A unique identifier for the agent's skill.
     pub id: String,
@@ -105,7 +105,7 @@ pub struct AgentSkill {
 }
 
 /// Represents a JWS signature of an AgentCard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentCardSignature {
     /// The protected JWS header for the signature (Base64url-encoded).
     #[serde(rename = "protected")]
@@ -118,7 +118,7 @@ pub struct AgentCardSignature {
 }
 
 /// The AgentCard is a self-describing manifest for an agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentCard {
     /// A human-readable name for the agent.
     pub name: String,
