@@ -2,10 +2,94 @@
 //!
 //! This module provides the main Agent API that implements the A2A (Agent-to-Agent) protocol.
 //! Agent is now a clean facade that delegates all execution to AgentExecutor.
+//!
+//! # Creating Agents
+//!
+//! There are three ways to create agents:
+//!
+//! ## 1. Programmatic Construction
+//!
+//! ```no_run
+//! use radkit::agents::Agent;
+//! use radkit::models::OpenAILlm;
+//! use radkit::config::EnvKey;
+//!
+//! let agent = Agent::builder(
+//!     "You are a helpful assistant",
+//!     OpenAILlm::new("gpt-4o".to_string(), EnvKey::new("OPENAI_API_KEY"))
+//! )
+//! .with_card(|c| c.with_name("Assistant").with_description("Helpful AI"))
+//! .with_builtin_task_tools()
+//! .build();
+//! ```
+//!
+//! ## 2. Load from YAML Configuration
+//!
+//! ```no_run
+//! use radkit::agents::AgentBuilder;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let yaml = r#"
+//! card:
+//!   name: My Agent
+//!   description: A helpful assistant
+//!   version: 1.0.0
+//! instruction: You are a helpful assistant
+//! model:
+//!   type: openai
+//!   name: gpt-4o
+//!   api_key_env: OPENAI_API_KEY
+//! "#;
+//!
+//! let agent = AgentBuilder::from_yaml(yaml).await?.build();
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 3. Load and Customize
+//!
+//! Load from configuration and add additional tools or settings:
+//!
+//! ```no_run
+//! use radkit::agents::AgentBuilder;
+//! use radkit::tools::{FunctionTool, ToolResult};
+//! use serde_json::json;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let yaml = r#"
+//! card:
+//!   name: My Agent
+//!   description: A helpful assistant
+//!   version: 1.0.0
+//! instruction: You are a helpful assistant
+//! model:
+//!   type: openai
+//!   name: gpt-4o
+//!   api_key_env: OPENAI_API_KEY
+//! tools:
+//!   builtin:
+//!     update_status: true
+//!     save_artifact: true
+//! "#;
+//!
+//! // Load and add custom tools
+//! let agent = AgentBuilder::from_yaml(yaml).await?
+//!     .with_tool(FunctionTool::new(
+//!         "my_tool".to_string(),
+//!         "Custom functionality".to_string(),
+//!         |_args, _ctx| Box::pin(async {
+//!             ToolResult::success(json!({"status": "ok"}))
+//!         })
+//!     ))
+//!     .build();
+//! # Ok(())
+//! # }
+//! ```
 
 use super::agent_builder::AgentBuilder;
 use super::agent_executor::AgentExecutor;
 use crate::agents::{SendMessageResultWithEvents, SendStreamingMessageResultWithEvents};
+use crate::config::AgentDefinition;
 use crate::errors::AgentResult;
 use crate::observability::utils as obs_utils;
 use a2a_types::{AgentCard, MessageSendParams, SendMessageResult, Task};
@@ -20,6 +104,9 @@ pub struct Agent {
 
     /// Execution engine (shared via Arc for efficient streaming)
     pub(crate) executor: Arc<AgentExecutor>,
+
+    /// Agent definition (configuration source)
+    pub(crate) definition: AgentDefinition,
 }
 
 impl Agent {
@@ -66,6 +153,41 @@ impl Agent {
     /// Get access to session service for testing/advanced usage
     pub fn session_service(&self) -> Arc<dyn crate::sessions::SessionService> {
         self.executor.session_service().clone()
+    }
+
+    /// Get the agent's definition
+    pub fn get_definition(&self) -> &AgentDefinition {
+        &self.definition
+    }
+
+    /// Export agent definition to YAML format
+    pub fn to_yaml(&self) -> crate::errors::AgentResult<String> {
+        self.definition
+            .to_yaml()
+            .map_err(|e| crate::errors::AgentError::Serialization {
+                format: "yaml".to_string(),
+                reason: e.to_string(),
+            })
+    }
+
+    /// Export agent definition to JSON format (pretty-printed)
+    pub fn to_json(&self) -> crate::errors::AgentResult<String> {
+        self.definition
+            .to_json()
+            .map_err(|e| crate::errors::AgentError::Serialization {
+                format: "json".to_string(),
+                reason: e.to_string(),
+            })
+    }
+
+    /// Export agent definition to compact JSON format
+    pub fn to_json_compact(&self) -> crate::errors::AgentResult<String> {
+        self.definition
+            .to_json_compact()
+            .map_err(|e| crate::errors::AgentError::Serialization {
+                format: "json".to_string(),
+                reason: e.to_string(),
+            })
     }
 
     // ===== A2A Protocol Methods =====
@@ -293,6 +415,7 @@ impl Clone for Agent {
         Self {
             agent_card: self.agent_card.clone(),
             executor: Arc::clone(&self.executor),
+            definition: self.definition.clone(),
         }
     }
 }

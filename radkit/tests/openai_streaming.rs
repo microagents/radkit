@@ -47,8 +47,7 @@ async fn test_openai_streaming_basic() {
         metadata: std::collections::HashMap::new(),
     };
 
-    // Test streaming
-    let stream = llm.generate_content_stream(request).await.unwrap();
+    let stream = llm.generate_content_stream(request, None).await.unwrap();
     let mut stream = Box::pin(stream);
 
     let mut response_parts = Vec::new();
@@ -183,7 +182,7 @@ async fn test_openai_streaming_with_tools() {
     };
 
     // Test streaming with tools
-    let stream = llm.generate_content_stream(request).await.unwrap();
+    let stream = llm.generate_content_stream(request, None).await.unwrap();
     let mut stream = Box::pin(stream);
 
     let mut has_function_call = false;
@@ -243,7 +242,13 @@ async fn test_openai_streaming_with_tools() {
 /// Test streaming error handling
 #[tokio::test]
 async fn test_openai_streaming_error_handling() {
-    let llm = OpenAILlm::new("gpt-4o".to_string(), "invalid_key".to_string());
+    use radkit::config::EnvKey;
+
+    // Set up a temporary invalid key for testing error handling
+    unsafe {
+        std::env::set_var("TEST_INVALID_OPENAI_KEY", "invalid_key");
+    }
+    let llm = OpenAILlm::new("gpt-4o".to_string(), EnvKey::new("TEST_INVALID_OPENAI_KEY"));
 
     // Create a simple request
     let mut content = Content::new(
@@ -265,7 +270,7 @@ async fn test_openai_streaming_error_handling() {
     };
 
     // Test that streaming returns an error for invalid API key
-    let result = llm.generate_content_stream(request).await;
+    let result = llm.generate_content_stream(request, None).await;
     assert!(result.is_err(), "Should return error for invalid API key");
 
     if let Err(error) = result {
@@ -280,14 +285,19 @@ async fn test_openai_streaming_error_handling() {
 /// Test that supports_streaming returns true
 #[test]
 fn test_openai_supports_streaming() {
-    let llm = OpenAILlm::new("gpt-4o".to_string(), "test_key".to_string());
+    use radkit::config::EnvKey;
+
+    unsafe {
+        std::env::set_var("TEST_OPENAI_KEY", "test_key");
+    }
+    let llm = OpenAILlm::new("gpt-4o".to_string(), EnvKey::new("TEST_OPENAI_KEY"));
     assert!(llm.supports_streaming(), "OpenAI should support streaming");
 }
 
 /// Test streaming capabilities
 #[test]
 fn test_openai_streaming_capabilities() {
-    let llm = OpenAILlm::new("gpt-4o".to_string(), "test_key".to_string());
+    let llm = OpenAILlm::new("gpt-4o".to_string(), "test_key".into());
 
     let capabilities = llm.get_capabilities();
     assert!(
@@ -304,10 +314,10 @@ fn test_openai_streaming_capabilities() {
     );
 
     // Verify different model capabilities
-    let mini_llm = OpenAILlm::new("gpt-4o-mini".to_string(), "test_key".to_string());
+    let mini_llm = OpenAILlm::new("gpt-4o-mini".to_string(), "test_key".into());
     let mini_caps = mini_llm.get_capabilities();
 
-    let turbo_llm = OpenAILlm::new("gpt-4-turbo".to_string(), "test_key".to_string());
+    let turbo_llm = OpenAILlm::new("gpt-4-turbo".to_string(), "test_key".into());
     let turbo_caps = turbo_llm.get_capabilities();
 
     // Both should support streaming implicitly

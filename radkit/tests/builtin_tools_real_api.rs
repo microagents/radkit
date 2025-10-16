@@ -10,6 +10,7 @@ use radkit::a2a::{
     TaskQueryParams,
 };
 use radkit::agents::{Agent, AgentConfig};
+use radkit::config::EnvKey;
 use radkit::models::{AnthropicLlm, GeminiLlm};
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ mod common;
 use common::{get_anthropic_key, get_gemini_key};
 
 /// Helper function to create Agent with built-in tools enabled
-fn create_test_agent_with_builtin_tools(api_key: String, provider: &str) -> Agent {
+fn create_test_agent_with_builtin_tools(api_key: EnvKey, provider: &str) -> Agent {
     let config = AgentConfig::default().with_max_iterations(10);
 
     match provider {
@@ -237,7 +238,7 @@ async fn test_anthropic_status_update() {
 }
 
 #[tokio::test]
-#[ignore] // Only run with --ignored flag when API key is available
+#[ignore] // Only run with --ignored flag when an API key is available
 async fn test_anthropic_artifact_save() {
     let Some(api_key) = get_anthropic_key() else {
         println!("⚠️  Skipping test: ANTHROPIC_API_KEY not found");

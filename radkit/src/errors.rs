@@ -230,6 +230,45 @@ impl AgentError {
 /// Convenience type alias
 pub type AgentResult<T> = std::result::Result<T, AgentError>;
 
+// === Configuration Loading Errors ===
+
+/// Errors that can occur during agent loading from YAML/JSON configuration
+#[derive(Debug, thiserror::Error)]
+pub enum LoaderError {
+    #[error("YAML parsing error: {0}")]
+    YamlParse(#[from] serde_yaml::Error),
+
+    #[error("Environment variable error: {0}")]
+    EnvironmentVar(String),
+
+    #[error("Model creation error: {0}")]
+    ModelCreation(String),
+
+    #[error("Tool creation error: {0}")]
+    ToolCreation(String),
+
+    #[error("Validation error: {0}")]
+    Validation(String),
+}
+
+impl LoaderError {
+    pub fn environment_var<S: Into<String>>(msg: S) -> Self {
+        Self::EnvironmentVar(msg.into())
+    }
+
+    pub fn model_creation<S: Into<String>>(msg: S) -> Self {
+        Self::ModelCreation(msg.into())
+    }
+
+    pub fn tool_creation<S: Into<String>>(msg: S) -> Self {
+        Self::ToolCreation(msg.into())
+    }
+
+    pub fn validation<S: Into<String>>(msg: S) -> Self {
+        Self::Validation(msg.into())
+    }
+}
+
 /// Helper macros for common error patterns
 #[macro_export]
 macro_rules! not_found {

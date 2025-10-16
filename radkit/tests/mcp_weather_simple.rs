@@ -24,12 +24,12 @@ use common::{get_anthropic_key, get_gemini_key, get_openai_key, init_test_env};
 /// Helper function to create MCP weather toolset
 fn create_mcp_weather_toolset() -> MCPToolset {
     let mcp_connection = MCPConnectionParams::Http {
-        url: "https://mcp-servers.ag6.ai/weather".to_string(),
+        url: "https://mcp-servers.microagents.io/weather".to_string(),
         timeout: Duration::from_secs(30),
         headers: Default::default(),
     };
 
-    MCPToolset::new(mcp_connection)
+    MCPToolset::new("mcp_weather".to_string(), mcp_connection)
 }
 
 /// Helper function to create Agent with MCP weather tools - Anthropic

@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://radkit.dev/schemas/function-tool-schema.json",
+  "title": "Function Tool Provider",
+  "description": "Schema for a function tool provider (export-only).",
+  "type": "object",
+  "required": ["type", "name", "args"],
+  "properties": {
+    "type": {
+      "const": "function"
+    },
+    "name": {
+      "type": "string",
+      "description": "Name of the function tool"
+    },
+    "args": {
+      "description": "JSON Schema defining the function's arguments",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

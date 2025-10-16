@@ -1,4 +1,5 @@
 use super::{BaseLlm, LlmRequest, LlmResponse, ProviderCapabilities};
+use crate::config::EnvKey;
 use crate::errors::{AgentError, AgentResult};
 use crate::models::content::{Content, ContentPart};
 use crate::observability::utils as obs_utils;
@@ -17,15 +18,35 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 pub struct AnthropicLlm {
     model_name: String,
-    api_key: String,
+    env_key: EnvKey,
     client: reqwest::Client,
 }
 
 impl AnthropicLlm {
-    pub fn new(model_name: String, api_key: String) -> Self {
+    /// Create a new Anthropic LLM with an environment key reference
+    ///
+    /// The API key is resolved at runtime during `generate_content()` calls.
+    /// Pass a custom resolver via `AgentBuilder::with_env_resolver()` or use the default std::env resolver.
+    ///
+    /// # Arguments
+    /// * `model_name` - The Anthropic model name (e.g., "claude-3-5-sonnet-20241022")
+    /// * `env_key` - Environment variable reference (e.g., "ANTHROPIC_API_KEY")
+    ///
+    /// # Example
+    /// ```no_run
+    /// use radkit::models::AnthropicLlm;
+    /// use radkit::config::EnvKey;
+    ///
+    /// // Explicit env var reference
+    /// let llm = AnthropicLlm::new(
+    ///     "claude-3-5-sonnet-20241022".to_string(),
+    ///     EnvKey::new("ANTHROPIC_API_KEY")
+    /// );
+    /// ```
+    pub fn new(model_name: String, env_key: EnvKey) -> Self {
         Self {
             model_name,
-            api_key,
+            env_key,
             client: reqwest::Client::new(),
         }
     }
@@ -275,9 +296,16 @@ impl BaseLlm for AnthropicLlm {
         &self.model_name
     }
 
+    fn to_model_config(&self) -> crate::config::ModelConfig {
+        crate::config::ModelConfig::Anthropic {
+            name: self.model_name.clone(),
+            api_key_env: self.env_key.key().to_string(), // Export env var name, not the actual key
+        }
+    }
+
     #[tracing::instrument(
         name = "radkit.llm.generate_content",
-        skip(self, request),
+        skip(self, request, env_resolver),
         fields(
             llm.provider = "anthropic",
             llm.model = %self.model_name,
@@ -289,7 +317,13 @@ impl BaseLlm for AnthropicLlm {
             otel.kind = "client",
         )
     )]
-    async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse> {
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        env_resolver: Option<crate::config::EnvResolverFn>,
+    ) -> AgentResult<LlmResponse> {
+        // Resolve API key at runtime
+        let api_key = self.env_key.resolve_with(env_resolver)?;
         // Convert Content messages to Anthropic messages
         let anthropic_messages = Self::content_messages_to_anthropic_messages(
             &request.messages,
@@ -327,7 +361,7 @@ impl BaseLlm for AnthropicLlm {
         let response = self
             .client
             .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
+            .header("x-api-key", &api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
             .json(&anthropic_request)
@@ -408,6 +442,7 @@ impl BaseLlm for AnthropicLlm {
     async fn generate_content_stream(
         &self,
         _request: LlmRequest,
+        _env_resolver: Option<crate::config::EnvResolverFn>,
     ) -> AgentResult<Pin<Box<dyn Stream<Item = AgentResult<LlmResponse>> + Send>>> {
         // For now, just return an error - we'll implement streaming later
         Err(AgentError::NotImplemented {

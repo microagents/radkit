@@ -15,7 +15,6 @@ use radkit::sessions::InMemorySessionService;
 use radkit::tools::{FunctionTool, ToolResult};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 mod common;
 use common::get_anthropic_key;

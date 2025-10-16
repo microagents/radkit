@@ -1,4 +1,5 @@
 use super::{BaseLlm, LlmRequest, LlmResponse, ProviderCapabilities, StreamingInfo};
+use crate::config::EnvKey;
 use crate::errors::{AgentError, AgentResult};
 use crate::models::content::{Content, ContentPart};
 use crate::tools::BaseToolset;
@@ -15,15 +16,35 @@ const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
 pub struct OpenAILlm {
     model_name: String,
-    api_key: String,
+    env_key: EnvKey,
     client: reqwest::Client,
 }
 
 impl OpenAILlm {
-    pub fn new(model_name: String, api_key: String) -> Self {
+    /// Create a new OpenAI LLM with an environment key reference
+    ///
+    /// The API key is resolved at runtime during `generate_content()` calls.
+    /// Pass a custom resolver via `AgentBuilder::with_env_resolver()` or use the default std::env resolver.
+    ///
+    /// # Arguments
+    /// * `model_name` - The OpenAI model name (e.g., "gpt-4o", "gpt-4-turbo")
+    /// * `env_key` - Environment variable reference (e.g., "OPENAI_API_KEY")
+    ///
+    /// # Example
+    /// ```no_run
+    /// use radkit::models::OpenAILlm;
+    /// use radkit::config::EnvKey;
+    ///
+    /// // Explicit env var reference
+    /// let llm = OpenAILlm::new(
+    ///     "gpt-4o".to_string(),
+    ///     EnvKey::new("OPENAI_API_KEY")
+    /// );
+    /// ```
+    pub fn new(model_name: String, env_key: EnvKey) -> Self {
         Self {
             model_name,
-            api_key,
+            env_key,
             client: reqwest::Client::new(),
         }
     }
@@ -44,24 +65,6 @@ struct FunctionDefinition {
     parameters: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     strict: Option<bool>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum ToolChoice {
-    Auto,
-    None,
-    Required,
-    Specific {
-        #[serde(rename = "type")]
-        choice_type: String,
-        function: ToolChoiceFunction,
-    },
-}
-
-#[derive(Debug, Serialize)]
-struct ToolChoiceFunction {
-    name: String,
 }
 
 // Message types for OpenAI API
@@ -125,6 +128,7 @@ struct ResponseFormat {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenAIResponse {
     id: String,
     object: String,
@@ -135,6 +139,7 @@ struct OpenAIResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Choice {
     index: i32,
     message: OpenAIMessage,
@@ -142,6 +147,7 @@ struct Choice {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Usage {
     prompt_tokens: i32,
     completion_tokens: i32,
@@ -154,6 +160,7 @@ struct OpenAIError {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenAIErrorDetail {
     message: String,
     #[serde(rename = "type")]
@@ -163,6 +170,7 @@ struct OpenAIErrorDetail {
 
 // Streaming response types
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct StreamResponse {
     id: String,
     object: String,
@@ -172,6 +180,7 @@ struct StreamResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct StreamChoice {
     index: i32,
     delta: Delta,
@@ -179,6 +188,7 @@ struct StreamChoice {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Delta {
     role: Option<String>,
     content: Option<String>,
@@ -186,6 +196,7 @@ struct Delta {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ToolCallDelta {
     index: usize,
     id: Option<String>,
@@ -195,6 +206,7 @@ struct ToolCallDelta {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct FunctionCallDelta {
     name: Option<String>,
     arguments: Option<String>,
@@ -465,7 +477,20 @@ impl BaseLlm for OpenAILlm {
         &self.model_name
     }
 
-    async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse> {
+    fn to_model_config(&self) -> crate::config::ModelConfig {
+        crate::config::ModelConfig::OpenAI {
+            name: self.model_name.clone(),
+            api_key_env: self.env_key.key().to_string(), // Export env var name, not the actual key
+        }
+    }
+
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        env_resolver: Option<crate::config::EnvResolverFn>,
+    ) -> AgentResult<LlmResponse> {
+        // Resolve API key at runtime
+        let api_key = self.env_key.resolve_with(env_resolver)?;
         // Convert Content messages to OpenAI messages
         let mut openai_messages =
             Self::content_messages_to_openai_messages(&request.messages, &request.current_task_id);
@@ -504,7 +529,7 @@ impl BaseLlm for OpenAILlm {
         let response = self
             .client
             .post(OPENAI_API_URL)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
             .json(&openai_request)
             .send()
@@ -593,7 +618,10 @@ impl BaseLlm for OpenAILlm {
     async fn generate_content_stream(
         &self,
         request: LlmRequest,
+        env_resolver: Option<crate::config::EnvResolverFn>,
     ) -> AgentResult<Pin<Box<dyn Stream<Item = AgentResult<LlmResponse>> + Send>>> {
+        // Resolve API key at runtime
+        let api_key = self.env_key.resolve_with(env_resolver)?;
         // Convert Content messages to OpenAI messages
         let mut openai_messages =
             Self::content_messages_to_openai_messages(&request.messages, &request.current_task_id);
@@ -631,7 +659,7 @@ impl BaseLlm for OpenAILlm {
         let response = self
             .client
             .post(OPENAI_API_URL)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
             .json(&openai_request)
             .send()
