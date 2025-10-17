@@ -1,4 +1,5 @@
 use super::{BaseLlm, LlmRequest, LlmResponse, ProviderCapabilities};
+use crate::config::EnvKey;
 use crate::errors::{AgentError, AgentResult};
 use crate::models::content::{Content, ContentPart};
 use crate::observability::utils as obs_utils;
@@ -15,15 +16,35 @@ const GEMINI_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/m
 
 pub struct GeminiLlm {
     model_name: String,
-    api_key: String,
+    env_key: EnvKey,
     client: reqwest::Client,
 }
 
 impl GeminiLlm {
-    pub fn new(model_name: String, api_key: String) -> Self {
+    /// Create a new Gemini LLM with an environment key reference
+    ///
+    /// The API key is resolved at runtime during `generate_content()` calls.
+    /// Pass a custom resolver via `AgentBuilder::with_env_resolver()` or use the default std::env resolver.
+    ///
+    /// # Arguments
+    /// * `model_name` - The Gemini model name (e.g., "gemini-2.0-flash-exp", "gemini-1.5-pro")
+    /// * `env_key` - Environment variable reference (e.g., "GEMINI_API_KEY")
+    ///
+    /// # Example
+    /// ```no_run
+    /// use radkit::models::GeminiLlm;
+    /// use radkit::config::EnvKey;
+    ///
+    /// // Explicit env var reference
+    /// let llm = GeminiLlm::new(
+    ///     "gemini-2.0-flash-exp".to_string(),
+    ///     EnvKey::new("GEMINI_API_KEY")
+    /// );
+    /// ```
+    pub fn new(model_name: String, env_key: EnvKey) -> Self {
         Self {
             model_name,
-            api_key,
+            env_key,
             client: reqwest::Client::new(),
         }
     }
@@ -292,9 +313,16 @@ impl BaseLlm for GeminiLlm {
         &self.model_name
     }
 
+    fn to_model_config(&self) -> crate::config::ModelConfig {
+        crate::config::ModelConfig::Gemini {
+            name: self.model_name.clone(),
+            api_key_env: self.env_key.key().to_string(), // Export env var name, not the actual key
+        }
+    }
+
     #[tracing::instrument(
         name = "radkit.llm.generate_content",
-        skip(self, request),
+        skip(self, request, env_resolver),
         fields(
             llm.provider = "gemini",
             llm.model = %self.model_name,
@@ -306,7 +334,13 @@ impl BaseLlm for GeminiLlm {
             otel.kind = "client",
         )
     )]
-    async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse> {
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        env_resolver: Option<crate::config::EnvResolverFn>,
+    ) -> AgentResult<LlmResponse> {
+        // Resolve API key at runtime
+        let api_key = self.env_key.resolve_with(env_resolver)?;
         // Convert Content messages to Gemini contents
         let gemini_contents =
             Self::content_messages_to_gemini_contents(&request.messages, &request.current_task_id);
@@ -343,7 +377,7 @@ impl BaseLlm for GeminiLlm {
         let response = self
             .client
             .post(&url)
-            .header("x-goog-api-key", &self.api_key)
+            .header("x-goog-api-key", &api_key)
             .header("content-type", "application/json")
             .json(&gemini_request)
             .send()
@@ -430,6 +464,7 @@ impl BaseLlm for GeminiLlm {
     async fn generate_content_stream(
         &self,
         _request: LlmRequest,
+        _env_resolver: Option<crate::config::EnvResolverFn>,
     ) -> AgentResult<Pin<Box<dyn Stream<Item = AgentResult<LlmResponse>> + Send>>> {
         // For now, just return an error - we'll implement streaming later
         Err(AgentError::NotImplemented {

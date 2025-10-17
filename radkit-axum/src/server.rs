@@ -172,7 +172,7 @@ impl A2AServer {
         let app = create_routes(state)
             // Add authentication middleware
             .layer(middleware::from_fn(
-                move |mut req: axum::extract::Request, next: middleware::Next| {
+                move |req: axum::extract::Request, next: middleware::Next| {
                     let extractor = auth_extractor.clone();
                     async move {
                         // Extract auth context

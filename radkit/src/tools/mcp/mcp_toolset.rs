@@ -30,15 +30,19 @@ impl MCPToolFilter {
 
 /// MCPToolset that lazily discovers tools and manages connections
 pub struct MCPToolset {
+    name: String,
     session_manager: Arc<MCPSessionManager>,
+    connection_params: MCPConnectionParams,
     tool_filter: Option<MCPToolFilter>,
 }
 
 impl MCPToolset {
-    /// Create a new MCPToolset with the given connection parameters
-    pub fn new(connection_params: MCPConnectionParams) -> Self {
+    /// Create a new MCPToolset with the given name and connection parameters
+    pub fn new(name: String, connection_params: MCPConnectionParams) -> Self {
         Self {
-            session_manager: Arc::new(MCPSessionManager::new(connection_params)),
+            name,
+            session_manager: Arc::new(MCPSessionManager::new(connection_params.clone())),
+            connection_params,
             tool_filter: None,
         }
     }
@@ -67,6 +71,58 @@ impl MCPToolset {
                     reason: format!("MCP connection failed: {e:?}"),
                 })
             }
+        }
+    }
+
+    /// Convert this toolset to a ToolProviderConfig for agent definition
+    pub fn to_tool_provider_config(&self) -> crate::config::ToolProviderConfig {
+        use crate::config::{MCPHttpConfig, MCPStdioConfig, ToolProviderConfig, ToolsFilter};
+
+        match &self.connection_params {
+            MCPConnectionParams::Http {
+                url,
+                headers,
+                timeout,
+            } => ToolProviderConfig::MCPHttp(MCPHttpConfig {
+                name: self.name.clone(),
+                url: url.clone(),
+                headers: headers.clone(),
+                timeout: timeout.as_millis() as u64,
+                tools_filter: self.tool_filter.as_ref().and_then(|filter| match filter {
+                    MCPToolFilter::All => None,
+                    MCPToolFilter::Include(names) => Some(ToolsFilter {
+                        include: Some(names.clone()),
+                        exclude: None,
+                    }),
+                    MCPToolFilter::Exclude(names) => Some(ToolsFilter {
+                        include: None,
+                        exclude: Some(names.clone()),
+                    }),
+                }),
+            }),
+            MCPConnectionParams::Stdio {
+                command,
+                args,
+                env,
+                timeout,
+            } => ToolProviderConfig::MCPStdio(MCPStdioConfig {
+                name: self.name.clone(),
+                command: command.clone(),
+                args: args.clone(),
+                env: env.clone(),
+                timeout: timeout.as_millis() as u64,
+                tools_filter: self.tool_filter.as_ref().and_then(|filter| match filter {
+                    MCPToolFilter::All => None,
+                    MCPToolFilter::Include(names) => Some(ToolsFilter {
+                        include: Some(names.clone()),
+                        exclude: None,
+                    }),
+                    MCPToolFilter::Exclude(names) => Some(ToolsFilter {
+                        include: None,
+                        exclude: Some(names.clone()),
+                    }),
+                }),
+            }),
         }
     }
 }
@@ -128,6 +184,10 @@ impl BaseToolset for MCPToolset {
         radkit_tools
     }
 
+    fn to_tool_provider_configs(&self) -> Vec<crate::config::ToolProviderConfig> {
+        vec![self.to_tool_provider_config()]
+    }
+
     async fn close(&self) {
         info!("Closing MCPToolset");
         self.session_manager.close().await;
@@ -183,8 +243,9 @@ mod tests {
             timeout: std::time::Duration::from_secs(5),
         };
 
-        let toolset = MCPToolset::new(params);
+        let toolset = MCPToolset::new("test_toolset".to_string(), params);
         assert!(toolset.tool_filter.is_none());
+        assert_eq!(toolset.name, "test_toolset");
 
         let toolset = toolset.with_filter(MCPToolFilter::All);
         assert!(matches!(toolset.tool_filter, Some(MCPToolFilter::All)));

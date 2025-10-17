@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://radkit.dev/schemas/mcp-tool-schema.json",
+  "title": "MCP HTTP Tool Provider",
+  "description": "Schema for configuring an MCP-over-HTTP tool provider.",
+  "type": "object",
+  "required": ["type", "name", "url"],
+  "properties": {
+    "type": {
+      "const": "mcp_http"
+    },
+    "name": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "headers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "timeout": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30000
+    },
+    "tools_filter": {
+      "type": ["object", "null"],
+      "properties": {
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

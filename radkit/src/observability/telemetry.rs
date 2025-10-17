@@ -174,15 +174,14 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard, Observa
 ///     Ok(())
 /// }
 /// ```
+pub type TelemetryLayerInfo<S> = (
+    Option<Box<dyn Layer<S> + Send + Sync>>,
+    Option<TelemetryLayerGuard>,
+);
+
 pub fn create_telemetry_layer<S>(
     config: TelemetryConfig,
-) -> Result<
-    (
-        Option<Box<dyn Layer<S> + Send + Sync>>,
-        Option<TelemetryLayerGuard>,
-    ),
-    ObservabilityError,
->
+) -> Result<TelemetryLayerInfo<S>, ObservabilityError>
 where
     S: tracing::Subscriber
         + for<'span> tracing_subscriber::registry::LookupSpan<'span>
@@ -314,9 +313,9 @@ fn create_tracer_impl(
         TelemetryBackend::UseGlobal => {
             // UseGlobal should be handled by caller (init_telemetry/create_telemetry_layer)
             // If we get here, it's a programming error
-            return Err(ObservabilityError::Config(
+            Err(ObservabilityError::Config(
                 "UseGlobal backend must be handled by caller, not create_tracer_impl".to_string(),
-            ));
+            ))
         }
 
         TelemetryBackend::OtlpGrpc {

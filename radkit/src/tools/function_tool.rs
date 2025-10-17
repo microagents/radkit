@@ -18,6 +18,47 @@ pub type AsyncToolFunction = Box<
 >;
 
 /// A tool that wraps a simple function.
+///
+/// # Configuration Export Limitation
+///
+/// **IMPORTANT:** Function tools cannot be fully round-tripped through configuration files.
+/// While the tool's schema (name, description, parameters) can be exported to YAML/JSON via
+/// `AgentDefinition.to_yaml()`, the actual function implementation (the closure) cannot be
+/// serialized. This means:
+///
+/// - ✅ You CAN export an agent with function tools to get the schema
+/// - ❌ You CANNOT load that configuration and reconstruct the function tools
+/// - ✅ Function tools must be added programmatically via `AgentBuilder`
+///
+/// If you attempt to load a configuration file with a `functions` field, the loader will
+/// return an error directing you to add function tools programmatically.
+///
+/// # Example
+///
+/// ```no_run
+/// use radkit::tools::FunctionTool;
+/// use radkit::agents::Agent;
+/// use radkit::models::MockLlm;
+/// use serde_json::json;
+///
+/// // Create function tool programmatically
+/// let custom_tool = FunctionTool::new(
+///     "my_tool".to_string(),
+///     "Does something useful".to_string(),
+///     |_args, _ctx| Box::pin(async {
+///         radkit::tools::ToolResult::success(json!({"status": "ok"}))
+///     })
+/// );
+///
+/// // Add to agent via builder
+/// let agent = Agent::builder("instruction", MockLlm::new("model".to_string()))
+///     .with_tool(custom_tool)
+///     .build();
+///
+/// // Export will include the schema but not the implementation
+/// let yaml = agent.to_yaml().unwrap();
+/// // The YAML will show the tool exists but you can't reload and reconstruct it
+/// ```
 pub struct FunctionTool {
     name: String,
     description: String,
@@ -82,6 +123,15 @@ impl BaseTool for FunctionTool {
                 .parameters_schema
                 .clone()
                 .unwrap_or(Value::Object(serde_json::Map::new())),
+        })
+    }
+
+    fn to_tool_provider_config(&self) -> Option<crate::config::ToolProviderConfig> {
+        self.get_declaration().map(|decl| {
+            crate::config::ToolProviderConfig::Function(crate::config::FunctionToolConfig {
+                name: decl.name,
+                args: decl.parameters,
+            })
         })
     }
 

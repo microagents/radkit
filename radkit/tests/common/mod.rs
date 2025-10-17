@@ -1,5 +1,6 @@
 //! Common test utilities and setup
 
+use radkit::config::EnvKey;
 use std::sync::Once;
 
 static INIT: Once = Once::new();
@@ -17,23 +18,24 @@ pub fn init_test_env() {
 }
 
 /// Helper function to check if we have the required API key for testing.
-/// Returns the API key if available, None otherwise.
-pub fn get_api_key(key_name: &str) -> Option<String> {
+/// Returns an EnvKey if the environment variable is available, None otherwise.
+pub fn get_api_key(key_name: &str) -> Option<EnvKey> {
     init_test_env();
-    std::env::var(key_name).ok()
+    // Check if the environment variable exists
+    std::env::var(key_name).ok().map(|_| EnvKey::new(key_name))
 }
 
-/// Get Anthropic API key if available
-pub fn get_anthropic_key() -> Option<String> {
+/// Get Anthropic API key EnvKey if available
+pub fn get_anthropic_key() -> Option<EnvKey> {
     get_api_key("ANTHROPIC_API_KEY")
 }
 
-/// Get Gemini API key if available
-pub fn get_gemini_key() -> Option<String> {
+/// Get Gemini API key EnvKey if available
+pub fn get_gemini_key() -> Option<EnvKey> {
     get_api_key("GEMINI_API_KEY")
 }
 
-/// Get OpenAI API key if available
-pub fn get_openai_key() -> Option<String> {
+/// Get OpenAI API key EnvKey if available
+pub fn get_openai_key() -> Option<EnvKey> {
     get_api_key("OPENAI_API_KEY")
 }

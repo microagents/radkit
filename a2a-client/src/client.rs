@@ -45,11 +45,7 @@ struct JsonRpcRequest<T> {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum JsonRpcResponse<T> {
-    Success {
-        jsonrpc: String,
-        id: Option<JSONRPCId>,
-        result: T,
-    },
+    Success { id: Option<JSONRPCId>, result: T },
     Error(JSONRPCErrorResponse),
 }
 

@@ -324,10 +324,8 @@ impl A2AAgentTool {
                     Ok(event) => match event {
                         SendStreamingMessageResult::Message(msg) => {
                             // Accumulate message
-                            if let Some(part) = msg.parts.first() {
-                                if let Part::Text { text, .. } = part {
-                                    accumulated_messages.push(text.clone());
-                                }
+                            if let Some(Part::Text { text, .. }) = msg.parts.first() {
+                                accumulated_messages.push(text.clone());
                             }
                         }
                         SendStreamingMessageResult::TaskStatusUpdate(status_event) => {
@@ -351,10 +349,8 @@ impl A2AAgentTool {
 
                                 // Extract status message if available
                                 if let Some(msg) = &status_event.status.message {
-                                    if let Some(part) = msg.parts.first() {
-                                        if let Part::Text { text, .. } = part {
-                                            status_message = Some(text.clone());
-                                        }
+                                    if let Some(Part::Text { text, .. }) = msg.parts.first() {
+                                        status_message = Some(text.clone());
                                     }
                                 }
                                 break;
@@ -478,9 +474,9 @@ impl A2AAgentTool {
                     .join("\n");
 
                 if content.is_empty() {
-                    format!("[Artifact: {}] (no text content)", name)
+                    format!("[Artifact: {name}] (no text content)")
                 } else {
-                    format!("[Artifact: {}]\n{}", name, content)
+                    format!("[Artifact: {name}]\n{content}")
                 }
             })
             .collect::<Vec<_>>()

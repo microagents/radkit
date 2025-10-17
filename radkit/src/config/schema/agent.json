@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Configuration Schema",
+  "description": "Schema for validating agent configuration files",
+  "type": "object",
+  "required": ["card", "instruction", "model"],
+  "properties": {
+    "card": {
+      "$ref": "urn:a2a-schema#/definitions/AgentCard"
+    },
+    "instruction": {
+      "$ref": "urn:instruction-schema"
+    },
+    "max_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10,
+      "description": "Maximum iterations for tool calling"
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Timeout for the entire execution in seconds (optional)"
+    },
+    "custom_config": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Additional custom configuration as key-value pairs (optional)"
+    },
+    "model": {
+      "$ref": "urn:model-schema"
+    },
+    "tools": {
+      "type": "array",
+      "description": "Configuration for the tool providers available to the agent.",
+      "items": {
+        "type": "object",
+        "oneOf": [
+          { "$ref": "urn:builtin-tool-schema" },
+          { "$ref": "urn:mcp-tool-schema" },
+          { "$ref": "urn:mcp-stdio-schema" },
+          { "$ref": "urn:function-tool-schema" }
+        ],
+        "discriminator": {
+          "propertyName": "type"
+        }
+      }
+    },
+    "remote_agents": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:remote-agent-schema"
+      },
+      "description": "List of remote A2A-compliant agents this agent can communicate with. Authentication headers support environment variable references using ${VAR_NAME} syntax."
+    }
+  }
+}

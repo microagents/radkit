@@ -1,3 +1,4 @@
+use crate::config::EnvResolverFn;
 use crate::errors::AgentResult;
 use async_trait::async_trait;
 use futures::Stream;
@@ -27,18 +28,36 @@ pub trait BaseLlm: Send + Sync {
     /// Get the model name
     fn model_name(&self) -> &str;
 
+    /// Convert this LLM instance to a ModelConfig for agent definition
+    fn to_model_config(&self) -> crate::config::ModelConfig;
+
     /// Generate a response from an LLM request
     ///
     /// This is the main interface - agents convert A2A MessageSendParams to LlmRequest,
     /// providers convert LlmResponse back to A2A AgentResponse
-    async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse>;
+    ///
+    /// # Arguments
+    /// * `request` - The LLM request containing messages, tools, and configuration
+    /// * `env_resolver` - Optional custom environment resolver for secrets (API keys, etc.)
+    ///                    If None, uses default std::env resolver
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        env_resolver: Option<EnvResolverFn>,
+    ) -> AgentResult<LlmResponse>;
 
     /// Generate a streaming response from an LLM request
     ///
     /// Returns a stream of partial LlmResponse objects for real-time interaction
+    ///
+    /// # Arguments
+    /// * `request` - The LLM request containing messages, tools, and configuration
+    /// * `env_resolver` - Optional custom environment resolver for secrets (API keys, etc.)
+    ///                    If None, uses default std::env resolver
     async fn generate_content_stream(
         &self,
         request: LlmRequest,
+        env_resolver: Option<EnvResolverFn>,
     ) -> AgentResult<Pin<Box<dyn Stream<Item = AgentResult<LlmResponse>> + Send>>>;
 
     /// Check if this provider supports streaming

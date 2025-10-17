@@ -4,6 +4,7 @@
 //! loops, tool calling, and event processing. It's designed to be immutable
 //! after creation and efficiently shareable via Arc.
 
+use crate::config::EnvResolverFn;
 use crate::errors::{AgentError, AgentResult};
 use crate::events::{EventProcessor, ExecutionContext};
 use crate::models::{BaseLlm, LlmRequest, content::Content};
@@ -45,6 +46,10 @@ pub struct AgentExecutor {
 
     /// System instruction for the agent
     pub(crate) instruction: String,
+
+    /// Optional custom environment resolver for secrets (API keys, etc.)
+    /// If None, LLM uses default std::env resolver
+    pub(crate) env_resolver: Option<EnvResolverFn>,
 }
 
 impl AgentExecutor {
@@ -417,7 +422,7 @@ impl AgentExecutor {
         // Call LLM (async but we await here - LLM calls are typically fast)
         let response = self
             .model
-            .generate_content(llm_request)
+            .generate_content(llm_request, self.env_resolver.clone())
             .await
             .map_err(|e| AgentError::LlmError {
                 source: Box::new(e),
@@ -711,6 +716,7 @@ mod tests {
             event_processor,
             config: AgentConfig::default(),
             instruction: "Test instruction".to_string(),
+            env_resolver: None,
         }
     }
 

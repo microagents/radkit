@@ -1055,7 +1055,7 @@ pub const ARTIFACT_UPDATE_KIND: &str = "artifact-update";
 // ============================================================================
 
 /// Defines a security scheme that can be used to secure an agent's endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum SecurityScheme {
     ApiKey(APIKeySecurityScheme),
@@ -1066,7 +1066,7 @@ pub enum SecurityScheme {
 }
 
 /// Defines a security scheme using an API key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct APIKeySecurityScheme {
     /// The type of the security scheme. Must be 'apiKey'.
     #[serde(rename = "type", default = "default_api_key_type")]
@@ -1086,7 +1086,7 @@ fn default_api_key_type() -> String {
 }
 
 /// The location of an API key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum APIKeyLocation {
     Query,
@@ -1095,7 +1095,7 @@ pub enum APIKeyLocation {
 }
 
 /// Defines a security scheme using HTTP authentication.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HTTPAuthSecurityScheme {
     /// The type of the security scheme. Must be 'http'.
     #[serde(rename = "type", default = "default_http_type")]
@@ -1115,7 +1115,7 @@ fn default_http_type() -> String {
 }
 
 /// Defines a security scheme using OAuth 2.0.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OAuth2SecurityScheme {
     /// The type of the security scheme. Must be 'oauth2'.
     #[serde(rename = "type", default = "default_oauth2_type")]
@@ -1135,7 +1135,7 @@ fn default_oauth2_type() -> String {
 }
 
 /// Defines a security scheme using OpenID Connect.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpenIdConnectSecurityScheme {
     /// The type of the security scheme. Must be 'openIdConnect'.
     #[serde(rename = "type", default = "default_openid_type")]
@@ -1153,7 +1153,7 @@ fn default_openid_type() -> String {
 }
 
 /// Defines a security scheme using mTLS authentication.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MutualTLSSecurityScheme {
     /// The type of the security scheme. Must be 'mutualTLS'.
     #[serde(rename = "type", default = "default_mutual_tls_type")]
@@ -1168,7 +1168,7 @@ fn default_mutual_tls_type() -> String {
 }
 
 /// Defines the configuration for the supported OAuth 2.0 flows.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OAuthFlows {
     /// Configuration for the OAuth Authorization Code flow.
     #[serde(skip_serializing_if = "Option::is_none", rename = "authorizationCode")]
@@ -1185,7 +1185,7 @@ pub struct OAuthFlows {
 }
 
 /// Defines configuration details for the OAuth 2.0 Authorization Code flow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthorizationCodeOAuthFlow {
     /// The authorization URL to be used for this flow.
     #[serde(rename = "authorizationUrl")]
@@ -1201,7 +1201,7 @@ pub struct AuthorizationCodeOAuthFlow {
 }
 
 /// Defines configuration details for the OAuth 2.0 Implicit flow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImplicitOAuthFlow {
     /// The authorization URL to be used for this flow.
     #[serde(rename = "authorizationUrl")]
@@ -1214,7 +1214,7 @@ pub struct ImplicitOAuthFlow {
 }
 
 /// Defines configuration details for the OAuth 2.0 Resource Owner Password flow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PasswordOAuthFlow {
     /// The token URL to be used for this flow.
     #[serde(rename = "tokenUrl")]
@@ -1227,7 +1227,7 @@ pub struct PasswordOAuthFlow {
 }
 
 /// Defines configuration details for the OAuth 2.0 Client Credentials flow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientCredentialsOAuthFlow {
     /// The token URL to be used for this flow.
     #[serde(rename = "tokenUrl")]

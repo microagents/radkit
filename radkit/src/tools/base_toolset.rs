@@ -11,6 +11,9 @@ pub trait BaseToolset: Send + Sync {
     /// Returns all tools in the toolset.
     async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>>;
 
+    /// Convert this toolset to a list of `ToolProviderConfig` for agent definition.
+    fn to_tool_provider_configs(&self) -> Vec<crate::config::ToolProviderConfig>;
+
     /// Performs cleanup and releases resources held by the toolset.
     /// Called when the toolset is no longer needed.
     async fn close(&self);
@@ -62,43 +65,66 @@ impl BaseToolset for SimpleToolset {
         self.tools.clone()
     }
 
+    fn to_tool_provider_configs(&self) -> Vec<crate::config::ToolProviderConfig> {
+        self.tools
+            .iter()
+            .filter_map(|tool| tool.to_tool_provider_config())
+            .collect()
+    }
+
     async fn close(&self) {
         // Simple toolset doesn't need cleanup
     }
 }
 
-/// Combines a base toolset with additional tools
+/// Combines two toolsets into a single toolset
+///
+/// This allows composing multiple toolsets together, enabling patterns like:
+/// - Combining multiple MCP toolsets
+/// - Combining MCP toolset with built-in tools
+/// - Chaining multiple CombinedToolsets for complex compositions
 pub struct CombinedToolset {
-    base_toolset: Arc<dyn BaseToolset>,
-    additional_tools: Vec<Arc<dyn BaseTool>>,
+    left: Arc<dyn BaseToolset>,
+    right: Arc<dyn BaseToolset>,
 }
 
 impl CombinedToolset {
-    pub fn new(
-        base_toolset: Arc<dyn BaseToolset>,
-        additional_tools: Vec<Arc<dyn BaseTool>>,
-    ) -> Self {
-        Self {
-            base_toolset,
-            additional_tools,
-        }
+    /// Create a new CombinedToolset from two toolsets
+    ///
+    /// # Example
+    /// ```no_run
+    /// use radkit::tools::{SimpleToolset, CombinedToolset};
+    /// use std::sync::Arc;
+    ///
+    /// let mcp1 = Arc::new(SimpleToolset::new(vec![])); // Simplified example
+    /// let mcp2 = Arc::new(SimpleToolset::new(vec![]));
+    ///
+    /// // Combine two MCP toolsets
+    /// let combined = CombinedToolset::new(mcp1, mcp2);
+    /// ```
+    pub fn new(left: Arc<dyn BaseToolset>, right: Arc<dyn BaseToolset>) -> Self {
+        Self { left, right }
     }
 }
 
 #[async_trait]
 impl BaseToolset for CombinedToolset {
     async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
-        let mut all_tools = self.base_toolset.get_tools().await;
-        all_tools.extend(self.additional_tools.clone());
+        let mut all_tools = self.left.get_tools().await;
+        all_tools.extend(self.right.get_tools().await);
         all_tools
     }
 
-    async fn close(&self) {
-        self.base_toolset.close().await;
+    fn to_tool_provider_configs(&self) -> Vec<crate::config::ToolProviderConfig> {
+        let mut configs = self.left.to_tool_provider_configs();
+        configs.extend(self.right.to_tool_provider_configs());
+        configs
     }
 
-    async fn process_llm_request(&self, context: &ExecutionContext) {
-        self.base_toolset.process_llm_request(context).await;
+    async fn close(&self) {
+        // Close both toolsets
+        self.left.close().await;
+        self.right.close().await;
     }
 }
 
@@ -186,7 +212,8 @@ mod tests {
         let base_toolset = Arc::new(SimpleToolset::new(vec![base_tool1, base_tool2]));
 
         let additional_tool1 = MockTool::new("add1", "Additional tool 1");
-        let combined = CombinedToolset::new(base_toolset, vec![additional_tool1]);
+        let additional_toolset = Arc::new(SimpleToolset::new(vec![additional_tool1]));
+        let combined = CombinedToolset::new(base_toolset, additional_toolset);
 
         let tools = combined.get_tools().await;
         assert_eq!(tools.len(), 3);
@@ -218,8 +245,9 @@ mod tests {
     async fn test_combined_toolset_with_empty_base() {
         let empty_base = Arc::new(SimpleToolset::new(vec![]));
         let additional_tool = MockTool::new("only_additional", "The only tool");
+        let additional_toolset = Arc::new(SimpleToolset::new(vec![additional_tool]));
 
-        let combined = CombinedToolset::new(empty_base, vec![additional_tool]);
+        let combined = CombinedToolset::new(empty_base, additional_toolset);
         let tools = combined.get_tools().await;
 
         assert_eq!(tools.len(), 1);
@@ -230,8 +258,9 @@ mod tests {
     async fn test_combined_toolset_with_no_additional() {
         let base_tool = MockTool::new("base_only", "Only base tool");
         let base_toolset = Arc::new(SimpleToolset::new(vec![base_tool]));
+        let empty_toolset = Arc::new(SimpleToolset::new(vec![]));
 
-        let combined = CombinedToolset::new(base_toolset, vec![]);
+        let combined = CombinedToolset::new(base_toolset, empty_toolset);
         let tools = combined.get_tools().await;
 
         assert_eq!(tools.len(), 1);

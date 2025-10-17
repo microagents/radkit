@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod config;
 pub mod errors;
 pub mod events;
 pub mod models;

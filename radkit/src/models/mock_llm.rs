@@ -25,9 +25,17 @@ impl BaseLlm for MockLlm {
         &self.model_name
     }
 
+    fn to_model_config(&self) -> crate::config::ModelConfig {
+        // MockLlm returns OpenAI config as a placeholder
+        crate::config::ModelConfig::OpenAI {
+            name: self.model_name.clone(),
+            api_key_env: "MOCK_API_KEY".to_string(),
+        }
+    }
+
     #[tracing::instrument(
         name = "radkit.llm.generate_content",
-        skip(self, request),
+        skip(self, request, _env_resolver),
         fields(
             llm.provider = "mock",
             llm.model = %self.model_name,
@@ -38,7 +46,11 @@ impl BaseLlm for MockLlm {
             otel.kind = "client",
         )
     )]
-    async fn generate_content(&self, request: LlmRequest) -> AgentResult<LlmResponse> {
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        _env_resolver: Option<crate::config::EnvResolverFn>,
+    ) -> AgentResult<LlmResponse> {
         // **PROPER CONVERSATION HISTORY**: Access full message history from LlmRequest
         let conversation_context = format!(
             " [Conversation history: {} messages]",
@@ -159,6 +171,7 @@ impl BaseLlm for MockLlm {
     async fn generate_content_stream(
         &self,
         _request: LlmRequest,
+        _env_resolver: Option<crate::config::EnvResolverFn>,
     ) -> AgentResult<Pin<Box<dyn Stream<Item = AgentResult<LlmResponse>> + Send>>> {
         // For now, just return an error - we'll implement streaming later
         Err(AgentError::NotImplemented {
