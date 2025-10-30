@@ -3,29 +3,25 @@
 //! This module provides tools for Radkit agents to communicate with remote A2A-compliant agents.
 //! The tool handles routing, context tracking, and multi-turn conversations with remote agents.
 
+use crate::tools::{BaseTool, FunctionDeclaration, ToolContext, ToolResult};
 use a2a_client::A2AClient;
 use a2a_types::{
     AgentCard, Message, MessageRole, MessageSendParams, Part, SendMessageResponse,
     SendMessageResult, SendStreamingMessageResult, TaskState,
 };
-use async_trait::async_trait;
 use chrono::Utc;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
-use tracing::Instrument;
 use uuid::Uuid;
-
-use crate::observability::utils as obs_utils;
-use crate::tools::{BaseTool, FunctionDeclaration, ToolContext, ToolResult, ToolStateAccess};
 
 /// Tracks remote agent context across calls
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RemoteContextInfo {
-    /// Remote agent's context_id (A2A protocol)
+    /// Remote agent's `context_id` (A2A protocol)
     remote_context_id: Option<String>,
-    /// Most recent remote task_id
+    /// Most recent remote `task_id`
     remote_task_id: Option<String>,
     /// When we last called this agent
     last_call: Option<String>,
@@ -77,9 +73,9 @@ impl RemoteContextInfo {
 
 /// Tool for calling remote A2A agents
 pub struct A2AAgentTool {
-    /// Map of agent_name -> AgentCard (for metadata and client creation)
+    /// Map of `agent_name` -> `AgentCard` (for metadata and client creation)
     agent_cards: HashMap<String, AgentCard>,
-    /// Map of agent_name -> Optional headers for authentication
+    /// Map of `agent_name` -> Optional headers for authentication
     agent_headers: HashMap<String, Option<HashMap<String, String>>>,
 }
 
@@ -173,7 +169,7 @@ impl A2AAgentTool {
     }
 
     /// Get or create remote context for an agent
-    async fn get_or_create_remote_context(
+    fn get_or_create_remote_context(
         &self,
         agent_name: &str,
         context: &ToolContext<'_>,
@@ -181,7 +177,7 @@ impl A2AAgentTool {
         let state_key = Self::context_state_key(agent_name);
 
         // Try to get existing remote context from session state
-        if let Ok(Some(existing)) = context.get_session_state(&state_key).await {
+        if let Some(existing) = context.state().get_state(&state_key) {
             if let Ok(info) = serde_json::from_value::<RemoteContextInfo>(existing) {
                 return Ok(info);
             }
@@ -198,7 +194,7 @@ impl A2AAgentTool {
     }
 
     /// Store remote context info in session state
-    async fn store_remote_context(
+    fn store_remote_context(
         &self,
         agent_name: &str,
         info: &RemoteContextInfo,
@@ -206,10 +202,8 @@ impl A2AAgentTool {
     ) -> Result<(), String> {
         let state_key = Self::context_state_key(agent_name);
         let value = serde_json::to_value(info).map_err(|e| e.to_string())?;
-        context
-            .set_session_state(state_key, value)
-            .await
-            .map_err(|e| e.to_string())
+        context.state().set_state(&state_key, value);
+        Ok(())
     }
 
     /// Build A2A message with proper context
@@ -282,165 +276,132 @@ impl A2AAgentTool {
         remote_context: &mut RemoteContextInfo,
         context: &ToolContext<'_>,
     ) -> ToolResult {
-        // Create HTTP client span for distributed tracing
-        let http_span = tracing::info_span!(
-            "radkit.remote_agent.http.streaming",
-            remote.agent = %agent_name,
-            remote.endpoint = %remote_context.endpoint,
-            http.method = "POST",
-            http.url = %format!("{}/message/stream", remote_context.endpoint),
-            http.status_code = tracing::field::Empty,
-            http.duration_ms = tracing::field::Empty,
-            otel.kind = "client",  // Marks network boundary for APM
-        );
+        // Call streaming endpoint
+        let mut stream = match client.send_streaming_message(params).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                return ToolResult::error(format!(
+                    "Failed to initiate streaming call to {agent_name}: {e}"
+                ));
+            }
+        };
 
-        async {
-            let start_time = std::time::Instant::now();
+        // Accumulate messages and track state
+        let mut accumulated_messages = Vec::new();
+        let mut accumulated_artifacts = Vec::new();
+        let mut terminal_state: Option<TaskState> = None;
+        let mut status_message: Option<String> = None;
 
-            // Call streaming endpoint
-            let mut stream = match client.send_streaming_message(params).await {
-                Ok(stream) => {
-                    http_span.record("http.status_code", 200); // Assume 200 for successful stream start
-                    stream
-                }
-                Err(e) => {
-                    http_span.record("http.status_code", 500); // Error condition
-                    obs_utils::record_error(&e);
-                    return ToolResult::error(format!(
-                        "Failed to initiate streaming call to {agent_name}: {e}"
-                    ));
-                }
-            };
-
-            // Accumulate messages and track state
-            let mut accumulated_messages = Vec::new();
-            let mut accumulated_artifacts = Vec::new();
-            let mut terminal_state: Option<TaskState> = None;
-            let mut status_message: Option<String> = None;
-
-            // Process streaming events until terminal condition
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(event) => match event {
-                        SendStreamingMessageResult::Message(msg) => {
-                            // Accumulate message
-                            if let Some(Part::Text { text, .. }) = msg.parts.first() {
-                                accumulated_messages.push(text.clone());
-                            }
+        // Process streaming events until terminal condition
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(event) => match event {
+                    SendStreamingMessageResult::Message(msg) => {
+                        // Accumulate message
+                        if let Some(Part::Text { text, .. }) = msg.parts.first() {
+                            accumulated_messages.push(text.clone());
                         }
-                        SendStreamingMessageResult::TaskStatusUpdate(status_event) => {
-                            // Update remote context with task_id
-                            remote_context.remote_task_id = Some(status_event.task_id.clone());
-                            remote_context.remote_context_id =
-                                Some(status_event.context_id.clone());
+                    }
+                    SendStreamingMessageResult::TaskStatusUpdate(status_event) => {
+                        // Update remote context with task_id
+                        remote_context.remote_task_id = Some(status_event.task_id.clone());
+                        remote_context.remote_context_id = Some(status_event.context_id.clone());
 
-                            // Check for terminal states
-                            let is_terminal = matches!(
-                                status_event.status.state,
-                                TaskState::InputRequired
-                                    | TaskState::Completed
-                                    | TaskState::Failed
-                                    | TaskState::Canceled
-                                    | TaskState::Rejected
-                            );
+                        // Check for terminal states
+                        let is_terminal = matches!(
+                            status_event.status.state,
+                            TaskState::InputRequired
+                                | TaskState::Completed
+                                | TaskState::Failed
+                                | TaskState::Canceled
+                                | TaskState::Rejected
+                        );
 
-                            if is_terminal {
-                                terminal_state = Some(status_event.status.state.clone());
+                        if is_terminal {
+                            terminal_state = Some(status_event.status.state.clone());
 
-                                // Extract status message if available
-                                if let Some(msg) = &status_event.status.message {
-                                    if let Some(Part::Text { text, .. }) = msg.parts.first() {
-                                        status_message = Some(text.clone());
-                                    }
+                            // Extract status message if available
+                            if let Some(msg) = &status_event.status.message {
+                                if let Some(Part::Text { text, .. }) = msg.parts.first() {
+                                    status_message = Some(text.clone());
                                 }
-                                break;
                             }
+                            break;
                         }
-                        SendStreamingMessageResult::TaskArtifactUpdate(artifact_event) => {
-                            // Accumulate artifact
-                            accumulated_artifacts.push(artifact_event.artifact.clone());
-
-                            // Check for last chunk
-                            if artifact_event.last_chunk == Some(true) {
-                                break;
-                            }
-                        }
-                        SendStreamingMessageResult::Task(task) => {
-                            // Final task object - update context
-                            remote_context.remote_task_id = Some(task.id.clone());
-                            remote_context.remote_context_id = Some(task.context_id.clone());
-                        }
-                    },
-                    Err(e) => {
-                        return ToolResult::error(format!(
-                            "Streaming error from {agent_name}: {e}"
-                        ));
                     }
+                    SendStreamingMessageResult::TaskArtifactUpdate(artifact_event) => {
+                        // Accumulate artifact
+                        accumulated_artifacts.push(artifact_event.artifact.clone());
+
+                        // Check for last chunk
+                        if artifact_event.last_chunk == Some(true) {
+                            break;
+                        }
+                    }
+                    SendStreamingMessageResult::Task(task) => {
+                        // Final task object - update context
+                        remote_context.remote_task_id = Some(task.id.clone());
+                        remote_context.remote_context_id = Some(task.context_id.clone());
+                    }
+                },
+                Err(e) => {
+                    return ToolResult::error(format!("Streaming error from {agent_name}: {e}"));
                 }
             }
-
-            // Record HTTP call duration
-            let duration_ms = start_time.elapsed().as_millis() as u64;
-            http_span.record("http.duration_ms", duration_ms);
-
-            // Update remote context stats
-            remote_context.last_call = Some(Utc::now().to_rfc3339());
-            remote_context.message_count += 1;
-
-            // Store updated context
-            if let Err(e) = self
-                .store_remote_context(agent_name, remote_context, context)
-                .await
-            {
-                return ToolResult::error(format!("Failed to store remote context: {e}"));
-            }
-
-            // Build response based on terminal state and priority
-            let response_text = match terminal_state {
-                Some(TaskState::Completed) => {
-                    // Priority for Completed: artifacts first, then messages
-                    if !accumulated_artifacts.is_empty() {
-                        // Send only artifacts
-                        self.format_artifacts(&accumulated_artifacts)
-                    } else if !accumulated_messages.is_empty() {
-                        accumulated_messages.join("\n")
-                    } else if let Some(msg) = status_message {
-                        msg
-                    } else {
-                        format!("Task completed by {agent_name}")
-                    }
-                }
-                Some(
-                    TaskState::Failed
-                    | TaskState::Rejected
-                    | TaskState::InputRequired
-                    | TaskState::Canceled,
-                ) => {
-                    // Priority for error states: status message first, then accumulated messages
-                    if let Some(msg) = status_message {
-                        msg
-                    } else if !accumulated_messages.is_empty() {
-                        accumulated_messages.join("\n")
-                    } else {
-                        format!("Task ended with state: {:?}", terminal_state.unwrap())
-                    }
-                }
-                _ => {
-                    // No terminal state detected (last_chunk or stream ended)
-                    if !accumulated_artifacts.is_empty() {
-                        self.format_artifacts(&accumulated_artifacts)
-                    } else if !accumulated_messages.is_empty() {
-                        accumulated_messages.join("\n")
-                    } else {
-                        format!("Task submitted to {agent_name}")
-                    }
-                }
-            };
-
-            ToolResult::success(json!(response_text))
         }
-        .instrument(http_span.clone())
-        .await
+
+        // Update remote context stats
+        remote_context.last_call = Some(Utc::now().to_rfc3339());
+        remote_context.message_count += 1;
+
+        // Store updated context
+        if let Err(e) = self.store_remote_context(agent_name, remote_context, context) {
+            return ToolResult::error(format!("Failed to store remote context: {e}"));
+        }
+
+        // Build response based on terminal state and priority
+        let response_text = match terminal_state {
+            Some(TaskState::Completed) => {
+                // Priority for Completed: artifacts first, then messages
+                if !accumulated_artifacts.is_empty() {
+                    // Send only artifacts
+                    self.format_artifacts(&accumulated_artifacts)
+                } else if !accumulated_messages.is_empty() {
+                    accumulated_messages.join("\n")
+                } else if let Some(msg) = status_message {
+                    msg
+                } else {
+                    format!("Task completed by {agent_name}")
+                }
+            }
+            Some(
+                TaskState::Failed
+                | TaskState::Rejected
+                | TaskState::InputRequired
+                | TaskState::Canceled,
+            ) => {
+                // Priority for error states: status message first, then accumulated messages
+                if let Some(msg) = status_message {
+                    msg
+                } else if !accumulated_messages.is_empty() {
+                    accumulated_messages.join("\n")
+                } else {
+                    format!("Task ended with state: {:?}", terminal_state.unwrap())
+                }
+            }
+            _ => {
+                // No terminal state detected (last_chunk or stream ended)
+                if !accumulated_artifacts.is_empty() {
+                    self.format_artifacts(&accumulated_artifacts)
+                } else if !accumulated_messages.is_empty() {
+                    accumulated_messages.join("\n")
+                } else {
+                    format!("Task submitted to {agent_name}")
+                }
+            }
+        };
+
+        ToolResult::success(json!(response_text))
     }
 
     /// Format artifacts for display
@@ -492,75 +453,43 @@ impl A2AAgentTool {
         remote_context: &mut RemoteContextInfo,
         context: &ToolContext<'_>,
     ) -> ToolResult {
-        // Create HTTP client span for distributed tracing
-        let http_span = tracing::info_span!(
-            "radkit.remote_agent.http.sync",
-            remote.agent = %agent_name,
-            remote.endpoint = %remote_context.endpoint,
-            http.method = "POST",
-            http.url = %format!("{}/message/send", remote_context.endpoint),
-            http.status_code = tracing::field::Empty,
-            http.duration_ms = tracing::field::Empty,
-            otel.kind = "client",  // Marks network boundary for APM
-        );
-
-        async {
-            let start_time = std::time::Instant::now();
-
-            // Call synchronous endpoint
-            let response = match client.send_message(params).await {
-                Ok(resp) => {
-                    http_span.record("http.status_code", 200);
-                    resp
-                }
-                Err(e) => {
-                    http_span.record("http.status_code", 500);
-                    obs_utils::record_error(&e);
-                    return ToolResult::error(format!("Failed to call {agent_name}: {e}"));
-                }
-            };
-
-            // Record HTTP call duration
-            let duration_ms = start_time.elapsed().as_millis() as u64;
-            http_span.record("http.duration_ms", duration_ms);
-
-            // Update remote context from response
-            remote_context.update_from_response(&response);
-
-            // Store updated context
-            if let Err(e) = self
-                .store_remote_context(agent_name, remote_context, context)
-                .await
-            {
-                return ToolResult::error(format!("Failed to store remote context: {e}"));
+        // Call synchronous endpoint
+        let response = match client.send_message(params).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                return ToolResult::error(format!("Failed to call {agent_name}: {e}"));
             }
+        };
 
-            // Extract and return response
-            let response_text = self.extract_response_content(&response);
-            ToolResult::success(json!(response_text))
+        // Update remote context from response
+        remote_context.update_from_response(&response);
+
+        // Store updated context
+        if let Err(e) = self.store_remote_context(agent_name, remote_context, context) {
+            return ToolResult::error(format!("Failed to store remote context: {e}"));
         }
-        .instrument(http_span.clone())
-        .await
+
+        // Extract and return response
+        let response_text = self.extract_response_content(&response);
+        ToolResult::success(json!(response_text))
     }
 }
 
-#[async_trait]
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
 impl BaseTool for A2AAgentTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "call_remote_agent"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Call a remote agent to delegate a task or ask a question."
     }
 
-    fn is_long_running(&self) -> bool {
-        // A2A agent calls can be long-running (hours/days)
-        // Mark as long-running so execution doesn't block
-        true
-    }
-
-    fn get_declaration(&self) -> Option<FunctionDeclaration> {
+    fn declaration(&self) -> FunctionDeclaration {
         // Build enum of available agent names
         let agent_names: Vec<String> = self.agent_cards.keys().cloned().collect();
 
@@ -572,10 +501,10 @@ impl BaseTool for A2AAgentTool {
             desc.push_str(&format!("- {}: {}\n", name, card.description));
         }
 
-        Some(FunctionDeclaration {
-            name: "call_remote_agent".to_string(),
-            description: desc,
-            parameters: json!({
+        FunctionDeclaration::new(
+            "call_remote_agent",
+            desc,
+            json!({
                 "type": "object",
                 "properties": {
                     "agent_name": {
@@ -595,20 +524,9 @@ impl BaseTool for A2AAgentTool {
                 },
                 "required": ["agent_name", "message"]
             }),
-        })
+        )
     }
 
-    #[tracing::instrument(
-        name = "radkit.remote_agent.call",
-        skip(self, args, context),
-        fields(
-            remote.agent = tracing::field::Empty,
-            remote.endpoint = tracing::field::Empty,
-            remote.streaming = tracing::field::Empty,
-            remote.context_reused = false,
-            otel.kind = "internal",
-        )
-    )]
     async fn run_async(
         &self,
         args: HashMap<String, Value>,
@@ -627,7 +545,7 @@ impl BaseTool for A2AAgentTool {
 
         let continue_conversation = args
             .get("continue_conversation")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(true);
 
         // 2. Create client on-demand for this agent
@@ -647,20 +565,10 @@ impl BaseTool for A2AAgentTool {
         };
 
         // 3. Get or create remote context
-        let mut remote_context = match self.get_or_create_remote_context(agent_name, context).await
-        {
+        let mut remote_context = match self.get_or_create_remote_context(agent_name, context) {
             Ok(ctx) => ctx,
             Err(e) => return ToolResult::error(format!("Failed to get context: {e}")),
         };
-
-        // Record span fields
-        let span = tracing::Span::current();
-        span.record("remote.agent", agent_name);
-        span.record("remote.endpoint", remote_context.endpoint.as_str());
-        span.record(
-            "remote.context_reused",
-            remote_context.remote_context_id.is_some(),
-        );
 
         // 4. Build A2A message
         let message = self.build_a2a_message(message_text, &remote_context, continue_conversation);
@@ -674,9 +582,6 @@ impl BaseTool for A2AAgentTool {
         // 5. Check if agent supports streaming
         let agent_card = self.agent_cards.get(agent_name).unwrap(); // Safe: already validated
         let supports_streaming = agent_card.capabilities.streaming.unwrap_or(false);
-
-        // Record streaming mode on span
-        span.record("remote.streaming", supports_streaming);
 
         if supports_streaming {
             // Use streaming path
@@ -692,7 +597,7 @@ impl BaseTool for A2AAgentTool {
 
 /// Normalize agent name for tool usage
 ///
-/// Converts "Weather Agent" -> "weather_agent"
+/// Converts "Weather Agent" -> "`weather_agent`"
 /// This ensures consistent naming in the tool interface.
 fn normalize_agent_name(name: &str) -> String {
     name.to_lowercase()
@@ -702,14 +607,14 @@ fn normalize_agent_name(name: &str) -> String {
         .collect()
 }
 
-/// Builder for A2AAgentTool
+/// Builder for `A2AAgentTool`
 pub struct A2AAgentToolBuilder {
     agents: Vec<(AgentCard, Option<HashMap<String, String>>)>,
 }
 
 impl A2AAgentToolBuilder {
     /// Create a new builder
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { agents: Vec::new() }
     }
 
@@ -728,7 +633,7 @@ impl A2AAgentToolBuilder {
         self
     }
 
-    /// Build the A2AAgentTool
+    /// Build the `A2AAgentTool`
     pub fn build(self) -> Result<A2AAgentTool, String> {
         A2AAgentTool::new(self.agents)
     }
@@ -737,76 +642,5 @@ impl A2AAgentToolBuilder {
 impl Default for A2AAgentToolBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_context_state_key() {
-        assert_eq!(
-            A2AAgentTool::context_state_key("weather_agent"),
-            "a2a_context:weather_agent"
-        );
-        assert_eq!(
-            A2AAgentTool::context_state_key("calendar"),
-            "a2a_context:calendar"
-        );
-    }
-
-    #[test]
-    fn test_remote_context_info_new() {
-        let info = RemoteContextInfo::new("https://example.com".to_string());
-        assert!(info.remote_context_id.is_none());
-        assert!(info.remote_task_id.is_none());
-        assert_eq!(info.message_count, 0);
-        assert_eq!(info.endpoint, "https://example.com");
-        assert!(!info.created_at.is_empty());
-    }
-
-    #[test]
-    fn test_remote_context_info_serialization() {
-        let info = RemoteContextInfo::new("https://example.com".to_string());
-        let json = serde_json::to_value(&info).unwrap();
-        let deserialized: RemoteContextInfo = serde_json::from_value(json).unwrap();
-        assert_eq!(info.endpoint, deserialized.endpoint);
-        assert_eq!(info.message_count, deserialized.message_count);
-    }
-
-    #[test]
-    fn test_builder_pattern() {
-        let builder = A2AAgentToolBuilder::new();
-        assert_eq!(builder.agents.len(), 0);
-
-        let card = AgentCard::new(
-            "Test Agent",
-            "Test Description",
-            "1.0.0",
-            "https://test.example.com",
-        );
-
-        let builder = builder.add_agent(card, None);
-        assert_eq!(builder.agents.len(), 1);
-    }
-
-    #[test]
-    fn test_tool_creation_requires_agents() {
-        let result = A2AAgentTool::new(vec![]);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "No remote agents configured");
-    }
-
-    #[test]
-    fn test_normalize_agent_name() {
-        assert_eq!(normalize_agent_name("Weather Agent"), "weather_agent");
-        assert_eq!(normalize_agent_name("Calendar-Agent"), "calendar_agent");
-        assert_eq!(
-            normalize_agent_name("My Test Agent 123"),
-            "my_test_agent_123"
-        );
-        assert_eq!(normalize_agent_name("UPPERCASE"), "uppercase");
-        assert_eq!(normalize_agent_name("special!@#chars"), "specialchars");
     }
 }

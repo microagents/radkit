@@ -3,6 +3,7 @@
 //! This module provides a client for making A2A protocol calls to remote agents.
 //! It supports both streaming and non-streaming interactions.
 
+use self::sse_parser::SseParser;
 use crate::constants::{AGENT_CARD_PATH, JSONRPC_VERSION};
 use crate::error::{A2AError, A2AResult};
 use a2a_types::{
@@ -16,6 +17,11 @@ use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(not(target_arch = "wasm32"))]
+type SseStream = Pin<Box<dyn Stream<Item = A2AResult<SendStreamingMessageResult>> + Send>>;
+#[cfg(target_arch = "wasm32")]
+type SseStream = Pin<Box<dyn Stream<Item = A2AResult<SendStreamingMessageResult>>>>;
 
 /// A2A client for communicating with remote agents
 #[derive(Clone)]
@@ -47,6 +53,146 @@ struct JsonRpcRequest<T> {
 enum JsonRpcResponse<T> {
     Success { id: Option<JSONRPCId>, result: T },
     Error(JSONRPCErrorResponse),
+}
+
+/// Handles parsing of Server-Sent Events (SSE) streams, accommodating both WASM and native targets.
+mod sse_parser {
+    use super::{A2AError, A2AResult, JsonRpcResponse};
+    use a2a_types::SendStreamingMessageResult;
+    use futures_core::Stream;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    // Define a trait that abstracts over the `Send` bound, which is required for non-WASM targets.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub trait ByteStreamTrait: Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send {}
+    #[cfg(not(target_arch = "wasm32"))]
+    impl<T: Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send> ByteStreamTrait for T {}
+
+    #[cfg(target_arch = "wasm32")]
+    pub trait ByteStreamTrait: Stream<Item = Result<bytes::Bytes, reqwest::Error>> {}
+    #[cfg(target_arch = "wasm32")]
+    impl<T: Stream<Item = Result<bytes::Bytes, reqwest::Error>>> ByteStreamTrait for T {}
+
+    // Define a type alias for the pinned byte stream to avoid repetition.
+    #[cfg(not(target_arch = "wasm32"))]
+    type PinnedByteStream =
+        Pin<Box<dyn Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>;
+    #[cfg(target_arch = "wasm32")]
+    type PinnedByteStream = Pin<Box<dyn Stream<Item = Result<bytes::Bytes, reqwest::Error>>>>;
+
+    /// A parser for Server-Sent Events (SSE) streams.
+    pub struct SseParser {
+        inner: PinnedByteStream,
+        buffer: String,
+        event_data_buffer: String,
+        pending_results: Vec<A2AResult<SendStreamingMessageResult>>,
+    }
+
+    impl SseParser {
+        /// Creates a new SSE parser from a byte stream.
+        pub fn new(inner: impl ByteStreamTrait + 'static) -> Self {
+            Self {
+                inner: Box::pin(inner),
+                buffer: String::new(),
+                event_data_buffer: String::new(),
+                pending_results: Vec::new(),
+            }
+        }
+
+        /// Processes a chunk of bytes from the stream, parsing full SSE events.
+        fn process_chunk(
+            &mut self,
+            chunk: bytes::Bytes,
+        ) -> Vec<A2AResult<SendStreamingMessageResult>> {
+            self.buffer.push_str(&String::from_utf8_lossy(&chunk));
+            let mut results = Vec::new();
+
+            // Process buffer line by line.
+            while let Some(newline_pos) = self.buffer.find('\n') {
+                let line = self.buffer[..newline_pos]
+                    .trim_end_matches('\r')
+                    .to_string();
+                self.buffer = self.buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() {
+                    // An empty line signifies the end of an event.
+                    if !self.event_data_buffer.is_empty() {
+                        match process_sse_event(&self.event_data_buffer) {
+                            Ok(result) => results.push(Ok(result)),
+                            Err(e) => results.push(Err(e)),
+                        }
+                        self.event_data_buffer.clear();
+                    }
+                } else if let Some(data) = line.strip_prefix("data:") {
+                    // Accumulate data lines for a single event.
+                    if !self.event_data_buffer.is_empty() {
+                        self.event_data_buffer.push('\n');
+                    }
+                    self.event_data_buffer.push_str(data.trim_start());
+                } else if line.starts_with(':') {
+                    // Ignore comment lines.
+                }
+            }
+            results
+        }
+    }
+
+    impl Stream for SseParser {
+        type Item = A2AResult<SendStreamingMessageResult>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            // Drain any pending results from the last chunk processing.
+            if let Some(result) = self.pending_results.pop() {
+                return Poll::Ready(Some(result));
+            }
+
+            // Poll the underlying stream for more data.
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    let mut results = self.process_chunk(chunk);
+                    if results.is_empty() {
+                        // If no full events were parsed, wait for more data.
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    } else {
+                        // Reverse results to return them in the correct order.
+                        results.reverse();
+                        self.pending_results = results;
+                        Poll::Ready(self.pending_results.pop())
+                    }
+                }
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(A2AError::NetworkError {
+                    message: format!("Stream error: {}", e),
+                }))),
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            }
+        }
+    }
+
+    /// Processes the data part of a single SSE event.
+    fn process_sse_event(json_data: &str) -> A2AResult<SendStreamingMessageResult> {
+        if json_data.trim().is_empty() {
+            return Err(A2AError::SerializationError {
+                message: "Empty SSE event data".to_string(),
+            });
+        }
+
+        // The data is expected to be a JSON-RPC response.
+        let json_response: JsonRpcResponse<SendStreamingMessageResult> =
+            serde_json::from_str(json_data).map_err(|e| A2AError::SerializationError {
+                message: format!("Failed to parse SSE event data: {}", e),
+            })?;
+
+        match json_response {
+            JsonRpcResponse::Success { result, .. } => Ok(result),
+            JsonRpcResponse::Error(err) => Err(A2AError::RemoteAgentError {
+                message: format!("SSE event contained an error: {}", err.error.message),
+                code: Some(err.error.code),
+            }),
+        }
+    }
 }
 
 impl A2AClient {
@@ -220,8 +366,8 @@ impl A2AClient {
     ///
     /// # fn example(agent_card: AgentCard) -> Result<(), Box<dyn std::error::Error>> {
     /// let mut headers = HashMap::new();
-    /// headers.insert("Authorization".to_string(), "Bearer token123".to_string());
-    /// headers.insert("X-API-Key".to_string(), "my-api-key".to_string());
+    /// headers.insert("Authorization", "Bearer token123".to_string());
+    /// headers.insert("X-API-Key", "my-api-key".to_string());
     ///
     /// let client = A2AClient::from_card_with_headers(agent_card, headers)?;
     /// # Ok(())
@@ -417,10 +563,7 @@ impl A2AClient {
     /// Send a streaming message to the remote agent
     ///
     /// Returns a stream of events (Task, Message, TaskStatusUpdateEvent, TaskArtifactUpdateEvent)
-    pub async fn send_streaming_message(
-        &self,
-        params: MessageSendParams,
-    ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<SendStreamingMessageResult>> + Send>>> {
+    pub async fn send_streaming_message(&self, params: MessageSendParams) -> A2AResult<SseStream> {
         // Check if agent supports streaming
         if !self.agent_card.capabilities.streaming.unwrap_or(false) {
             return Err(A2AError::InvalidParameter {
@@ -482,145 +625,7 @@ impl A2AClient {
         }
 
         // Parse SSE stream
-        Ok(Box::pin(Self::parse_sse_stream(
-            response.bytes_stream(),
-            request_id,
-        )))
-    }
-
-    /// Parse Server-Sent Events (SSE) stream
-    fn parse_sse_stream(
-        byte_stream: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
-        _original_request_id: JSONRPCId,
-    ) -> impl Stream<Item = A2AResult<SendStreamingMessageResult>> + Send {
-        use futures_core::stream::Stream;
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-
-        struct SseParser {
-            inner: Pin<Box<dyn Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>,
-            buffer: String,
-            event_data_buffer: String,
-            pending_results: Vec<A2AResult<SendStreamingMessageResult>>,
-        }
-
-        impl SseParser {
-            fn new(
-                inner: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
-            ) -> Self {
-                Self {
-                    inner: Box::pin(inner),
-                    buffer: String::new(),
-                    event_data_buffer: String::new(),
-                    pending_results: Vec::new(),
-                }
-            }
-
-            fn process_chunk(
-                &mut self,
-                chunk: bytes::Bytes,
-            ) -> Vec<A2AResult<SendStreamingMessageResult>> {
-                // Append chunk to buffer
-                self.buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                let mut results = Vec::new();
-
-                // Process complete lines
-                while let Some(newline_pos) = self.buffer.find('\n') {
-                    let line = self.buffer[..newline_pos]
-                        .trim_end_matches('\r')
-                        .to_string();
-                    self.buffer = self.buffer[newline_pos + 1..].to_string();
-
-                    if line.is_empty() {
-                        // Empty line signals end of event
-                        if !self.event_data_buffer.is_empty() {
-                            match A2AClient::process_sse_event(&self.event_data_buffer) {
-                                Ok(result) => results.push(Ok(result)),
-                                Err(e) => results.push(Err(e)),
-                            }
-                            self.event_data_buffer.clear();
-                        }
-                    } else if let Some(data) = line.strip_prefix("data:") {
-                        // Accumulate data lines
-                        if !self.event_data_buffer.is_empty() {
-                            self.event_data_buffer.push('\n');
-                        }
-                        self.event_data_buffer.push_str(data.trim_start());
-                    } else if line.starts_with(':') {
-                        // Comment line, ignore
-                    }
-                    // Ignore other SSE fields (event:, id:, retry:)
-                }
-
-                results
-            }
-        }
-
-        impl Stream for SseParser {
-            type Item = A2AResult<SendStreamingMessageResult>;
-
-            fn poll_next(
-                mut self: Pin<&mut Self>,
-                cx: &mut Context<'_>,
-            ) -> Poll<Option<Self::Item>> {
-                // First, return any pending results
-                if let Some(result) = self.pending_results.pop() {
-                    return Poll::Ready(Some(result));
-                }
-
-                // Poll the inner stream for more data
-                match self.inner.as_mut().poll_next(cx) {
-                    Poll::Ready(Some(Ok(chunk))) => {
-                        // Process the chunk and get results
-                        let mut results = self.process_chunk(chunk);
-
-                        if results.is_empty() {
-                            // No complete events yet, wake up and try again
-                            cx.waker().wake_by_ref();
-                            Poll::Pending
-                        } else {
-                            // Store results in reverse order (we pop from the end)
-                            results.reverse();
-                            self.pending_results = results;
-
-                            // Return first result
-                            Poll::Ready(self.pending_results.pop())
-                        }
-                    }
-                    Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(A2AError::NetworkError {
-                        message: format!("Stream error: {}", e),
-                    }))),
-                    Poll::Ready(None) => Poll::Ready(None),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-
-        SseParser::new(byte_stream)
-    }
-
-    /// Process a single SSE event's data
-    fn process_sse_event(json_data: &str) -> A2AResult<SendStreamingMessageResult> {
-        if json_data.trim().is_empty() {
-            return Err(A2AError::SerializationError {
-                message: "Empty SSE event data".to_string(),
-            });
-        }
-
-        // Parse JSON-RPC response
-        let json_response: JsonRpcResponse<SendStreamingMessageResult> =
-            serde_json::from_str(json_data).map_err(|e| A2AError::SerializationError {
-                message: format!("Failed to parse SSE event data: {}", e),
-            })?;
-
-        match json_response {
-            JsonRpcResponse::Success { result, .. } => Ok(result),
-            JsonRpcResponse::Error(err) => Err(A2AError::RemoteAgentError {
-                message: format!("SSE event contained an error: {}", err.error.message),
-                code: Some(err.error.code),
-            }),
-        }
+        Ok(Box::pin(SseParser::new(response.bytes_stream())))
     }
 
     /// Get a specific task from the remote agent
@@ -648,10 +653,7 @@ impl A2AClient {
     /// Resubscribe to a task's event stream
     ///
     /// This is used if a previous SSE connection for an active task was broken.
-    pub async fn resubscribe_task(
-        &self,
-        params: TaskIdParams,
-    ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<SendStreamingMessageResult>> + Send>>> {
+    pub async fn resubscribe_task(&self, params: TaskIdParams) -> A2AResult<SseStream> {
         // Check if agent supports streaming
         if !self.agent_card.capabilities.streaming.unwrap_or(false) {
             return Err(A2AError::InvalidParameter {
@@ -712,10 +714,7 @@ impl A2AClient {
             });
         }
 
-        Ok(Box::pin(Self::parse_sse_stream(
-            response.bytes_stream(),
-            request_id,
-        )))
+        Ok(Box::pin(SseParser::new(response.bytes_stream())))
     }
 
     /// Set or update the push notification configuration for a given task

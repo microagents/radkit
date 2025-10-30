@@ -1,78 +1,124 @@
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+//! Base tool trait for agent capabilities.
+//!
+//! This module defines the [`BaseTool`] trait, which is the fundamental interface
+//! that all tools must implement to be usable by agents.
+//!
+//! # Overview
+//!
+//! Tools are callable functions that extend agent capabilities. Each tool must:
+//! - Have a unique name and human-readable description
+//! - Declare its parameter schema as a JSON Schema
+//! - Implement async execution with proper error handling
+//!
+//! # Thread Safety
+//!
+//! All tools must be `Send + Sync` (or `MaybeSend + MaybeSync` for WASM compatibility)
+//! to support concurrent execution in async contexts.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! use radkit::tools::{BaseTool, FunctionDeclaration, ToolResult, ToolContext};
+//! use serde_json::{json, Value};
+//! use std::collections::HashMap;
+//!
+//! struct WeatherTool;
+//!
+//! #[async_trait]
+//! impl BaseTool for WeatherTool {
+//!     fn name(&self) -> &str {
+//!         "get_weather"
+//!     }
+//!
+//!     fn description(&self) -> &str {
+//!         "Get current weather for a location"
+//!     }
+//!
+//!     fn declaration(&self) -> FunctionDeclaration {
+//!         FunctionDeclaration::new(
+//!             self.name(),
+//!             self.description(),
+//!             json!({"type": "object", "properties": {"location": {"type": "string"}}})
+//!         )
+//!     }
+//!
+//!     async fn run_async(&self, args: HashMap<String, Value>, _ctx: &ToolContext<'_>) -> ToolResult {
+//!         let location = args.get("location").and_then(|v| v.as_str()).unwrap_or("Unknown");
+//!         ToolResult::success(json!({"temp": 72, "location": location}))
+//!     }
+//! }
+//! ```
+
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::tools::tool_context::ToolContext;
+use crate::tools::tool::{FunctionDeclaration, ToolResult};
+use crate::tools::ToolContext;
+use crate::{MaybeSend, MaybeSync};
 
-/// Function declaration that describes a tool's interface to the LLM.
-/// Similar to Google's FunctionDeclaration but simplified for our use case.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionDeclaration {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value, // JSON Schema for parameters
-}
-
-/// Result of a tool execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResult {
-    pub success: bool,
-    pub data: Value,
-    pub error_message: Option<String>,
-}
-
-impl ToolResult {
-    pub fn success(data: Value) -> Self {
-        Self {
-            success: true,
-            data,
-            error_message: None,
-        }
-    }
-
-    pub fn error(message: String) -> Self {
-        Self {
-            success: false,
-            data: Value::Null,
-            error_message: Some(message),
-        }
-    }
-}
-
-/// Core trait for all tools in the system.
-/// Tools provide functionality that agents can use during conversations.
-#[async_trait]
-pub trait BaseTool: Send + Sync {
-    /// The name of the tool - must be unique within an agent
+/// Core trait for tools that can be invoked by an agent.
+///
+/// This trait defines the interface that all tools must implement. Tools are functions
+/// that agents can call to interact with external systems, perform computations, or
+/// access data.
+///
+/// # Thread Safety
+///
+/// Implementations must be `Send + Sync` (via `MaybeSend + MaybeSync`) to support
+/// concurrent execution across async tasks.
+///
+/// # Error Handling
+///
+/// The [`run_async`](BaseTool::run_async) method returns a [`ToolResult`] which can
+/// represent either success or failure. Tools should catch errors and convert them
+/// to [`ToolResult::error`] rather than panicking.
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
+pub trait BaseTool: MaybeSend + MaybeSync {
+    /// Returns the unique identifier for this tool.
+    ///
+    /// The name should be stable, unique within a toolset, and use snake_case
+    /// (e.g., "get_weather", "send_email").
     fn name(&self) -> &str;
 
-    /// Human-readable description of what this tool does
+    /// Returns a human-readable description of what the tool does.
+    ///
+    /// This description helps the LLM understand when to use the tool.
+    /// Be concise but specific about the tool's purpose and behavior.
     fn description(&self) -> &str;
 
-    /// Whether this tool represents a long-running operation
-    fn is_long_running(&self) -> bool {
-        false
-    }
-
-    /// Gets the function declaration for this tool.
-    /// This describes the tool's interface to the LLM.
-    /// Returns None if this tool doesn't need to be exposed to the LLM
-    /// (e.g., for built-in tools that are handled specially by the LLM provider).
-    fn get_declaration(&self) -> Option<FunctionDeclaration> {
-        None
-    }
-
-    /// Convert this tool to a ToolProviderConfig for agent definition.
+    /// Returns the function declaration for this tool.
     ///
-    /// Returns `None` if the tool should not be included in the serialized definition
-    /// (e.g., for tools that are part of a larger toolset like MCP).
-    fn to_tool_provider_config(&self) -> Option<crate::config::ToolProviderConfig> {
-        None
-    }
+    /// The declaration includes the tool's name, description, and JSON Schema
+    /// for parameters. This tells the LLM what arguments the tool accepts.
+    fn declaration(&self) -> FunctionDeclaration;
 
-    /// Executes the tool with the given arguments and context.
-    /// This is the main entry point for tool execution.
+    /// Executes the tool with the provided arguments and context.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - Key-value map of arguments (validated against the parameter schema by the LLM)
+    /// * `context` - Execution context providing access to state and configuration
+    ///
+    /// # Returns
+    ///
+    /// Returns a [`ToolResult`] indicating success or failure. Use:
+    /// - [`ToolResult::success(data)`] for successful execution
+    /// - [`ToolResult::error(message)`] for errors
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// async fn run_async(&self, args: HashMap<String, Value>, ctx: &ToolContext<'_>) -> ToolResult {
+    ///     match self.fetch_data(&args) {
+    ///         Ok(data) => ToolResult::success(json!(data)),
+    ///         Err(e) => ToolResult::error(format!("Failed to fetch data: {}", e)),
+    ///     }
+    /// }
+    /// ```
     async fn run_async(
         &self,
         args: HashMap<String, Value>,

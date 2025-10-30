@@ -1,266 +1,167 @@
-//! LLM Response Types
+//! LLM response types with token usage tracking.
 //!
-//! Defines the internal response format for LLM providers, inspired by Python ADK
-//! but optimized for A2A-native architecture with ExtendedMessage support.
+//! This module provides response types returned by LLM providers, including
+//! generated content and token usage information.
 
-use crate::models::content::Content;
-use a2a_types::{Message, MessageRole};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
 
-/// Internal LLM response format - conversion layer between LLM providers and A2A
-#[derive(Debug, Clone)]
+use crate::models::Content;
+
+/// Response from an LLM generation request.
+///
+/// Contains the generated content and metadata about token usage.
+/// This is returned by all [`BaseLlm`](crate::models::BaseLlm) implementations.
+///
+/// # Examples
+///
+/// ```ignore
+/// use radkit::models::{BaseLlm, Thread};
+///
+/// let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
+/// let thread = Thread::from_user("What is Rust?");
+/// let response = llm.generate_content(thread, None).await?;
+///
+/// println!("Response: {}", response.content().first_text().unwrap_or(""));
+/// println!("Tokens used: {}", response.usage().total_tokens());
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmResponse {
-    /// The generated message content with function call/result extensions
-    pub message: Content,
-
-    /// Streaming indicators
-    pub streaming_info: StreamingInfo,
-
-    /// Usage and cost metadata
-    pub usage_metadata: Option<UsageMetadata>,
-
-    /// Error information if generation failed
-    pub error_info: Option<ErrorInfo>,
-
-    /// Provider-specific metadata
-    pub provider_metadata: HashMap<String, Value>,
-}
-
-/// Streaming response information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamingInfo {
-    /// Whether this is a partial response (for streaming)
-    pub partial: bool,
-
-    /// Whether this turn is complete
-    pub turn_complete: bool,
-
-    /// Sequence number for ordering partial responses
-    pub sequence_number: Option<u32>,
-}
-
-impl Default for StreamingInfo {
-    fn default() -> Self {
-        Self {
-            partial: false,
-            turn_complete: true,
-            sequence_number: None,
-        }
-    }
-}
-
-/// Usage and cost tracking metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageMetadata {
-    /// Input tokens consumed
-    pub input_tokens: Option<u32>,
-
-    /// Output tokens generated
-    pub output_tokens: Option<u32>,
-
-    /// Total tokens used
-    pub total_tokens: Option<u32>,
-
-    /// Cost in USD cents
-    pub cost_cents: Option<u32>,
-
-    /// Model name used
-    pub model_name: Option<String>,
-
-    /// Request timestamp
-    pub timestamp: DateTime<Utc>,
-
-    /// Additional usage metrics
-    pub additional_metrics: HashMap<String, Value>,
-}
-
-/// Error information for failed generations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorInfo {
-    /// Error code from the provider
-    pub error_code: String,
-
-    /// Human-readable error message
-    pub error_message: String,
-
-    /// Error type/category
-    pub error_type: ErrorType,
-
-    /// Whether the error is retryable
-    pub retryable: bool,
-
-    /// Additional error context
-    pub context: HashMap<String, Value>,
-}
-
-/// Categories of LLM errors
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ErrorType {
-    /// Authentication/authorization errors
-    Authentication,
-
-    /// Rate limiting errors
-    RateLimit,
-
-    /// Request validation errors
-    InvalidRequest,
-
-    /// Model/service unavailability
-    ServiceUnavailable,
-
-    /// Content filtering/safety errors
-    ContentFiltered,
-
-    /// Token/context length limits
-    ContextLengthExceeded,
-
-    /// Network/transport errors
-    NetworkError,
-
-    /// Internal provider errors
-    InternalError,
-
-    /// Unknown errors
-    Unknown,
+    content: Content,
+    usage: TokenUsage,
 }
 
 impl LlmResponse {
-    /// Create a successful response from Content
-    pub fn success(content: Content) -> Self {
+    /// Creates a new LLM response.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The generated content
+    /// * `usage` - Token usage information
+    #[must_use] pub const fn new(content: Content, usage: TokenUsage) -> Self {
+        Self { content, usage }
+    }
+
+    /// Returns a reference to the generated content.
+    #[must_use] pub const fn content(&self) -> &Content {
+        &self.content
+    }
+
+    /// Returns a reference to the token usage information.
+    #[must_use] pub const fn usage(&self) -> &TokenUsage {
+        &self.usage
+    }
+
+    /// Consumes the response and returns the content.
+    #[must_use] pub fn into_content(self) -> Content {
+        self.content
+    }
+
+    /// Consumes the response and returns both content and usage.
+    #[must_use] pub fn into_parts(self) -> (Content, TokenUsage) {
+        (self.content, self.usage)
+    }
+}
+
+/// Token usage statistics from an LLM request.
+///
+/// Tracks the number of tokens consumed in the prompt, generated in the output,
+/// and the total. All values are optional as some providers may not report all metrics.
+///
+/// # Examples
+///
+/// ```ignore
+/// let usage = TokenUsage::new(100, 50, 150);
+/// println!("Input: {}, Output: {}, Total: {}",
+///     usage.input_tokens(),
+///     usage.output_tokens(),
+///     usage.total_tokens());
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+}
+
+impl TokenUsage {
+    /// Creates a new token usage record.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_tokens` - Number of tokens in the input/prompt
+    /// * `output_tokens` - Number of tokens generated in the output
+    /// * `total_tokens` - Total tokens (typically input + output)
+    #[must_use] pub const fn new(input_tokens: u32, output_tokens: u32, total_tokens: u32) -> Self {
         Self {
-            message: content,
-            streaming_info: StreamingInfo::default(),
-            usage_metadata: None,
-            error_info: None,
-            provider_metadata: HashMap::new(),
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+            total_tokens: Some(total_tokens),
         }
     }
 
-    /// Create a successful response from a regular Message
-    pub fn success_from_message(message: Message, task_id: String, context_id: String) -> Self {
-        Self::success(Content::from_message(message, task_id, context_id))
+    /// Creates an empty token usage (all fields None).
+    #[must_use] pub fn empty() -> Self {
+        Self::default()
     }
 
-    /// Create an error response
-    pub fn error(
-        error_code: String,
-        error_message: String,
-        error_type: ErrorType,
-        task_id: String,
-        context_id: String,
+    /// Creates a token usage with only some fields populated.
+    #[must_use] pub const fn partial(
+        input_tokens: Option<u32>,
+        output_tokens: Option<u32>,
+        total_tokens: Option<u32>,
     ) -> Self {
-        let mut error_content = Content::new(
-            task_id,
-            context_id,
-            uuid::Uuid::new_v4().to_string(),
-            MessageRole::Agent,
-        );
-        error_content.add_text(format!("Error: {error_message}"), None);
-
-        // Add error metadata
-        let mut metadata = HashMap::new();
-        metadata.insert("error".to_string(), serde_json::json!(true));
-        metadata.insert(
-            "error_code".to_string(),
-            serde_json::json!(error_code.clone()),
-        );
-        error_content.metadata = Some(metadata);
-
         Self {
-            message: error_content,
-            streaming_info: StreamingInfo::default(),
-            usage_metadata: None,
-            error_info: Some(ErrorInfo {
-                error_code,
-                error_message,
-                error_type,
-                retryable: false,
-                context: HashMap::new(),
-            }),
-            provider_metadata: HashMap::new(),
+            input_tokens,
+            output_tokens,
+            total_tokens,
         }
     }
 
-    /// Create a partial streaming response
-    pub fn partial(message: Content, sequence_number: u32) -> Self {
-        Self {
-            message,
-            streaming_info: StreamingInfo {
-                partial: true,
-                turn_complete: false,
-                sequence_number: Some(sequence_number),
-            },
-            usage_metadata: None,
-            error_info: None,
-            provider_metadata: HashMap::new(),
-        }
+    /// Returns the number of input tokens, or 0 if not reported.
+    #[must_use] pub fn input_tokens(&self) -> u32 {
+        self.input_tokens.unwrap_or(0)
     }
 
-    /// Mark this response as the final streaming response
-    pub fn finalize_stream(mut self) -> Self {
-        self.streaming_info.partial = false;
-        self.streaming_info.turn_complete = true;
+    /// Returns the number of output tokens, or 0 if not reported.
+    #[must_use] pub fn output_tokens(&self) -> u32 {
+        self.output_tokens.unwrap_or(0)
+    }
+
+    /// Returns the total number of tokens, or 0 if not reported.
+    #[must_use] pub fn total_tokens(&self) -> u32 {
+        self.total_tokens.unwrap_or(0)
+    }
+
+    /// Returns the input tokens as an Option.
+    #[must_use] pub const fn input_tokens_opt(&self) -> Option<u32> {
+        self.input_tokens
+    }
+
+    /// Returns the output tokens as an Option.
+    #[must_use] pub const fn output_tokens_opt(&self) -> Option<u32> {
+        self.output_tokens
+    }
+
+    /// Returns the total tokens as an Option.
+    #[must_use] pub const fn total_tokens_opt(&self) -> Option<u32> {
+        self.total_tokens
+    }
+
+    /// Sets the input tokens.
+    #[must_use] pub const fn with_input_tokens(mut self, tokens: u32) -> Self {
+        self.input_tokens = Some(tokens);
         self
     }
 
-    /// Add usage metadata
-    pub fn with_usage_metadata(mut self, usage: UsageMetadata) -> Self {
-        self.usage_metadata = Some(usage);
+    /// Sets the output tokens.
+    #[must_use] pub const fn with_output_tokens(mut self, tokens: u32) -> Self {
+        self.output_tokens = Some(tokens);
         self
     }
 
-    /// Add provider metadata
-    pub fn with_provider_metadata(mut self, key: String, value: Value) -> Self {
-        self.provider_metadata.insert(key, value);
+    /// Sets the total tokens.
+    #[must_use] pub const fn with_total_tokens(mut self, tokens: u32) -> Self {
+        self.total_tokens = Some(tokens);
         self
-    }
-
-    /// Check if this response contains function calls
-    pub fn has_function_calls(&self) -> bool {
-        self.message.has_function_calls()
-    }
-
-    /// Check if this response is successful (no errors)
-    pub fn is_success(&self) -> bool {
-        self.error_info.is_none()
-    }
-
-    /// Check if this response is a streaming response
-    pub fn is_streaming(&self) -> bool {
-        self.streaming_info.partial || !self.streaming_info.turn_complete
-    }
-
-    /// Get the text content of the response
-    pub fn text_content(&self) -> String {
-        self.message
-            .parts
-            .iter()
-            .filter_map(|part| match part {
-                crate::models::content::ContentPart::Text { text, .. } => Some(text.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    /// Extract function calls from the response
-    pub fn extract_function_calls(&self) -> Vec<(String, Value)> {
-        self.message
-            .get_function_calls()
-            .iter()
-            .filter_map(|part| {
-                if let crate::models::content::ContentPart::FunctionCall {
-                    name, arguments, ..
-                } = part
-                {
-                    Some((name.clone(), arguments.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect()
     }
 }

@@ -1,4 +1,12 @@
 /// Main error type for the Agent SDK
+use crate::compat::MaybeSendBoxError;
+#[cfg(all(feature = "runtime", not(all(target_os = "wasi", target_env = "p1"))))]
+use {
+    axum::http::StatusCode,
+    axum::response::{IntoResponse, Json, Response},
+    serde_json::json,
+};
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     // === LLM Provider Errors ===
@@ -23,13 +31,19 @@ pub enum AgentError {
     #[error("LLM error: {source}")]
     LlmError {
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: MaybeSendBoxError,
     },
 
     #[error("Feature not implemented: {feature}")]
     NotImplemented { feature: String },
 
     // === Task Management Errors ===
+    #[error("Agent not found: {agent_id}")]
+    AgentNotFound { agent_id: String },
+
+    #[error("Skill not found: {skill_id}")]
+    SkillNotFound { skill_id: String },
+
     #[error("Task not found: {task_id}")]
     TaskNotFound { task_id: String },
 
@@ -117,213 +131,89 @@ pub enum AgentError {
     // === Timeout Errors ===
     #[error("Operation timed out: {operation} after {duration_ms}ms")]
     Timeout { operation: String, duration_ms: u64 },
-}
 
-impl AgentError {
-    /// Check if this error is retryable
-    pub fn is_retryable(&self) -> bool {
-        match self {
-            // Retryable errors
-            Self::LlmRateLimit { .. } => true,
-            Self::Network { .. } => true,
-            Self::Timeout { .. } => true,
-            Self::ResourceExhausted { .. } => true,
+    // === Skill Execution Errors ===
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 
-            // Non-retryable errors
-            Self::LlmAuthentication { .. } => false,
-            Self::ContentFiltered { .. } => false,
-            Self::ContextLengthExceeded { .. } => false,
-            Self::NotImplemented { .. } => false,
-            Self::TaskNotFound { .. } => false,
-            Self::SessionNotFound { .. } => false,
-            Self::ToolNotFound { .. } => false,
-            Self::AccessDenied { .. } => false,
-            Self::InvalidCredentials { .. } => false,
-            Self::SecurityViolation { .. } => false,
-            Self::InvalidConfiguration { .. } => false,
-            Self::MissingConfiguration { .. } => false,
-            Self::Validation { .. } => false,
-            Self::InvalidTaskStateTransition { .. } => false,
+    #[error("Missing input: {0}")]
+    MissingInput(String),
 
-            // Maybe retryable - depends on the specific reason
-            Self::LlmProvider { .. } => false,
-            Self::LlmError { .. } => false,
-            Self::TaskOperationFailed { .. } => false,
-            Self::SessionStateError { .. } => false,
-            Self::ToolExecutionFailed { .. } => false,
-            Self::ToolValidationError { .. } => false,
-            Self::ToolTimeout { .. } => true,
-            Self::ToolSetupFailed { .. } => false,
-            Self::SessionAccessDenied { .. } => false,
-            Self::Serialization { .. } => false,
-            Self::Internal { .. } => false,
-            Self::TaskAlreadyExists { .. } => false,
-        }
-    }
+    #[error("Skill slot error: {0}")]
+    SkillSlot(String),
 
-    /// Get error category for metrics/logging
-    pub fn category(&self) -> &'static str {
-        match self {
-            Self::LlmProvider { .. }
-            | Self::LlmAuthentication { .. }
-            | Self::LlmRateLimit { .. }
-            | Self::ContentFiltered { .. }
-            | Self::ContextLengthExceeded { .. }
-            | Self::LlmError { .. }
-            | Self::NotImplemented { .. } => "llm",
+    // === Runtime Errors ===
+    #[error("Server start failed: {0}")]
+    ServerStartFailed(String),
 
-            Self::TaskNotFound { .. }
-            | Self::TaskAlreadyExists { .. }
-            | Self::InvalidTaskStateTransition { .. }
-            | Self::TaskOperationFailed { .. } => "task",
+    #[error("Blocking operations not supported on WASM")]
+    BlockingNotSupported,
 
-            Self::SessionNotFound { .. }
-            | Self::SessionAccessDenied { .. }
-            | Self::SessionStateError { .. } => "session",
+    // === Data Validation Errors ===
+    #[error("Invalid MIME type: {0}")]
+    InvalidMimeType(String),
 
-            Self::ToolNotFound { .. }
-            | Self::ToolExecutionFailed { .. }
-            | Self::ToolValidationError { .. }
-            | Self::ToolTimeout { .. }
-            | Self::ToolSetupFailed { .. } => "tool",
+    #[error("Invalid base64 encoding: {0}")]
+    InvalidBase64(String),
 
-            Self::AccessDenied { .. }
-            | Self::InvalidCredentials { .. }
-            | Self::SecurityViolation { .. } => "security",
+    #[error("Invalid URI: {0}")]
+    InvalidUri(String),
 
-            Self::InvalidConfiguration { .. } | Self::MissingConfiguration { .. } => "config",
-
-            Self::Network { .. } | Self::Serialization { .. } => "io",
-
-            Self::ResourceExhausted { .. }
-            | Self::Internal { .. }
-            | Self::Validation { .. }
-            | Self::Timeout { .. } => "system",
-        }
-    }
-
-    /// Check if this error should be logged as an error vs warning
-    pub fn is_error_level(&self) -> bool {
-        match self {
-            // Warning level - expected/recoverable
-            Self::TaskNotFound { .. } => false,
-            Self::SessionNotFound { .. } => false,
-            Self::ToolNotFound { .. } => false,
-            Self::LlmRateLimit { .. } => false,
-            Self::ContentFiltered { .. } => false,
-            Self::ContextLengthExceeded { .. } => false,
-            Self::Timeout { .. } => false,
-
-            // Error level - unexpected/serious
-            Self::LlmAuthentication { .. } => true,
-            Self::Internal { .. } => true,
-            Self::SecurityViolation { .. } => true,
-            Self::AccessDenied { .. } => true,
-            Self::InvalidCredentials { .. } => true,
-
-            // Context-dependent - default to warning
-            _ => false,
-        }
-    }
+    // === Context Errors ===
+    #[error("Context error: {0}")]
+    ContextError(String),
 }
 
 /// Convenience type alias
 pub type AgentResult<T> = std::result::Result<T, AgentError>;
 
-// === Configuration Loading Errors ===
+#[cfg(all(feature = "runtime", not(all(target_os = "wasi", target_env = "p1"))))]
+impl IntoResponse for AgentError {
+    fn into_response(self) -> Response {
+        let (status, error_message) = match &self {
+            AgentError::AgentNotFound { .. }
+            | AgentError::SkillNotFound { .. }
+            | AgentError::TaskNotFound { .. }
+            | AgentError::SessionNotFound { .. } => (StatusCode::NOT_FOUND, self.to_string()),
 
-/// Errors that can occur during agent loading from YAML/JSON configuration
-#[derive(Debug, thiserror::Error)]
-pub enum LoaderError {
-    #[error("YAML parsing error: {0}")]
-    YamlParse(#[from] serde_yaml::Error),
+            AgentError::InvalidConfiguration { .. }
+            | AgentError::Validation { .. }
+            | AgentError::InvalidTaskStateTransition { .. }
+            | AgentError::InvalidInput(..)
+            | AgentError::MissingInput(..)
+            | AgentError::InvalidMimeType(..)
+            | AgentError::InvalidBase64(..)
+            | AgentError::InvalidUri(..) => (StatusCode::BAD_REQUEST, self.to_string()),
 
-    #[error("Environment variable error: {0}")]
-    EnvironmentVar(String),
+            AgentError::AccessDenied { .. } | AgentError::SessionAccessDenied { .. } => {
+                (StatusCode::FORBIDDEN, self.to_string())
+            }
 
-    #[error("Model creation error: {0}")]
-    ModelCreation(String),
+            AgentError::InvalidCredentials { .. } | AgentError::LlmAuthentication { .. } => {
+                (StatusCode::UNAUTHORIZED, self.to_string())
+            }
 
-    #[error("Tool creation error: {0}")]
-    ToolCreation(String),
+            AgentError::NotImplemented { .. } => (StatusCode::NOT_IMPLEMENTED, self.to_string()),
 
-    #[error("Validation error: {0}")]
-    Validation(String),
-}
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+        };
 
-impl LoaderError {
-    pub fn environment_var<S: Into<String>>(msg: S) -> Self {
-        Self::EnvironmentVar(msg.into())
-    }
-
-    pub fn model_creation<S: Into<String>>(msg: S) -> Self {
-        Self::ModelCreation(msg.into())
-    }
-
-    pub fn tool_creation<S: Into<String>>(msg: S) -> Self {
-        Self::ToolCreation(msg.into())
-    }
-
-    pub fn validation<S: Into<String>>(msg: S) -> Self {
-        Self::Validation(msg.into())
+        let body = Json(json!({ "error": error_message }));
+        (status, body).into_response()
     }
 }
 
-/// Helper macros for common error patterns
-#[macro_export]
-macro_rules! not_found {
-    ($entity:expr, $id:expr) => {
-        match stringify!($entity) {
-            "task" => $crate::errors::AgentError::TaskNotFound {
-                task_id: $id.to_string(),
-            },
-            "session" => $crate::errors::AgentError::SessionNotFound {
-                session_id: $id.to_string(),
-                app_name: "unknown".to_string(),
-                user_id: "unknown".to_string(),
-            },
-            "tool" => $crate::errors::AgentError::ToolNotFound {
-                tool_name: $id.to_string(),
-            },
-            _ => $crate::errors::AgentError::Internal {
-                component: stringify!($entity).to_string(),
-                reason: format!("{} not found: {}", stringify!($entity), $id),
-            },
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! validation_error {
-    ($field:expr, $reason:expr) => {
-        $crate::errors::AgentError::Validation {
-            field: $field.to_string(),
-            reason: $reason.to_string(),
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! tool_error {
-    ($tool_name:expr, $reason:expr) => {
-        $crate::errors::AgentError::ToolExecutionFailed {
-            tool_name: $tool_name.to_string(),
-            reason: $reason.to_string(),
-        }
-    };
-}
-
-/// Convert AgentError to ToolResult for tool execution contexts
+/// Convert `AgentError` to `ToolResult` for tool execution contexts
 impl From<AgentError> for crate::tools::ToolResult {
     fn from(error: AgentError) -> Self {
-        crate::tools::ToolResult::error(error.to_string())
+        Self::error(error.to_string())
     }
 }
 
-/// Convert common std errors to AgentError
+/// Convert common std errors to `AgentError`
 impl From<serde_json::Error> for AgentError {
     fn from(error: serde_json::Error) -> Self {
-        AgentError::Serialization {
+        Self::Serialization {
             format: "json".to_string(),
             reason: error.to_string(),
         }
@@ -332,103 +222,9 @@ impl From<serde_json::Error> for AgentError {
 
 impl From<reqwest::Error> for AgentError {
     fn from(error: reqwest::Error) -> Self {
-        AgentError::Network {
+        Self::Network {
             operation: "http_request".to_string(),
             reason: error.to_string(),
         }
-    }
-}
-
-impl From<tokio::time::error::Elapsed> for AgentError {
-    fn from(_error: tokio::time::error::Elapsed) -> Self {
-        AgentError::Timeout {
-            operation: "unknown".to_string(),
-            duration_ms: 0, // We don't have the duration info from Elapsed
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_error_categories() {
-        let task_err = AgentError::TaskNotFound {
-            task_id: "test".to_string(),
-        };
-        assert_eq!(task_err.category(), "task");
-        assert!(!task_err.is_retryable());
-        assert!(!task_err.is_error_level());
-
-        let llm_err = AgentError::LlmRateLimit {
-            provider: "anthropic".to_string(),
-        };
-        assert_eq!(llm_err.category(), "llm");
-        assert!(llm_err.is_retryable());
-        assert!(!llm_err.is_error_level());
-
-        let security_err = AgentError::SecurityViolation {
-            policy: "data_access".to_string(),
-            reason: "unauthorized".to_string(),
-        };
-        assert_eq!(security_err.category(), "security");
-        assert!(!security_err.is_retryable());
-        assert!(security_err.is_error_level());
-    }
-
-    #[test]
-    fn test_error_macros() {
-        // Test not_found! macro for different entity types
-        let task_err = not_found!(task, "task123");
-        assert!(matches!(
-            task_err,
-            AgentError::TaskNotFound { task_id } if task_id == "task123"
-        ));
-
-        let session_err = not_found!(session, "sess456");
-        assert!(matches!(
-            session_err,
-            AgentError::SessionNotFound { session_id, .. } if session_id == "sess456"
-        ));
-
-        let tool_err = not_found!(tool, "my_tool");
-        assert!(matches!(
-            tool_err,
-            AgentError::ToolNotFound { tool_name } if tool_name == "my_tool"
-        ));
-
-        // Test validation_error! macro
-        let validation_err = validation_error!("email", "invalid format");
-        assert!(matches!(
-            validation_err,
-            AgentError::Validation { field, reason }
-                if field == "email" && reason == "invalid format"
-        ));
-
-        // Test tool_error! macro
-        let tool_exec_err = tool_error!("calculator", "division by zero");
-        assert!(matches!(
-            tool_exec_err,
-            AgentError::ToolExecutionFailed { tool_name, reason }
-                if tool_name == "calculator" && reason == "division by zero"
-        ));
-    }
-
-    #[test]
-    fn test_error_conversions() {
-        // Test serde_json conversion
-        let json_err: AgentError = serde_json::from_str::<serde_json::Value>("invalid json")
-            .unwrap_err()
-            .into();
-        assert_eq!(json_err.category(), "io");
-
-        // Test ToolResult conversion
-        let agent_err = AgentError::ToolNotFound {
-            tool_name: "test_tool".to_string(),
-        };
-        let tool_result: crate::tools::ToolResult = agent_err.into();
-        assert!(!tool_result.success);
-        assert!(tool_result.error_message.is_some());
     }
 }

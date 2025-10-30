@@ -6,9 +6,10 @@ use std::collections::HashMap;
 // ============================================================================
 
 /// Supported A2A transport protocols.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum TransportProtocol {
     /// JSON-RPC 2.0 over HTTP
+    #[default]
     #[serde(rename = "JSONRPC")]
     JsonRpc,
     /// gRPC over HTTP/2
@@ -17,12 +18,6 @@ pub enum TransportProtocol {
     /// REST-style HTTP with JSON
     #[serde(rename = "HTTP+JSON")]
     HttpJson,
-}
-
-impl Default for TransportProtocol {
-    fn default() -> Self {
-        TransportProtocol::JsonRpc
-    }
 }
 
 /// Declares a combination of a target URL and a transport protocol for interacting with the agent.

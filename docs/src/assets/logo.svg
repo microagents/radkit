@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fully outline version with transparent eyes, mouth, and top holes -->
+<svg width="800px" height="800px" viewBox="-1 0 55 55" xmlns="http://www.w3.org/2000/svg">
+    <g id="Group_23" data-name="Group 23" transform="translate(-786.357 -923.5)">
+        <rect id="Rectangle_9" data-name="Rectangle 9"
+              width="49" height="33.111"
+              transform="translate(788.357 943.388)"
+              fill="#CBD5E1" stroke="#475569"
+              stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+        <rect id="Rectangle_10" data-name="Rectangle 10"
+              width="30.667" height="11"
+              transform="translate(797.191 965.5)"
+              fill="none" stroke="#475569"
+              stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+        <circle id="Ellipse_8" data-name="Ellipse 8"
+                cx="4" cy="4" r="4"
+                transform="translate(797.191 951.167)"
+                fill="none" stroke="#475569"
+                stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+        <circle id="Ellipse_9" data-name="Ellipse 9"
+                cx="4" cy="4" r="4"
+                transform="translate(820.191 951.167)"
+                fill="none" stroke="#475569"
+                stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+        <path id="Path_59" data-name="Path 59"
+              d="M815.441,934h-4.75l-1,9.389h6.75Z"
+              fill="none" stroke="#475569"
+              stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+        <circle id="Ellipse_10" data-name="Ellipse 10"
+                cx="5.25" cy="5.25" r="5.25"
+                transform="translate(807.691 925.5)"
+                fill="none" stroke="#475569"
+                stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+    </g>
+</svg>

@@ -1,12 +1,3 @@
-//! Integration tests for A2AClient using the weather agent
-//!
-//! These tests use a real A2A-compliant weather agent to verify the client implementation.
-//!
-//! ## Running Tests
-//! ```bash
-//! cargo test --package a2a-client --test weather_agent_integration -- --ignored --show-output
-//! ```
-
 use a2a_client::A2AClient;
 use a2a_types::{Message, MessageRole, MessageSendParams, Part, SendStreamingMessageResult};
 use futures_util::StreamExt;
@@ -38,7 +29,8 @@ fn create_text_message(text: &str, context_id: Option<String>, task_id: Option<S
     }
 }
 
-#[tokio::test]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[ignore] // Requires network access and running weather agent
 async fn test_fetch_weather_agent_card() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Testing Weather Agent Card Fetching ===");
@@ -61,7 +53,8 @@ async fn test_fetch_weather_agent_card() -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-#[tokio::test]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[ignore] // Requires network access and running weather agent
 async fn test_weather_query_without_headers() -> Result<(), Box<dyn std::error::Error>> {
     // Create client with longer timeout (weather agent can take 20+ seconds)
@@ -145,7 +138,8 @@ async fn test_weather_query_without_headers() -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-#[tokio::test]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[ignore] // Requires network access and running weather agent
 async fn test_weather_streaming() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Testing Weather Query with Streaming ===");
@@ -177,7 +171,7 @@ async fn test_weather_streaming() -> Result<(), Box<dyn std::error::Error>> {
         match result? {
             SendStreamingMessageResult::Task(task) => {
                 println!(
-                    "  [Event {}] Task: ID={}, Status={:?}",
+                    "  [Event {}] Task: ID={}, Status={{:?}} {:?}",
                     event_count, task.id, task.status.state
                 );
                 received_task = true;
@@ -200,7 +194,10 @@ async fn test_weather_streaming() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             SendStreamingMessageResult::Message(msg) => {
-                println!("  [Event {}] Message: Role={:?}", event_count, msg.role);
+                println!(
+                    "  [Event {}] Message: Role={{:?}} {:?}",
+                    event_count, msg.role
+                );
                 received_message = true;
 
                 for part in &msg.parts {
@@ -218,7 +215,7 @@ async fn test_weather_streaming() -> Result<(), Box<dyn std::error::Error>> {
             }
             SendStreamingMessageResult::TaskStatusUpdate(update) => {
                 println!(
-                    "  [Event {}] Status Update: State={:?}",
+                    "  [Event {}] Status Update: State={{:?}} {:?}",
                     event_count, update.status.state
                 );
             }
@@ -251,7 +248,8 @@ async fn test_weather_streaming() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[ignore] // Requires network access and running weather agent
 async fn test_weather_multi_turn_conversation() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Testing Multi-Turn Weather Conversation ===");
@@ -330,7 +328,8 @@ async fn test_weather_multi_turn_conversation() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-#[tokio::test]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[ignore] // Requires network access and running weather agent
 async fn test_weather_with_timeout() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Testing Weather Query with Timeout ===");
@@ -370,7 +369,8 @@ async fn test_weather_with_timeout() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[ignore] // Requires network access and running weather agent
 async fn test_error_handling_missing_headers() {
     println!("\n=== Testing Error Handling: Missing Required Headers ===");
