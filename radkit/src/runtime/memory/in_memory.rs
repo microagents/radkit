@@ -15,7 +15,7 @@ use crate::runtime::memory::MemoryService;
 
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 mod native {
-    use super::{Value, AuthContext, MemoryService, AgentResult};
+    use super::{AgentResult, AuthContext, MemoryService, Value};
     use dashmap::DashMap;
     use std::sync::Arc;
 
@@ -46,7 +46,7 @@ mod native {
 
     impl InMemoryMemoryService {
         /// Creates a new `InMemoryMemoryService`.
-        #[must_use] 
+        #[must_use]
         pub fn new() -> Self {
             Self::default()
         }

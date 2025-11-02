@@ -64,7 +64,7 @@ enum NegotiationOutcome {
 }
 
 impl<'a> RequestExecutor<'a> {
-    #[must_use] 
+    #[must_use]
     pub fn new(runtime: Arc<DefaultRuntime>, agent_def: &'a AgentDefinition) -> Self {
         Self { runtime, agent_def }
     }

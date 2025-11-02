@@ -24,6 +24,12 @@ pub fn display_banner(address: &str, base_url: Option<&str>, agents: &Arc<Vec<Ag
 
     println!("{banner}");
     println!("  Agentic SDK for Rust");
+    let effective_base_url = base_url.map_or_else(|| infer_base_url(address), String::from);
+
+    println!(
+        "  Dev UI:     {}/",
+        effective_base_url.trim_end_matches('/')
+    );
     println!();
 
     // Server info
@@ -46,8 +52,6 @@ pub fn display_banner(address: &str, base_url: Option<&str>, agents: &Arc<Vec<Ag
     if agent_count == 0 {
         println!("  No agents registered. Use .agents(vec![...]) to register agents.");
     } else {
-        let effective_base_url = base_url.map_or_else(|| infer_base_url(address), String::from);
-
         for agent in agents.iter() {
             let agent_id = agent.id();
             let version = agent.version();

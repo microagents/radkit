@@ -11,9 +11,13 @@ use serde_json::json;
 ///
 /// This keeps protocol wiring outside of the executor so that execution logic
 /// only deals with domain errors.
-#[must_use] 
+#[must_use]
 pub fn to_jsonrpc_error(error: AgentError) -> JSONRPCError {
-    use AgentError::{InvalidInput, MissingInput, SkillSlot, TaskNotFound, SkillNotFound, AgentNotFound, NotImplemented, BlockingNotSupported, InvalidConfiguration, MissingConfiguration, Validation};
+    use AgentError::{
+        AgentNotFound, BlockingNotSupported, InvalidConfiguration, InvalidInput,
+        MissingConfiguration, MissingInput, NotImplemented, SkillNotFound, SkillSlot, TaskNotFound,
+        Validation,
+    };
 
     match error {
         InvalidInput(message) => invalid_params_error(Some(message), None),

@@ -158,7 +158,7 @@ impl DefaultRuntime {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn agents(mut self, agents: Vec<crate::agent::AgentDefinition>) -> Self {
         self.agents = Arc::new(agents);
         self
@@ -228,6 +228,7 @@ impl DefaultRuntime {
 
         // Build the Axum router
         let app = Router::new()
+            .merge(web::dev_ui::router())
             .route(
                 "/:agent_id/.well-known/agent-card.json",
                 get(web::agent_card_handler),

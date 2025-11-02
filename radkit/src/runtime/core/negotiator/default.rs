@@ -290,13 +290,11 @@ mod tests {
     }
 
     fn negotiation_response(skill_id: &str) -> AgentResult<LlmResponse> {
-        let decision = json!({
-            "type": "start_task",
-            "skill_id": skill_id,
-            "reasoning": "clear intent",
-        });
-        let tool_call = ToolCall::new("decision", "radkit_structured_output", decision);
-        FakeLlm::content_response(Content::from_parts(vec![ContentPart::ToolCall(tool_call)]))
+        let json_str = format!(
+            r#"{{"type": "start_task", "skill_id": "{}", "reasoning": "clear intent"}}"#,
+            skill_id
+        );
+        FakeLlm::content_response(Content::from_text(json_str))
     }
 
     #[tokio::test(flavor = "current_thread")]

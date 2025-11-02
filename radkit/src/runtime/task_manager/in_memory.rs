@@ -16,7 +16,10 @@ use a2a_types::Message;
 
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 mod native {
-    use super::{Task, TaskEvent, AuthContext, TaskManager, AgentResult, ListTasksFilter, PaginatedResult, Message};
+    use super::{
+        AgentResult, AuthContext, ListTasksFilter, Message, PaginatedResult, Task, TaskEvent,
+        TaskManager,
+    };
     use dashmap::DashMap;
     use std::sync::Arc;
 
@@ -58,7 +61,7 @@ mod native {
 
     impl InMemoryTaskManager {
         /// Creates a new `InMemoryTaskManager`.
-        #[must_use] 
+        #[must_use]
         pub fn new() -> Self {
             Self::default()
         }

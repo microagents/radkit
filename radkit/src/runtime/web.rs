@@ -2,6 +2,7 @@
 
 //! Web server handlers for the `DefaultRuntime`.
 
+use crate::agent::AgentDefinition;
 use crate::errors::AgentError;
 use crate::runtime::core::error_mapper;
 use crate::runtime::core::executor::{PreparedSendMessage, RequestExecutor, TaskStream};
@@ -71,6 +72,71 @@ fn infer_base_url(bind_address: &str) -> String {
         _ => "http://localhost".to_string(),
     }
 }
+
+pub(crate) fn build_agent_card(runtime: &DefaultRuntime, agent: &AgentDefinition) -> AgentCard {
+    let base_url = runtime.base_url.clone().unwrap_or_else(|| {
+        runtime.bind_address.as_ref().map_or_else(
+            || "http://localhost".to_string(),
+            |addr| infer_base_url(addr),
+        )
+    });
+
+    let normalized_base = base_url.trim_end_matches('/');
+    let version = agent.version();
+    let agent_id = agent.id();
+
+    let mut card = AgentCard::new(
+        agent.name(),
+        agent.description().unwrap_or_default(),
+        version,
+        format!("{normalized_base}/{agent_id}/{version}/rpc"),
+    );
+
+    card.capabilities.streaming = Some(true);
+    card = card.add_interface(
+        TransportProtocol::HttpJson,
+        format!("{normalized_base}/{agent_id}/{version}"),
+    );
+
+    card.skills = agent
+        .skills()
+        .iter()
+        .map(|skill| AgentSkill {
+            id: skill.id().to_string(),
+            name: skill.name().to_string(),
+            description: skill.description().to_string(),
+            tags: skill
+                .metadata()
+                .tags
+                .iter()
+                .map(|tag| (*tag).to_string())
+                .collect(),
+            examples: skill
+                .metadata()
+                .examples
+                .iter()
+                .map(|example| (*example).to_string())
+                .collect(),
+            input_modes: skill
+                .metadata()
+                .input_modes
+                .iter()
+                .map(|mode| (*mode).to_string())
+                .collect(),
+            output_modes: skill
+                .metadata()
+                .output_modes
+                .iter()
+                .map(|mode| (*mode).to_string())
+                .collect(),
+            security: Vec::new(),
+        })
+        .collect();
+
+    card
+}
+
+pub mod dev_ui;
 
 #[cfg(test)]
 mod tests {
@@ -474,59 +540,7 @@ pub async fn agent_card_handler(
     let agent_def = runtime.agents.iter().find(|a| a.id() == agent_id);
 
     if let Some(agent) = agent_def {
-        // Use configured base_url or infer from bind address
-        let base_url = if let Some(url) = &runtime.base_url {
-            url.clone()
-        } else {
-            // Infer from bind address if available
-            runtime
-                .bind_address
-                .as_ref().map_or_else(|| "http://localhost".to_string(), |addr| infer_base_url(addr))
-        };
-
-        let mut card = AgentCard::new(
-            agent.name(),
-            agent.description().unwrap_or_default(),
-            agent.version(),
-            format!("{}/{}/{}/rpc", base_url, agent.id(), agent.version()),
-        );
-
-        card.capabilities.streaming = Some(true);
-        card = card.add_interface(
-            TransportProtocol::HttpJson,
-            format!("{}/{}/{}", base_url, agent.id(), agent.version()),
-        );
-
-        card.skills = agent
-            .skills()
-            .iter()
-            .map(|s| AgentSkill {
-                id: s.id().to_string(),
-                name: s.name().to_string(),
-                description: s.description().to_string(),
-                tags: s.metadata().tags.iter().map(|t| (*t).to_string()).collect(),
-                examples: s
-                    .metadata()
-                    .examples
-                    .iter()
-                    .map(|e| (*e).to_string())
-                    .collect(),
-                input_modes: s
-                    .metadata()
-                    .input_modes
-                    .iter()
-                    .map(|m| (*m).to_string())
-                    .collect(),
-                output_modes: s
-                    .metadata()
-                    .output_modes
-                    .iter()
-                    .map(|m| (*m).to_string())
-                    .collect(),
-                security: Vec::new(),
-            })
-            .collect();
-
+        let card = build_agent_card(&runtime, agent);
         (StatusCode::OK, Json(card)).into_response()
     } else {
         (StatusCode::NOT_FOUND, "Agent not found").into_response()

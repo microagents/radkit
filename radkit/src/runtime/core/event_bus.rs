@@ -68,7 +68,7 @@ impl TaskEventBus {
     }
 
     /// Subscribes to events for the provided task identifier.
-    #[must_use] 
+    #[must_use]
     pub fn subscribe(&self, task_id: &str) -> TaskEventReceiver {
         let (tx, rx) = channel::unbounded_channel();
         self.add_sender(task_id.to_string(), tx);
