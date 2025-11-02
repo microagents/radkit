@@ -1,557 +1,467 @@
-use a2a_types::{FileContent, Message, MessageRole, Part};
+//! Content containers for message parts.
+//!
+//! This module provides the [`Content`] type, a container for multiple [`ContentPart`]s
+//! that make up the content of a message. Content can include text, binary data,
+//! tool calls, and tool responses in any combination.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! use radkit::models::{Content, ContentPart};
+//!
+//! // Create content from text
+//! let content = Content::from_text("Hello, world!");
+//!
+//! // Create content with multiple parts
+//! let content = Content::from_parts(vec![
+//!     ContentPart::Text("Check this image:".to_string()),
+//!     ContentPart::from_data("image/png", "iVBORw0KG...", None).unwrap(),
+//! ]);
+//!
+//! // Access text parts
+//! for text in content.texts() {
+//!     println!("{}", text);
+//! }
+//! ```
+
+pub(crate) use crate::models::ContentPart;
+use crate::tools::tool::{ToolCall, ToolResponse};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
+use std::iter::FromIterator;
+use std::slice::{Iter, IterMut};
 
-/// Content represents a message with extended parts that can include function calls/responses
-/// This is the internal representation that bridges A2A protocol and LLM function calling
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A container for a list of content parts.
+///
+/// Content represents the payload of a message, which can include multiple parts
+/// of different types (text, data, tool calls, tool responses). This flexible
+/// structure allows rich, multi-modal messages.
+///
+/// The type implements common collection traits like [`IntoIterator`], [`Extend`],
+/// and [`FromIterator`] for convenient manipulation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Content {
-    /// Task ID this content belongs to
-    pub task_id: String,
-    /// Context/Session ID
-    pub context_id: String,
-    /// Message ID for tracking
-    pub message_id: String,
-    /// Role of the message sender
-    pub role: MessageRole,
-    /// Content parts including function calls/responses
-    pub parts: Vec<ContentPart>,
-    /// Optional metadata
-    pub metadata: Option<HashMap<String, Value>>,
-}
-
-/// ContentPart extends A2A Part with function call/response capabilities
-/// This enum represents all possible content types in a message
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ContentPart {
-    /// Text content
-    Text {
-        text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<HashMap<String, Value>>,
-    },
-    /// File content
-    File {
-        file: FileContent,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<HashMap<String, Value>>,
-    },
-    /// Arbitrary data content
-    Data {
-        data: Value,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<HashMap<String, Value>>,
-    },
-    /// Function/tool call request
-    FunctionCall {
-        /// Name of the function to call
-        name: String,
-        /// Arguments to pass to the function
-        arguments: Value,
-        /// Unique identifier for this tool use (for correlation with response)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tool_use_id: Option<String>,
-        /// Additional metadata about the call
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<HashMap<String, Value>>,
-    },
-    /// Function/tool execution result
-    FunctionResponse {
-        /// Name of the function that was called
-        name: String,
-        /// Whether the function executed successfully
-        success: bool,
-        /// The result data from the function
-        result: Value,
-        /// Error message if the function failed
-        #[serde(skip_serializing_if = "Option::is_none")]
-        error_message: Option<String>,
-        /// Tool use ID this response corresponds to
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tool_use_id: Option<String>,
-        /// Execution duration in milliseconds
-        #[serde(skip_serializing_if = "Option::is_none")]
-        duration_ms: Option<u64>,
-        /// Additional metadata about the execution
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<HashMap<String, Value>>,
-    },
-}
-
-/// Parameters for adding a function response
-pub struct FunctionResponseParams {
-    pub name: String,
-    pub success: bool,
-    pub result: Value,
-    pub error_message: Option<String>,
-    pub tool_use_id: Option<String>,
-    pub duration_ms: Option<u64>,
-    pub metadata: Option<HashMap<String, Value>>,
+    parts: Vec<ContentPart>,
 }
 
 impl Content {
-    /// Create a new Content instance
-    pub fn new(task_id: String, context_id: String, message_id: String, role: MessageRole) -> Self {
+    /// Creates a new `Content` from a single text part.
+    pub fn from_text(content: impl Into<String>) -> Self {
         Self {
-            task_id,
-            context_id,
-            message_id,
-            role,
-            parts: Vec::new(),
-            metadata: None,
+            parts: vec![ContentPart::Text(content.into())],
         }
     }
 
-    /// Create Content from an A2A Message
-    pub fn from_message(message: Message, task_id: String, context_id: String) -> Self {
-        let parts = message
-            .parts
-            .iter()
-            .map(|part| ContentPart::from_a2a_part(part.clone()))
-            .collect();
-
+    /// Creates a new `Content` from a vector of `ContentPart`s.
+    pub fn from_parts(parts: impl Into<Vec<ContentPart>>) -> Self {
         Self {
-            task_id,
-            context_id,
-            message_id: message.message_id,
-            role: message.role,
-            parts,
-            metadata: message.metadata,
+            parts: parts.into(),
         }
     }
 
-    /// Create Content from an LLM response
-    pub fn from_llm_response(
-        response: crate::models::LlmResponse,
-        task_id: String,
-        context_id: String,
-    ) -> Self {
-        // LlmResponse already contains a Content message, so just update the IDs
-        let mut content = response.message;
-        content.task_id = task_id;
-        content.context_id = context_id;
-        content
+    /// Creates a new `Content` from a vector of `ToolCall`s.
+    pub fn from_tool_calls(tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            parts: tool_calls.into_iter().map(ContentPart::ToolCall).collect(),
+        }
     }
 
-    /// Convert to A2A Message (filters out function call/response parts)
-    pub fn to_a2a_message(&self) -> Option<Message> {
-        let a2a_parts: Vec<Part> = self
-            .parts
-            .iter()
-            .filter_map(|part| part.to_a2a_part())
-            .collect();
+    /// Appends a `ContentPart` to the content.
+    pub fn append(mut self, part: impl Into<ContentPart>) -> Self {
+        self.parts.push(part.into());
+        self
+    }
 
-        if a2a_parts.is_empty() {
+    /// Pushes a `ContentPart` to the content.
+    pub fn push(&mut self, part: impl Into<ContentPart>) {
+        self.parts.push(part.into());
+    }
+
+    /// Extends the content with an iterator of `ContentPart`s.
+    pub fn extended<I>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator<Item = ContentPart>,
+    {
+        self.parts.extend(iter);
+        self
+    }
+
+    /// Returns a slice of the content parts.
+    ///
+    /// This method returns a slice rather than a reference to the internal `Vec`
+    /// for better API flexibility and ergonomics.
+    #[must_use]
+    pub fn parts(&self) -> &[ContentPart] {
+        &self.parts
+    }
+
+    /// Consumes the `Content` and returns the `ContentPart`s.
+    #[must_use]
+    pub fn into_parts(self) -> Vec<ContentPart> {
+        self.parts
+    }
+
+    /// Returns all text parts as a vector of `&str`.
+    #[must_use]
+    pub fn texts(&self) -> Vec<&str> {
+        self.parts.iter().filter_map(|p| p.as_text()).collect()
+    }
+
+    /// Consumes the `Content` and returns all text parts as a vector of `String`.
+    #[must_use]
+    pub fn into_texts(self) -> Vec<String> {
+        self.parts
+            .into_iter()
+            .filter_map(super::content_part::ContentPart::into_text)
+            .collect()
+    }
+
+    /// Returns all `ToolCall` parts as a vector of references.
+    #[must_use]
+    pub fn tool_calls(&self) -> Vec<&ToolCall> {
+        self.parts.iter().filter_map(|p| p.as_tool_call()).collect()
+    }
+
+    /// Consumes the `Content` and returns all `ToolCall` parts.
+    #[must_use]
+    pub fn into_tool_calls(self) -> Vec<ToolCall> {
+        self.parts
+            .into_iter()
+            .filter_map(super::content_part::ContentPart::into_tool_call)
+            .collect()
+    }
+
+    /// Returns all `ToolResponse` parts as a vector of references.
+    #[must_use]
+    pub fn tool_responses(&self) -> Vec<&ToolResponse> {
+        self.parts
+            .iter()
+            .filter_map(|p| p.as_tool_response())
+            .collect()
+    }
+
+    /// Consumes the `Content` and returns all `ToolResponse` parts.
+    #[must_use]
+    pub fn into_tool_responses(self) -> Vec<ToolResponse> {
+        self.parts
+            .into_iter()
+            .filter_map(super::content_part::ContentPart::into_tool_response)
+            .collect()
+    }
+
+    /// Returns the first text part, if any.
+    #[must_use]
+    pub fn first_text(&self) -> Option<&str> {
+        self.parts.iter().find_map(|p| p.as_text())
+    }
+
+    /// Consumes the `Content` and returns the first text part as a `String`.
+    #[must_use]
+    pub fn into_first_text(self) -> Option<String> {
+        self.parts
+            .into_iter()
+            .find_map(super::content_part::ContentPart::into_text)
+    }
+
+    /// Joins all text parts into a single `String`.
+    #[must_use]
+    pub fn joined_texts(&self) -> Option<String> {
+        let texts = self.texts();
+        if texts.is_empty() {
             return None;
         }
-        Some(Message {
-            kind: "message".to_string(),
-            message_id: self.message_id.clone(),
-            role: self.role.clone(),
-            parts: a2a_parts,
-            context_id: Some(self.context_id.clone()),
-            task_id: Some(self.task_id.clone()),
-            reference_task_ids: Vec::new(),
-            extensions: Vec::new(),
-            metadata: self.metadata.clone(),
-        })
+
+        if texts.len() == 1 {
+            return texts.first().map(|s| (*s).to_string());
+        }
+
+        let mut combined = String::new();
+        for text in texts {
+            append_text(&mut combined, text);
+        }
+        Some(combined)
     }
 
-    /// Add a text part
-    pub fn add_text(&mut self, text: String, metadata: Option<HashMap<String, Value>>) {
-        self.parts.push(ContentPart::Text { text, metadata });
+    /// Consumes the `Content` and joins all text parts into a single `String`.
+    #[must_use]
+    pub fn into_joined_texts(self) -> Option<String> {
+        let texts = self.into_texts();
+        if texts.is_empty() {
+            return None;
+        }
+
+        if texts.len() == 1 {
+            return texts.into_iter().next();
+        }
+
+        let mut combined = String::new();
+        for text in texts {
+            append_text(&mut combined, &text);
+        }
+        Some(combined)
     }
 
-    /// Add a function call
-    pub fn add_function_call(
-        &mut self,
-        name: String,
-        arguments: Value,
-        tool_use_id: Option<String>,
-        metadata: Option<HashMap<String, Value>>,
-    ) {
-        self.parts.push(ContentPart::FunctionCall {
-            name,
-            arguments,
-            tool_use_id,
-            metadata,
-        });
+    /// Returns `true` if the content has no parts.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.parts.is_empty()
     }
 
-    /// Add a function response
-    pub fn add_function_response(&mut self, params: FunctionResponseParams) {
-        self.parts.push(ContentPart::FunctionResponse {
-            name: params.name,
-            success: params.success,
-            result: params.result,
-            error_message: params.error_message,
-            tool_use_id: params.tool_use_id,
-            duration_ms: params.duration_ms,
-            metadata: params.metadata,
-        });
+    /// Returns the number of parts in the content.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.parts.len()
     }
 
-    /// Check if this content has function calls
-    pub fn has_function_calls(&self) -> bool {
+    /// Returns `true` if all parts are empty or whitespace-only text.
+    #[must_use]
+    pub fn is_text_empty(&self) -> bool {
+        if self.parts.is_empty() {
+            return true;
+        }
         self.parts
             .iter()
-            .any(|part| matches!(part, ContentPart::FunctionCall { .. }))
+            .all(|p| matches!(p, ContentPart::Text(t) if t.trim().is_empty()))
     }
 
-    /// Check if this content has function responses
-    pub fn has_function_responses(&self) -> bool {
-        self.parts
-            .iter()
-            .any(|part| matches!(part, ContentPart::FunctionResponse { .. }))
+    /// Returns `true` if all parts are text.
+    #[must_use]
+    pub fn is_text_only(&self) -> bool {
+        self.parts.iter().all(|p| p.as_text().is_some())
     }
 
-    /// Get all function calls
-    pub fn get_function_calls(&self) -> Vec<&ContentPart> {
-        self.parts
-            .iter()
-            .filter(|part| matches!(part, ContentPart::FunctionCall { .. }))
-            .collect()
+    /// Returns `true` if there is at least one text part.
+    #[must_use]
+    pub fn has_text(&self) -> bool {
+        self.parts.iter().any(|p| p.as_text().is_some())
     }
 
-    /// Get all function responses
-    pub fn get_function_responses(&self) -> Vec<&ContentPart> {
-        self.parts
-            .iter()
-            .filter(|part| matches!(part, ContentPart::FunctionResponse { .. }))
-            .collect()
+    /// Returns `true` if there is at least one `ToolCall` part.
+    #[must_use]
+    pub fn has_tool_calls(&self) -> bool {
+        self.parts.iter().any(|p| p.as_tool_call().is_some())
     }
 
-    /// Check if content has any visible parts (non-function parts)
-    pub fn has_visible_content(&self) -> bool {
-        self.parts.iter().any(|part| match part {
-            ContentPart::Text { text, .. } => !text.is_empty(),
-            ContentPart::File { .. } => true,
-            ContentPart::Data { .. } => true,
-            ContentPart::FunctionCall { .. } | ContentPart::FunctionResponse { .. } => false,
-        })
+    /// Returns `true` if there is at least one `ToolResponse` part.
+    #[must_use]
+    pub fn has_tool_responses(&self) -> bool {
+        self.parts.iter().any(|p| p.as_tool_response().is_some())
     }
 }
 
-impl ContentPart {
-    /// Convert from A2A Part
-    pub fn from_a2a_part(part: Part) -> Self {
-        match part {
-            Part::Text { text, metadata } => ContentPart::Text { text, metadata },
-            Part::File { file, metadata } => ContentPart::File { file, metadata },
-            Part::Data { data, metadata } => ContentPart::Data { data, metadata },
+impl Extend<ContentPart> for Content {
+    fn extend<T: IntoIterator<Item = ContentPart>>(&mut self, iter: T) {
+        self.parts.extend(iter);
+    }
+}
+
+impl IntoIterator for Content {
+    type Item = ContentPart;
+    type IntoIter = std::vec::IntoIter<ContentPart>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.parts.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Content {
+    type Item = &'a ContentPart;
+    type IntoIter = Iter<'a, ContentPart>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.parts.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Content {
+    type Item = &'a mut ContentPart;
+    type IntoIter = IterMut<'a, ContentPart>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.parts.iter_mut()
+    }
+}
+
+impl FromIterator<ContentPart> for Content {
+    fn from_iter<T: IntoIterator<Item = ContentPart>>(iter: T) -> Self {
+        Self {
+            parts: iter.into_iter().collect(),
         }
     }
+}
 
-    /// Convert to A2A Part (returns None for function-related parts)
-    pub fn to_a2a_part(&self) -> Option<Part> {
-        match self {
-            ContentPart::Text { text, metadata } => {
-                // Only include non-empty text parts
-                if !text.is_empty() {
-                    Some(Part::Text {
-                        text: text.clone(),
-                        metadata: metadata.clone(),
-                    })
-                } else {
-                    None
-                }
-            }
-            ContentPart::File { file, metadata } => Some(Part::File {
-                file: file.clone(),
-                metadata: metadata.clone(),
-            }),
-            ContentPart::Data { data, metadata } => Some(Part::Data {
-                data: data.clone(),
-                metadata: metadata.clone(),
-            }),
-            ContentPart::FunctionCall { .. } | ContentPart::FunctionResponse { .. } => {
-                // Function-related parts are not included in A2A messages
-                None
-            }
+impl From<&str> for Content {
+    fn from(s: &str) -> Self {
+        Self {
+            parts: vec![ContentPart::Text(s.to_string())],
         }
     }
+}
 
-    /// Check if this is a function-related part
-    pub fn is_function_part(&self) -> bool {
-        matches!(
-            self,
-            ContentPart::FunctionCall { .. } | ContentPart::FunctionResponse { .. }
-        )
+impl From<&String> for Content {
+    fn from(s: &String) -> Self {
+        Self {
+            parts: vec![ContentPart::Text(s.clone())],
+        }
+    }
+}
+
+impl From<String> for Content {
+    fn from(s: String) -> Self {
+        Self {
+            parts: vec![ContentPart::Text(s)],
+        }
+    }
+}
+
+impl From<Vec<ToolCall>> for Content {
+    fn from(tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            parts: tool_calls.into_iter().map(ContentPart::ToolCall).collect(),
+        }
+    }
+}
+
+impl From<ToolResponse> for Content {
+    fn from(tool_response: ToolResponse) -> Self {
+        Self {
+            parts: vec![ContentPart::ToolResponse(tool_response)],
+        }
+    }
+}
+
+impl From<Vec<ContentPart>> for Content {
+    fn from(parts: Vec<ContentPart>) -> Self {
+        Self { parts }
+    }
+}
+
+impl From<ContentPart> for Content {
+    fn from(part: ContentPart) -> Self {
+        Self { parts: vec![part] }
+    }
+}
+
+fn append_text(combined: &mut String, text: &str) {
+    if !combined.is_empty() {
+        combined.push_str("\n\n");
+    }
+    combined.push_str(text);
+}
+
+// ============================================================================
+// A2A Conversions
+// ============================================================================
+
+impl From<a2a_types::Message> for Content {
+    fn from(msg: a2a_types::Message) -> Self {
+        let parts: Vec<ContentPart> = msg.parts.into_iter().map(ContentPart::from).collect();
+        Self::from_parts(parts)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::tool::ToolCall;
     use serde_json::json;
 
     #[test]
-    fn test_content_creation() {
-        let content = Content::new(
-            "task1".to_string(),
-            "ctx1".to_string(),
-            "msg1".to_string(),
-            MessageRole::User,
-        );
+    fn text_helpers_cover_common_cases() {
+        let content = Content::from_parts(vec![
+            ContentPart::Text("Hello".to_string()),
+            ContentPart::Text("World".to_string()),
+        ]);
 
-        assert_eq!(content.task_id, "task1");
-        assert_eq!(content.context_id, "ctx1");
-        assert_eq!(content.message_id, "msg1");
-        assert_eq!(content.role, MessageRole::User);
-        assert!(content.parts.is_empty());
+        assert_eq!(content.texts(), vec!["Hello", "World"]);
+        assert_eq!(content.joined_texts().as_deref(), Some("Hello\n\nWorld"));
+        assert!(!content.is_text_empty());
+        assert!(content.is_text_only());
+        assert!(content.has_text());
+        assert!(!content.has_tool_calls());
     }
 
     #[test]
-    fn test_content_from_message() {
-        let message = Message {
-            kind: "message".to_string(),
-            message_id: "msg1".to_string(),
-            role: MessageRole::Agent,
-            parts: vec![
-                Part::Text {
-                    text: "Hello".to_string(),
-                    metadata: None,
-                },
-                Part::Data {
-                    data: json!({"key": "value"}),
-                    metadata: None,
-                },
-            ],
-            context_id: Some("ctx1".to_string()),
-            task_id: Some("task1".to_string()),
-            reference_task_ids: Vec::new(),
-            extensions: Vec::new(),
-            metadata: None,
-        };
-
-        let content = Content::from_message(message, "task1".to_string(), "ctx1".to_string());
-
-        assert_eq!(content.parts.len(), 2);
-        assert!(matches!(&content.parts[0], ContentPart::Text { text, .. } if text == "Hello"));
-        assert!(matches!(&content.parts[1], ContentPart::Data { .. }));
+    fn test_content_from_text() {
+        let content = Content::from_text("Hello, world!");
+        assert_eq!(content.first_text(), Some("Hello, world!"));
+        assert_eq!(content.joined_texts(), Some("Hello, world!".to_string()));
+        assert!(content.has_text());
+        assert!(!content.has_tool_calls());
     }
 
     #[test]
-    fn test_content_to_a2a_message() {
-        let mut content = Content::new(
-            "task1".to_string(),
-            "ctx1".to_string(),
-            "msg1".to_string(),
-            MessageRole::Agent,
+    fn test_content_from_parts() {
+        let content = Content::from_parts(vec![
+            ContentPart::from_text("Part 1"),
+            ContentPart::from_text(" Part 2"),
+        ]);
+        assert_eq!(content.first_text(), Some("Part 1"));
+        assert_eq!(
+            content.joined_texts(),
+            Some("Part 1\n\n Part 2".to_string())
         );
-
-        // Add visible content
-        content.add_text("Response text".to_string(), None);
-
-        // Add function call (should be filtered out)
-        content.add_function_call(
-            "test_tool".to_string(),
-            json!({"param": "value"}),
-            Some("tool_123".to_string()),
-            None,
-        );
-
-        // Add function response (should be filtered out)
-        content.add_function_response(FunctionResponseParams {
-            name: "test_tool".to_string(),
-            success: true,
-            result: json!({"result": "success"}),
-            error_message: None,
-            tool_use_id: Some("tool_123".to_string()),
-            duration_ms: Some(150),
-            metadata: None,
-        });
-
-        let message = content.to_a2a_message();
-
-        // Only text part should be in A2A message
-        assert!(message.is_some());
-
-        if let Some(message) = message {
-            assert_eq!(message.parts.len(), 1);
-            assert!(
-                matches!(&message.parts[0], Part::Text { text, .. } if text == "Response text")
-            );
-        }
+        assert!(content.has_text());
     }
 
     #[test]
-    fn test_function_call_handling() {
-        let mut content = Content::new(
-            "task1".to_string(),
-            "ctx1".to_string(),
-            "msg1".to_string(),
-            MessageRole::Agent,
-        );
-
-        content.add_text("I'll help you with that".to_string(), None);
-        content.add_function_call(
-            "weather_tool".to_string(),
-            json!({"location": "San Francisco"}),
-            Some("tool_456".to_string()),
-            None,
-        );
-
-        assert!(content.has_function_calls());
-        assert!(!content.has_function_responses());
-
-        let function_calls = content.get_function_calls();
-        assert_eq!(function_calls.len(), 1);
-
-        if let ContentPart::FunctionCall {
-            name,
-            arguments,
-            tool_use_id,
-            ..
-        } = function_calls[0]
-        {
-            assert_eq!(name, "weather_tool");
-            assert_eq!(arguments, &json!({"location": "San Francisco"}));
-            assert_eq!(tool_use_id, &Some("tool_456".to_string()));
-        } else {
-            panic!("Expected FunctionCall");
-        }
+    fn test_content_with_tool_calls() {
+        let tool_call = crate::tools::ToolCall::new("call-1", "test_tool", json!({}));
+        let content = Content::from_parts(vec![ContentPart::ToolCall(tool_call)]);
+        assert!(content.has_tool_calls());
+        assert!(!content.has_text());
+        assert_eq!(content.tool_calls().len(), 1);
     }
 
     #[test]
-    fn test_function_response_handling() {
-        let mut content = Content::new(
-            "task1".to_string(),
-            "ctx1".to_string(),
-            "msg1".to_string(),
-            MessageRole::User,
-        );
-
-        content.add_function_response(FunctionResponseParams {
-            name: "weather_tool".to_string(),
-            success: true,
-            result: json!({"temperature": "72°F", "conditions": "sunny"}),
-            error_message: None,
-            tool_use_id: Some("tool_456".to_string()),
-            duration_ms: Some(250),
-            metadata: None,
-        });
-
-        assert!(!content.has_function_calls());
-        assert!(content.has_function_responses());
-
-        let responses = content.get_function_responses();
-        assert_eq!(responses.len(), 1);
-
-        if let ContentPart::FunctionResponse {
-            name,
-            success,
-            result,
-            duration_ms,
-            ..
-        } = responses[0]
-        {
-            assert_eq!(name, "weather_tool");
-            assert_eq!(*success, true);
-            assert_eq!(result["temperature"], "72°F");
-            assert_eq!(*duration_ms, Some(250));
-        } else {
-            panic!("Expected FunctionResponse");
-        }
+    fn test_content_texts() {
+        let content = Content::from_parts(vec![
+            ContentPart::from_text("Hello"),
+            ContentPart::from_text("World"),
+        ]);
+        let texts: Vec<&str> = content.texts();
+        assert_eq!(texts, vec!["Hello", "World"]);
     }
 
     #[test]
-    fn test_error_function_response() {
-        let mut content = Content::new(
-            "task1".to_string(),
-            "ctx1".to_string(),
-            "msg1".to_string(),
-            MessageRole::User,
-        );
-
-        content.add_function_response(FunctionResponseParams {
-            name: "failing_tool".to_string(),
-            success: false,
-            result: json!({}),
-            error_message: Some("Tool execution failed: Network error".to_string()),
-            tool_use_id: Some("tool_789".to_string()),
-            duration_ms: Some(50),
-            metadata: None,
-        });
-
-        let responses = content.get_function_responses();
-        if let ContentPart::FunctionResponse {
-            success,
-            error_message,
-            ..
-        } = responses[0]
-        {
-            assert_eq!(*success, false);
-            assert_eq!(
-                error_message.as_ref().unwrap(),
-                "Tool execution failed: Network error"
-            );
-        } else {
-            panic!("Expected FunctionResponse");
-        }
+    fn test_from_string_into_content() {
+        let s = "Hello";
+        let content: Content = s.into();
+        assert_eq!(content.first_text(), Some("Hello"));
     }
 
     #[test]
-    fn test_visible_content_check() {
-        let mut content = Content::new(
-            "task1".to_string(),
-            "ctx1".to_string(),
-            "msg1".to_string(),
-            MessageRole::Agent,
-        );
-
-        // No visible content initially
-        assert!(!content.has_visible_content());
-
-        // Add empty text (not visible)
-        content.add_text("".to_string(), None);
-        assert!(!content.has_visible_content());
-
-        // Add function call (not visible)
-        content.add_function_call("tool".to_string(), json!({}), None, None);
-        assert!(!content.has_visible_content());
-
-        // Add non-empty text (visible)
-        content.add_text("Hello".to_string(), None);
-        assert!(content.has_visible_content());
+    fn test_from_string_into_content_owned() {
+        let s = String::from("Hello");
+        let content: Content = s.into();
+        assert_eq!(content.first_text(), Some("Hello"));
     }
 
     #[test]
-    fn test_content_part_conversions() {
-        // Test A2A Part to ContentPart
-        let text_part = Part::Text {
-            text: "Hello".to_string(),
-            metadata: None,
-        };
-        let content_part = ContentPart::from_a2a_part(text_part.clone());
-        assert!(matches!(&content_part, ContentPart::Text { text, .. } if text == "Hello"));
+    fn tool_call_iteration_round_trips() {
+        let call = ToolCall::new("call-1", "echo", json!({"value": 1}));
+        let content = Content::from_parts(vec![
+            ContentPart::ToolCall(call.clone()),
+            ContentPart::Text("ignored".to_string()),
+        ]);
 
-        // Test ContentPart to A2A Part (text)
-        let a2a_part = content_part.to_a2a_part();
-        assert!(a2a_part.is_some());
+        let calls = content.tool_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id(), "call-1");
 
-        // Test function parts don't convert to A2A
-        let func_call = ContentPart::FunctionCall {
-            name: "test".to_string(),
-            arguments: json!({}),
-            tool_use_id: None,
-            metadata: None,
-        };
-        assert!(func_call.to_a2a_part().is_none());
-        assert!(func_call.is_function_part());
+        let owned: Vec<ToolCall> = content.clone().into_tool_calls();
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].name(), "echo");
+    }
 
-        let func_resp = ContentPart::FunctionResponse {
-            name: "test".to_string(),
-            success: true,
-            result: json!({}),
-            error_message: None,
-            tool_use_id: None,
-            duration_ms: None,
-            metadata: None,
-        };
-        assert!(func_resp.to_a2a_part().is_none());
-        assert!(func_resp.is_function_part());
+    #[test]
+    fn append_and_push_extend_content() {
+        let mut content = Content::from_text("first");
+        content = content.append(ContentPart::Text("second".into()));
+        content.push(ContentPart::Text("third".into()));
+
+        assert_eq!(content.len(), 3);
+        let collected = content.clone().into_parts();
+        assert_eq!(collected.len(), 3);
+
+        let extended = Content::from_text("base").extended(vec![ContentPart::Text("extra".into())]);
+        assert_eq!(extended.len(), 2);
     }
 }
