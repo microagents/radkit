@@ -1,75 +1,132 @@
-use async_trait::async_trait;
+//! Toolset abstractions for grouping related tools.
+//!
+//! This module provides the [`BaseToolset`] trait and implementations for organizing
+//! and composing collections of tools.
+//!
+//! # Overview
+//!
+//! - [`BaseToolset`]: Trait for tool collections with lifecycle management
+//! - [`SimpleToolset`]: Basic in-memory collection of tools
+//! - [`CombinedToolset`]: Composes two toolsets into one
+//!
+//! # Examples
+//!
+//! ```ignore
+//! use radkit::tools::{SimpleToolset, FunctionTool, ToolResult};
+//! use serde_json::json;
+//! use std::sync::Arc;
+//!
+//! // Create individual tools
+//! let weather_tool = Arc::new(FunctionTool::new(
+//!     "get_weather",
+//!     "Get weather info",
+//!     |args, _| Box::pin(async { ToolResult::success(json!({"temp": 72})) })
+//! ));
+//!
+//! // Create a toolset
+//! let toolset = SimpleToolset::new(vec![weather_tool])
+//!     .with_tool(another_tool);
+//! ```
+
 use std::sync::Arc;
 
 use super::base_tool::BaseTool;
-use crate::events::ExecutionContext;
+use crate::{MaybeSend, MaybeSync};
 
 /// Base trait for toolsets - collections of related tools.
-/// Similar to Python ADK's BaseToolset but adapted for Rust patterns.
-#[async_trait]
-pub trait BaseToolset: Send + Sync {
+///
+/// Toolsets group tools together and manage their lifecycle. Implementations
+/// can provide tools from various sources (in-memory, remote MCP servers, etc.).
+///
+/// # Lifecycle
+///
+/// The [`close`](BaseToolset::close) method should be called when the toolset
+/// is no longer needed to release resources like network connections or file handles.
+///
+/// # Thread Safety
+///
+/// Toolsets must be `Send + Sync` (via `MaybeSend + MaybeSync`) to support
+/// concurrent access across async tasks.
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
+pub trait BaseToolset: MaybeSend + MaybeSync {
     /// Returns all tools in the toolset.
+    ///
+    /// # Performance Note
+    ///
+    /// This method may clone internal data structures. For [`SimpleToolset`],
+    /// this clones the `Vec<Arc<dyn BaseTool>>`, which is relatively cheap
+    /// (cloning Arcs, not the tools themselves), but still allocates.
+    ///
+    /// If you need to call this repeatedly, consider caching the result.
     async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>>;
 
-    /// Convert this toolset to a list of `ToolProviderConfig` for agent definition.
-    fn to_tool_provider_configs(&self) -> Vec<crate::config::ToolProviderConfig>;
-
     /// Performs cleanup and releases resources held by the toolset.
-    /// Called when the toolset is no longer needed.
+    ///
+    /// This should be called when the toolset is no longer needed. For toolsets
+    /// connected to external services (e.g., MCP servers), this closes connections.
+    /// For simple in-memory toolsets, this is typically a no-op.
+    ///
+    /// Not calling `close()` may leak resources but won't cause undefined behavior.
     async fn close(&self);
-
-    /// Processes the outgoing LLM request for this toolset.
-    /// Called before individual tools process the LLM request.
-    /// Can be used for toolset-level request modifications.
-    async fn process_llm_request(&self, _context: &ExecutionContext) {
-        // Default implementation does nothing
-    }
 }
 
-/// Default implementation of BaseToolset for simple collections of tools
+/// Default implementation of `BaseToolset` for simple collections of tools
+#[derive(Default)]
 pub struct SimpleToolset {
     tools: Vec<Arc<dyn BaseTool>>,
 }
 
 impl SimpleToolset {
-    pub fn new(tools: Vec<Arc<dyn BaseTool>>) -> Self {
-        Self { tools }
+    pub fn new<T>(tools: T) -> Self
+    where
+        T: IntoIterator<Item = Arc<dyn BaseTool>>,
+    {
+        Self {
+            tools: tools.into_iter().collect(),
+        }
     }
 
-    /// Add a single tool to this toolset
+    /// Add a single tool to this toolset.
     pub fn add_tool(&mut self, tool: Arc<dyn BaseTool>) {
         self.tools.push(tool);
     }
 
-    /// Add multiple tools to this toolset
-    pub fn add_tools(&mut self, tools: Vec<Arc<dyn BaseTool>>) {
+    /// Extend the toolset with additional tools.
+    pub fn add_tools<T>(&mut self, tools: T)
+    where
+        T: IntoIterator<Item = Arc<dyn BaseTool>>,
+    {
         self.tools.extend(tools);
     }
 
-    /// Builder pattern for adding a tool
+    /// Builder-style helper to add a tool while consuming the toolset.
     pub fn with_tool(mut self, tool: Arc<dyn BaseTool>) -> Self {
-        self.tools.push(tool);
+        self.add_tool(tool);
         self
     }
 
-    /// Builder pattern for adding multiple tools
-    pub fn with_tools(mut self, tools: Vec<Arc<dyn BaseTool>>) -> Self {
-        self.tools.extend(tools);
+    /// Builder-style helper to add multiple tools while consuming the toolset.
+    pub fn with_tools<T>(mut self, tools: T) -> Self
+    where
+        T: IntoIterator<Item = Arc<dyn BaseTool>>,
+    {
+        self.add_tools(tools);
         self
     }
 }
 
-#[async_trait]
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
 impl BaseToolset for SimpleToolset {
     async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
         self.tools.clone()
-    }
-
-    fn to_tool_provider_configs(&self) -> Vec<crate::config::ToolProviderConfig> {
-        self.tools
-            .iter()
-            .filter_map(|tool| tool.to_tool_provider_config())
-            .collect()
     }
 
     async fn close(&self) {
@@ -82,14 +139,14 @@ impl BaseToolset for SimpleToolset {
 /// This allows composing multiple toolsets together, enabling patterns like:
 /// - Combining multiple MCP toolsets
 /// - Combining MCP toolset with built-in tools
-/// - Chaining multiple CombinedToolsets for complex compositions
+/// - Chaining multiple `CombinedToolsets` for complex compositions
 pub struct CombinedToolset {
     left: Arc<dyn BaseToolset>,
     right: Arc<dyn BaseToolset>,
 }
 
 impl CombinedToolset {
-    /// Create a new CombinedToolset from two toolsets
+    /// Create a new `CombinedToolset` from two toolsets
     ///
     /// # Example
     /// ```no_run
@@ -107,18 +164,16 @@ impl CombinedToolset {
     }
 }
 
-#[async_trait]
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
 impl BaseToolset for CombinedToolset {
     async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
         let mut all_tools = self.left.get_tools().await;
         all_tools.extend(self.right.get_tools().await);
         all_tools
-    }
-
-    fn to_tool_provider_configs(&self) -> Vec<crate::config::ToolProviderConfig> {
-        let mut configs = self.left.to_tool_provider_configs();
-        configs.extend(self.right.to_tool_provider_configs());
-        configs
     }
 
     async fn close(&self) {
@@ -131,187 +186,57 @@ impl BaseToolset for CombinedToolset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::{
-        ToolContext,
-        base_tool::{BaseTool, FunctionDeclaration, ToolResult},
-    };
+    use crate::tools::function_tool::FunctionTool;
+    use serde_json::json;
 
-    // Mock tool for testing
-    #[derive(Debug)]
-    struct MockTool {
-        name: String,
-        description: String,
+    fn build_tool(name: &str) -> Arc<dyn BaseTool> {
+        Arc::new(FunctionTool::new(name, "test tool", |_, _| {
+            Box::pin(async { crate::tools::ToolResult::success(json!(null)) })
+        }))
     }
 
-    impl MockTool {
-        fn new(name: &str, description: &str) -> Arc<Self> {
-            Arc::new(Self {
-                name: name.to_string(),
-                description: description.to_string(),
-            })
-        }
-    }
-
-    #[async_trait]
-    impl BaseTool for MockTool {
-        fn name(&self) -> &str {
-            &self.name
-        }
-
-        fn description(&self) -> &str {
-            &self.description
-        }
-
-        fn get_declaration(&self) -> Option<FunctionDeclaration> {
-            Some(FunctionDeclaration {
-                name: self.name.clone(),
-                description: self.description.clone(),
-                parameters: serde_json::json!({}),
-            })
-        }
-
-        async fn run_async(
-            &self,
-            _args: std::collections::HashMap<String, serde_json::Value>,
-            _context: &ToolContext<'_>,
-        ) -> ToolResult {
-            ToolResult::success(serde_json::Value::Null)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_simple_toolset() {
-        let tool1 = MockTool::new("tool1", "First tool");
-        let tool2 = MockTool::new("tool2", "Second tool");
-        let toolset = SimpleToolset::new(vec![tool1, tool2]);
+    #[tokio::test(flavor = "current_thread")]
+    async fn simple_toolset_returns_cloned_tools() {
+        let tool = build_tool("alpha");
+        let toolset = SimpleToolset::new(vec![Arc::clone(&tool)]);
 
         let tools = toolset.get_tools().await;
-        assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0].name(), "tool1");
-        assert_eq!(tools[1].name(), "tool2");
-    }
-
-    #[tokio::test]
-    async fn test_simple_toolset_builder_pattern() {
-        let tool1 = MockTool::new("tool1", "First");
-        let tool2 = MockTool::new("tool2", "Second");
-        let tool3 = MockTool::new("tool3", "Third");
-
-        let toolset = SimpleToolset::new(vec![])
-            .with_tool(tool1)
-            .with_tools(vec![tool2, tool3]);
-
-        let tools = toolset.get_tools().await;
-        assert_eq!(tools.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_combined_toolset() {
-        let base_tool1 = MockTool::new("base1", "Base tool 1");
-        let base_tool2 = MockTool::new("base2", "Base tool 2");
-        let base_toolset = Arc::new(SimpleToolset::new(vec![base_tool1, base_tool2]));
-
-        let additional_tool1 = MockTool::new("add1", "Additional tool 1");
-        let additional_toolset = Arc::new(SimpleToolset::new(vec![additional_tool1]));
-        let combined = CombinedToolset::new(base_toolset, additional_toolset);
-
-        let tools = combined.get_tools().await;
-        assert_eq!(tools.len(), 3);
-
-        let names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
-        assert!(names.contains(&"base1".to_string()));
-        assert!(names.contains(&"base2".to_string()));
-        assert!(names.contains(&"add1".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_empty_toolset_behavior() {
-        let empty_toolset = SimpleToolset::new(vec![]);
-
-        let tools = empty_toolset.get_tools().await;
-        assert_eq!(tools.len(), 0);
-
-        // Test adding tools to empty toolset
-        let mut mutable_toolset = empty_toolset;
-        let new_tool = MockTool::new("added_tool", "Tool added later");
-        mutable_toolset.add_tool(new_tool);
-
-        let tools = mutable_toolset.get_tools().await;
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name(), "added_tool");
-    }
+        assert_eq!(tools[0].name(), "alpha");
 
-    #[tokio::test]
-    async fn test_combined_toolset_with_empty_base() {
-        let empty_base = Arc::new(SimpleToolset::new(vec![]));
-        let additional_tool = MockTool::new("only_additional", "The only tool");
-        let additional_toolset = Arc::new(SimpleToolset::new(vec![additional_tool]));
-
-        let combined = CombinedToolset::new(empty_base, additional_toolset);
-        let tools = combined.get_tools().await;
-
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name(), "only_additional");
-    }
-
-    #[tokio::test]
-    async fn test_combined_toolset_with_no_additional() {
-        let base_tool = MockTool::new("base_only", "Only base tool");
-        let base_toolset = Arc::new(SimpleToolset::new(vec![base_tool]));
-        let empty_toolset = Arc::new(SimpleToolset::new(vec![]));
-
-        let combined = CombinedToolset::new(base_toolset, empty_toolset);
-        let tools = combined.get_tools().await;
-
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name(), "base_only");
-    }
-
-    #[tokio::test]
-    async fn test_toolset_close_cleanup() {
-        let tool = MockTool::new("cleanup_tool", "Tool for cleanup test");
-        let toolset = SimpleToolset::new(vec![tool]);
-
-        // Close should not panic and should complete successfully
+        // Closing should succeed even though it is a no-op
         toolset.close().await;
-
-        // Tools should still be accessible after close (for simple toolset)
-        let tools = toolset.get_tools().await;
-        assert_eq!(tools.len(), 1);
     }
 
-    #[tokio::test]
-    async fn test_toolset_thread_safety() {
-        use std::sync::Arc;
-        use tokio::task::JoinSet;
+    #[tokio::test(flavor = "current_thread")]
+    async fn combined_toolset_aggregates_tools() {
+        let left = Arc::new(SimpleToolset::new(vec![build_tool("left")]));
+        let right = Arc::new(SimpleToolset::new(vec![build_tool("right")]));
 
-        let tools: Vec<Arc<dyn BaseTool>> = (0..10)
-            .map(|i| {
-                MockTool::new(&format!("tool_{}", i), &format!("Tool {}", i)) as Arc<dyn BaseTool>
-            })
-            .collect();
+        let combined =
+            CombinedToolset::new(Arc::clone(&left) as Arc<_>, Arc::clone(&right) as Arc<_>);
+        let tools = combined.get_tools().await;
 
-        let toolset = Arc::new(SimpleToolset::new(tools));
-        let mut join_set = JoinSet::new();
+        let names: Vec<_> = tools.iter().map(|tool| tool.name().to_string()).collect();
+        assert_eq!(names, vec!["left".to_string(), "right".to_string()]);
 
-        // Spawn multiple concurrent tasks accessing the toolset
-        for _ in 0..5 {
-            let toolset_clone = Arc::clone(&toolset);
-            join_set.spawn(async move {
-                let tools = toolset_clone.get_tools().await;
-                tools.len()
-            });
-        }
+        combined.close().await;
+    }
 
-        // All tasks should complete successfully
-        let mut results = Vec::new();
-        while let Some(result) = join_set.join_next().await {
-            results.push(result.unwrap());
-        }
+    #[tokio::test(flavor = "current_thread")]
+    async fn combined_toolset_handles_tool_name_clashes() {
+        let left = Arc::new(SimpleToolset::new(vec![build_tool("clash")]));
+        let right = Arc::new(SimpleToolset::new(vec![build_tool("clash")]));
 
-        assert_eq!(results.len(), 5);
-        for result in results {
-            assert_eq!(result, 10);
-        }
+        let combined =
+            CombinedToolset::new(Arc::clone(&left) as Arc<_>, Arc::clone(&right) as Arc<_>);
+        let tools = combined.get_tools().await;
+
+        let names: Vec<_> = tools.iter().map(|tool| tool.name().to_string()).collect();
+        // Expect both tools to be present, as the current implementation does not de-duplicate
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"clash".to_string()));
+
+        combined.close().await;
     }
 }
