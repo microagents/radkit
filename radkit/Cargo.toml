@@ -1,46 +1,67 @@
 [package]
 name = "radkit"
 version = "0.0.2"
-edition = "2024"
-license= "Apache-2.0"
+edition = "2021"
+license = "MIT"
 description = "Rust AI Agent Development Kit"
 repository = "https://github.com/microagents/radkit"
 homepage = "https://radkit.dev"
 documentation = "https://radkit.dev"
 keywords = ["ai", "agent", "ai-agent", "a2a", "agent-sdk"]
-readme = "README.md"
+readme = "../README.md"
+
+[features]
+default = []
+# Enables the DefaultRuntime and a full native agent server environment
+runtime = ["dep:axum", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber"]
+# Enables test utilities (FakeLlm, RecordingTool) for downstream testing
+test-support = []
 
 [dependencies]
-a2a-client = { path = "../a2a-client", version = "0.1.1" }
 a2a-types = { path = "../a2a-types", version = "0.1.1" }
-tokio = { version = "1.47", features = ["full"] }
-async-trait = "0.1.88"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.142"
-serde_yaml = "0.9"
-jsonschema = "0.33"
-reqwest = { version = "0.12.23", features = ["json", "stream"] }
-thiserror = "2.0.14"
-tracing = "0.1.41"
-futures = "0.3.31"
-tokio-stream = { version = "0.1.17", features = ["io-util"] }
-tokio-util = { version = "0.7", features = ["io", "codec"] }
-uuid = { version = "1.18.0", features = ["v4", "serde"] }
-chrono = { version = "0.4.41", features = ["serde"] }
-dashmap = "6.1.0"
-rmcp = { version = "0.8.1", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+a2a-client = { path = "../a2a-client", version = "0.1.1" }
+radkit-macros = { path = "../radkit-macros", version = "0.0.2" }
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+schemars = "0.8"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+derive_more = { version = "2.0.1", features = ["from", "display"] }
+async-stream = "0.3.6"
 
-# Observability dependencies
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "registry", "fmt"] }
-tracing-opentelemetry = "0.32.0"
-opentelemetry = "0.31.0"
-opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "metrics"] }
-opentelemetry-otlp = { version = "0.31.0", features = ["tokio", "grpc-tonic", "http-proto"] }
-opentelemetry-stdout = { version = "0.31.0", features = ["trace"] }
-tonic = "0.14.2"
-sha2 = "0.10"
-regex = "1.10"
-once_cell = "1.19"
+[target.'cfg(not(all(target_os = "wasi", target_env = "p1")))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+# TODO: remove "full" once the core parts are done
+tokio = { version = "1", features = ["full"] }
+rand = "0.8"
+dashmap = "6"
+# Optional dependencies for the full runtime (native-only)
+axum = { version = "0.7", optional = true }
+tower-http = { version = "0.5", features = ["trace", "cors"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
+[target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
+wasm-bindgen-futures = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Tokio with WASI support (single-threaded runtime)
+tokio = { version = "1.47.0", features = ["rt", "sync", "time", "io-util", "macros"] }
+# Random number generation for WASI (no special features needed)
+getrandom = "0.2"
 
 [dev-dependencies]
+http-body-util = "0.1"
 dotenvy = "0.15"
+
+[target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[[example]]
+name = "hr_agent"
+path = "../examples/hr_agent/agent.rs"

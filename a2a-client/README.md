@@ -358,7 +358,7 @@ Contributions are welcome! Please ensure:
 
 ## License
 
-Apache-2.0
+MIT
 
 ## Related Crates
 

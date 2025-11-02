@@ -86,4 +86,4 @@ The crate is organized around the core concepts of the A2A protocol.
 
 ## License
 
-Apache-2.0
+MIT
