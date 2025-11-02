@@ -4,7 +4,7 @@ pub mod builder;
 pub mod llm_function;
 pub mod llm_worker;
 pub mod skill;
-mod structured;
+pub mod structured_parser;
 
 pub use builder::{Agent, AgentBuilder, AgentDefinition, SkillRegistration};
 pub use llm_function::LlmFunction;

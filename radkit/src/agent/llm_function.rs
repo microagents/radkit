@@ -39,7 +39,7 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
-use super::structured::{build_structured_output_toolset, extract_structured_output};
+use super::structured_parser::{build_structured_output_instructions, extract_structured_output};
 use crate::errors::AgentResult;
 use crate::models::{BaseLlm, Content, Event, Thread};
 use crate::{compat::MaybeSend, compat::MaybeSync};
@@ -110,7 +110,7 @@ where
     where
         IT: Into<Thread>,
     {
-        let thread = self.apply_defaults(input.into());
+        let thread = self.apply_defaults(input.into())?;
         let outcome = self.invoke(&thread).await?;
         Ok(outcome.value)
     }
@@ -151,7 +151,7 @@ where
     where
         IT: Into<Thread>,
     {
-        let thread = self.apply_defaults(input.into());
+        let thread = self.apply_defaults(input.into())?;
         let outcome = self.invoke(&thread).await?;
 
         let continued_thread = if let Some(content) = outcome.assistant_content {
@@ -163,32 +163,33 @@ where
         Ok((outcome.value, continued_thread))
     }
 
-    fn apply_defaults(&self, thread: Thread) -> Thread {
-        if let Some(default_system) = &self.system_instructions {
-            thread.with_system(default_system.clone())
+    fn apply_defaults(&self, mut thread: Thread) -> AgentResult<Thread> {
+        // Build structured output instructions
+        let structured_instructions = build_structured_output_instructions::<T>()?;
+
+        // Combine with user system instructions if present
+        let combined_instructions = if let Some(user_instructions) = &self.system_instructions {
+            format!("{}\n\n{}", user_instructions, structured_instructions)
         } else {
-            thread
-        }
+            structured_instructions
+        };
+
+        thread = thread.with_system(combined_instructions);
+        Ok(thread)
     }
 
     async fn invoke(&self, thread: &Thread) -> AgentResult<InvocationOutcome<T>> {
-        let toolset = build_structured_output_toolset::<T>()?;
+        // No toolset needed - LLM will respond with JSON directly in text
+        let response = self.model.generate_content(thread.clone(), None).await?;
 
-        let content_result = self
-            .model
-            .generate_content(thread.clone(), Some(Arc::clone(&toolset)))
-            .await;
-
-        toolset.close().await;
-
-        let response = content_result?;
         let content = response.into_content();
 
-        let (value, assistant_content) = extract_structured_output::<T>(content)?;
+        // Extract the structured output from the text response
+        let value = extract_structured_output::<T>(content.clone())?;
 
         Ok(InvocationOutcome {
             value,
-            assistant_content,
+            assistant_content: Some(content),
         })
     }
 }
@@ -201,12 +202,9 @@ struct InvocationOutcome<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::structured::STRUCTURED_OUTPUT_TOOL_NAME;
-    use crate::models::{ContentPart, LlmResponse, TokenUsage};
+    use crate::models::{LlmResponse, TokenUsage};
     use crate::test_support::FakeLlm;
-    use crate::tools::tool::ToolCall;
     use serde::Deserialize;
-    use serde_json::json;
 
     #[derive(Debug, PartialEq, Deserialize, JsonSchema)]
     struct Sample {
@@ -214,17 +212,15 @@ mod tests {
     }
 
     fn structured_response(value: i32, extra_text: Option<&str>) -> LlmResponse {
-        let mut parts = vec![ContentPart::ToolCall(ToolCall::new(
-            "call-1",
-            STRUCTURED_OUTPUT_TOOL_NAME,
-            json!({ "value": value }),
-        ))];
+        let json_str = format!(r#"{{"value": {}}}"#, value);
 
-        if let Some(text) = extra_text {
-            parts.push(ContentPart::Text(text.to_string()));
-        }
+        let content_str = if let Some(text) = extra_text {
+            format!("{}\n```json\n{}\n```", text, json_str)
+        } else {
+            json_str
+        };
 
-        LlmResponse::new(Content::from_parts(parts), TokenUsage::empty())
+        LlmResponse::new(Content::from_text(content_str), TokenUsage::empty())
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -246,7 +242,9 @@ mod tests {
 
         let calls = fake.calls();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].system(), Some("You are helpful"));
+        // System prompt should contain both user instructions and schema instructions
+        assert!(calls[0].system().unwrap().contains("You are helpful"));
+        assert!(calls[0].system().unwrap().contains("JSON"));
     }
 
     #[tokio::test(flavor = "current_thread")]

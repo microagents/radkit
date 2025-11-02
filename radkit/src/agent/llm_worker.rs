@@ -17,9 +17,7 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::structured::{
-    build_structured_output_toolset, extract_structured_output, STRUCTURED_OUTPUT_TOOL_NAME,
-};
+use super::structured_parser::{build_structured_output_instructions, extract_structured_output};
 use crate::errors::{AgentError, AgentResult};
 use crate::models::{BaseLlm, ContentPart, Event, Thread};
 use crate::tools::{
@@ -145,7 +143,7 @@ where
     where
         IT: Into<Thread>,
     {
-        let thread = self.apply_defaults(input.into());
+        let thread = self.apply_defaults(input.into())?;
         let outcome = self.execute(thread).await?;
         Ok(outcome.value)
     }
@@ -195,7 +193,7 @@ where
     where
         IT: Into<Thread>,
     {
-        let thread = self.apply_defaults(input.into());
+        let thread = self.apply_defaults(input.into())?;
         let outcome = self.execute(thread).await?;
         Ok((outcome.value, outcome.thread))
     }
@@ -229,18 +227,29 @@ where
         self.toolset.as_ref()
     }
 
-    /// Applies default system instructions to the thread if configured.
-    fn apply_defaults(&self, thread: Thread) -> Thread {
-        if let Some(default_system) = &self.system_instructions {
-            thread.with_system(default_system.clone())
+    /// Applies default system instructions and structured output instructions to the thread.
+    fn apply_defaults(&self, mut thread: Thread) -> AgentResult<Thread> {
+        // Build structured output instructions
+        let structured_instructions = build_structured_output_instructions::<T>()?;
+
+        // Combine with user system instructions if present
+        let combined_instructions = if let Some(user_instructions) = &self.system_instructions {
+            format!("{}\n\n{}", user_instructions, structured_instructions)
         } else {
-            thread
-        }
+            structured_instructions
+        };
+
+        thread = thread.with_system(combined_instructions);
+        Ok(thread)
     }
 
     async fn execute(&self, thread: Thread) -> AgentResult<WorkerOutcome<T>> {
-        let toolset = self.prepare_toolset()?;
-        let tool_cache = load_tool_map(&toolset).await?;
+        let toolset = self.toolset.clone();
+        let tool_cache = if let Some(ref ts) = toolset {
+            load_tool_map(ts).await?
+        } else {
+            HashMap::new()
+        };
 
         let execution_state = DefaultExecutionState::new();
         let tool_context = ToolContext::builder()
@@ -254,34 +263,24 @@ where
         let result = self
             .run_tool_loop(
                 thread,
-                Arc::clone(&toolset),
+                toolset.clone(),
                 &tool_cache,
                 &tool_context,
                 self.max_iterations,
             )
             .await;
 
-        toolset.close().await;
+        if let Some(ts) = toolset {
+            ts.close().await;
+        }
 
         result
-    }
-
-    fn prepare_toolset(&self) -> AgentResult<Arc<dyn BaseToolset>> {
-        let structured = build_structured_output_toolset::<T>()?;
-
-        if let Some(user_toolset) = &self.toolset {
-            let combined: Arc<dyn BaseToolset> =
-                Arc::new(CombinedToolset::new(Arc::clone(user_toolset), structured));
-            Ok(combined)
-        } else {
-            Ok(structured)
-        }
     }
 
     async fn run_tool_loop(
         &self,
         mut thread: Thread,
-        toolset: Arc<dyn BaseToolset>,
+        toolset: Option<Arc<dyn BaseToolset>>,
         tool_cache: &HashMap<String, Arc<dyn BaseTool>>,
         tool_context: &ToolContext<'_>,
         max_iterations: usize,
@@ -299,11 +298,12 @@ where
 
             let response = self
                 .model
-                .generate_content(thread.clone(), Some(Arc::clone(&toolset)))
+                .generate_content(thread.clone(), toolset.clone())
                 .await?;
 
             let content = response.into_content();
 
+            // Collect all tool calls from the response
             let tool_calls: Vec<_> = content
                 .parts()
                 .iter()
@@ -313,24 +313,28 @@ where
                 })
                 .collect();
 
-            let actionable_calls: Vec<_> = tool_calls
-                .into_iter()
-                .filter(|call| call.name() != STRUCTURED_OUTPUT_TOOL_NAME)
-                .collect();
-
-            if actionable_calls.is_empty() {
-                let (value, assistant_content) = extract_structured_output::<T>(content)?;
-
-                if let Some(content) = assistant_content {
-                    thread = thread.add_event(Event::assistant(content));
+            // If there are no tool calls, try to parse the content as final structured output
+            if tool_calls.is_empty() {
+                // Try to extract structured output from text
+                match extract_structured_output::<T>(content.clone()) {
+                    Ok(value) => {
+                        // Successfully parsed - add assistant content and return
+                        thread = thread.add_event(Event::assistant(content));
+                        return Ok(WorkerOutcome { value, thread });
+                    }
+                    Err(_) => {
+                        // Parsing failed - this might be intermediate reasoning text
+                        // Add it to the thread and continue (LLM might need another turn)
+                        thread = thread.add_event(Event::assistant(content));
+                        continue;
+                    }
                 }
-
-                return Ok(WorkerOutcome { value, thread });
             }
 
+            // We have tool calls - add assistant content and execute each tool
             thread = thread.add_event(Event::assistant(content));
 
-            for call in actionable_calls {
+            for call in tool_calls {
                 let tool = tool_cache
                     .get(call.name())
                     .ok_or_else(|| AgentError::ToolNotFound {
@@ -644,7 +648,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::structured::STRUCTURED_OUTPUT_TOOL_NAME;
     use crate::errors::{AgentError, AgentResult};
     use crate::models::{Content, ContentPart, LlmResponse};
     use crate::test_support::{FakeLlm, RecordingTool};
@@ -660,12 +663,8 @@ mod tests {
     }
 
     fn structured_response(value: i32) -> AgentResult<LlmResponse> {
-        let structured = ToolCall::new(
-            "structured",
-            STRUCTURED_OUTPUT_TOOL_NAME,
-            json!({ "value": value }),
-        );
-        FakeLlm::content_response(Content::from_parts(vec![ContentPart::ToolCall(structured)]))
+        let json_str = format!(r#"{{"value": {}}}"#, value);
+        FakeLlm::content_response(Content::from_text(json_str))
     }
 
     #[tokio::test(flavor = "current_thread")]
