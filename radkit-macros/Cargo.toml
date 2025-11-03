@@ -1,0 +1,20 @@
+[package]
+name = "radkit-macros"
+version = "0.0.2"
+edition = "2021"
+license = "MIT"
+description = "Procedural macros for the radkit agent framework"
+repository = "https://github.com/irshadnilam/radkit"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+[dev-dependencies]
+radkit = { path = "../radkit" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt"] }

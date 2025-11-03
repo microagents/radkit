@@ -2,7 +2,7 @@
 name = "a2a-types"
 version = "0.1.2"
 edition = "2024"
-license = "Apache-2.0"
+license = "MIT"
 description = "A2A Protocol Types"
 repository = "https://github.com/microagents/radkit"
 homepage = "https://radkit.dev"

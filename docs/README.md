@@ -1,33 +1,37 @@
-# Radkit Documentation
+# Radkit Documenation
 
-This is the documentation for **Radkit: AI Agent SDK for Rust**.
+## 🚀 Project Structure
 
-## About
+Inside the project, you'll see the following folders and files:
 
-This documentation is built using [MkDocs](https://www.mkdocs.org/), a fast, simple and downright gorgeous static site generator that's geared towards building project documentation.
-
-## Building the Documentation
-
-To build and serve the documentation locally:
-
-```bash
-# Install MkDocs
-pip install mkdocs
-
-# Serve the documentation locally
-mkdocs serve
-
-# Build the static site
-mkdocs build
+```
+.
+├── public/
+├── src/
+│   ├── assets/
+│   ├── content/
+│   │   └── docs/
+│   └── content.config.ts
+├── astro.config.mjs
+├── package.json
+└── tsconfig.json
 ```
 
-The documentation will be available at `http://localhost:8000` when running `mkdocs serve`.
+ `.md` or `.mdx` files in the `src/content/docs/` are exposed as a route based on its file name.
 
-## Contributing
+Images can be added to `src/assets/` and embedded in Markdown with a relative link.
 
-When contributing to the documentation, please ensure that:
-- All markdown files are properly formatted
-- Links between pages are working correctly
-- Code examples are tested and accurate
+Static assets, like favicons, can be placed in the `public/` directory.
 
-For more information about Radkit, please refer to the main project repository.
+## 🧞 Commands
+
+All commands are run from the root of the project, from a terminal:
+
+| Command                   | Action                                           |
+| :------------------------ |:-------------------------------------------------|
+| `yarn install`             | Installs dependencies                            |
+| `yarn dev`             | Starts local dev server at `localhost:4321`      |
+| `yarn build`           | Build production site to `./dist/`               |
+| `yarn preview`         | Preview build locally, before deploying          |
+| `yarn astro ...`       | Run CLI commands like `astro add`, `astro check` |
+| `yarn astro -- --help` | Get help using the Astro CLI                     |
