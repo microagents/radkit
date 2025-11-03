@@ -36,6 +36,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 derive_more = { version = "2.0.1", features = ["from", "display"] }
 async-stream = "0.3.6"
 
+# OpenAPI dependencies
+openapiv3 = "2.0"
+serde_yaml = "0.9"
+url = "2.5"
+
 [target.'cfg(not(all(target_os = "wasi", target_env = "p1")))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 # TODO: remove "full" once the core parts are done
