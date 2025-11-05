@@ -89,10 +89,7 @@ async fn test_mcp_tool_declarations() {
     // Get tools
     let tools = toolset.get_tools().await;
 
-    assert!(
-        !tools.is_empty(),
-        "No tools discovered from MCP server"
-    );
+    assert!(!tools.is_empty(), "No tools discovered from MCP server");
 
     // Verify each tool has a valid declaration
     for tool in tools {

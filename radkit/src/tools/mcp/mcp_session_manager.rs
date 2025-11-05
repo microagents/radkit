@@ -1,13 +1,15 @@
 use crate::errors::{AgentError, AgentResult};
 use dashmap::DashMap;
 use rmcp::{
-    ServiceExt,
-    model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam, ProtocolVersion},
+    model::{
+        ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam, ProtocolVersion,
+    },
     transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess},
+    ServiceExt,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
