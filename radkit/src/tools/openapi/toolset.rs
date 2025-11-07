@@ -119,6 +119,8 @@ impl OpenApiToolSet {
                 let tool = Arc::new(OpenApiOperationTool::new(
                     operation_id,
                     description,
+                    method.to_string(),
+                    path.clone(),
                     spec.clone(),
                     http_client.clone(),
                     auth.clone(),

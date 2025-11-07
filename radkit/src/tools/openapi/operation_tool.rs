@@ -16,6 +16,10 @@ pub struct OpenApiOperationTool {
     operation_id: String,
     /// Operation description
     description: String,
+    /// HTTP method for this operation
+    method: String,
+    /// Path for this operation
+    path: String,
     /// Reference to the OpenAPI spec
     spec: Arc<OpenApiSpec>,
     /// Shared HTTP client
@@ -98,6 +102,8 @@ impl OpenApiOperationTool {
     pub fn new(
         operation_id: String,
         description: String,
+        method: String,
+        path: String,
         spec: Arc<OpenApiSpec>,
         http_client: Arc<reqwest::Client>,
         auth: Option<AuthConfig>,
@@ -105,6 +111,8 @@ impl OpenApiOperationTool {
         Self {
             operation_id,
             description,
+            method,
+            path,
             spec,
             http_client,
             auth,
@@ -112,34 +120,29 @@ impl OpenApiOperationTool {
     }
 
     /// Find this operation in the OpenAPI spec
+    /// Uses the stored path and method for direct lookup
     fn find_operation(&self) -> Option<(String, String, &Operation)> {
-        for (path, path_item_ref) in &self.spec.spec().paths.paths {
-            let path_item = match path_item_ref {
-                ReferenceOr::Item(item) => item,
-                ReferenceOr::Reference { .. } => continue,
-            };
+        // Get the path item
+        let path_item_ref = self.spec.spec().paths.paths.get(&self.path)?;
+        let path_item = match path_item_ref {
+            ReferenceOr::Item(item) => item,
+            ReferenceOr::Reference { .. } => return None,
+        };
 
-            // Check each HTTP method
-            let methods = vec![
-                ("GET", &path_item.get),
-                ("POST", &path_item.post),
-                ("PUT", &path_item.put),
-                ("DELETE", &path_item.delete),
-                ("PATCH", &path_item.patch),
-                ("HEAD", &path_item.head),
-                ("OPTIONS", &path_item.options),
-                ("TRACE", &path_item.trace),
-            ];
+        // Get the operation for this method
+        let operation = match self.method.to_uppercase().as_str() {
+            "GET" => path_item.get.as_ref()?,
+            "POST" => path_item.post.as_ref()?,
+            "PUT" => path_item.put.as_ref()?,
+            "DELETE" => path_item.delete.as_ref()?,
+            "PATCH" => path_item.patch.as_ref()?,
+            "HEAD" => path_item.head.as_ref()?,
+            "OPTIONS" => path_item.options.as_ref()?,
+            "TRACE" => path_item.trace.as_ref()?,
+            _ => return None,
+        };
 
-            for (method, maybe_op) in methods {
-                if let Some(op) = maybe_op {
-                    if op.operation_id.as_deref() == Some(&self.operation_id) {
-                        return Some((method.to_string(), path.clone(), op));
-                    }
-                }
-            }
-        }
-        None
+        Some((self.method.clone(), self.path.clone(), operation))
     }
 
     /// Build the full URL with path parameters
