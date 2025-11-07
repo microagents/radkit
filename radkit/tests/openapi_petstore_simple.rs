@@ -5,9 +5,12 @@
 //! - Tool generation from operations
 //! - Tool declarations are generated correctly
 
+#![cfg(feature = "openapi")]
+
 use radkit::tools::{BaseToolset, OpenApiToolSet};
 
 #[tokio::test]
+#[ignore = "requires network access to Petstore API"]
 async fn test_openapi_spec_from_url() {
     // Load OpenAPI spec from URL
     let result = OpenApiToolSet::from_url(
@@ -25,6 +28,7 @@ async fn test_openapi_spec_from_url() {
 }
 
 #[tokio::test]
+#[ignore = "requires network access to Petstore API"]
 async fn test_openapi_tool_generation() {
     // Create toolset
     let toolset = OpenApiToolSet::from_url(
@@ -65,6 +69,7 @@ async fn test_openapi_tool_generation() {
 }
 
 #[tokio::test]
+#[ignore = "requires network access to Petstore API"]
 async fn test_openapi_tool_declaration() {
     // Create toolset
     let toolset = OpenApiToolSet::from_url(
@@ -116,6 +121,7 @@ async fn test_openapi_tool_declaration() {
 }
 
 #[tokio::test]
+#[ignore = "requires network access to Petstore API"]
 async fn test_parameter_schema_generation() {
     // Create toolset
     let toolset = OpenApiToolSet::from_url(

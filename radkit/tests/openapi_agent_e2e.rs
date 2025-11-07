@@ -10,6 +10,8 @@
 //! This test uses the public Petstore API to validate
 //! the complete agent → toolset → HTTP API → response flow.
 
+#![cfg(all(feature = "openapi", feature = "test-support"))]
+
 use radkit::agent::LlmWorker;
 use radkit::models::{Content, ContentPart, LlmResponse, TokenUsage};
 use radkit::test_support::FakeLlm;

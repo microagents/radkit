@@ -10,7 +10,7 @@
 //! This test uses a real MCP weather server to validate
 //! the complete agent → toolset → MCP server → response flow.
 
-#![cfg(feature = "mcp")]
+#![cfg(all(feature = "mcp", feature = "test-support"))]
 
 use radkit::agent::LlmWorker;
 use radkit::models::{Content, ContentPart, LlmResponse, TokenUsage};
