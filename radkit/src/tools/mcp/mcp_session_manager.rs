@@ -1,10 +1,14 @@
 use crate::errors::{AgentError, AgentResult};
 use dashmap::DashMap;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rmcp::{
     model::{
         ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam, ProtocolVersion,
     },
-    transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess},
+    transport::{
+        streamable_http_client::StreamableHttpClientTransportConfig, ConfigureCommandExt,
+        StreamableHttpClientTransport, TokioChildProcess,
+    },
     ServiceExt,
 };
 use serde::{Deserialize, Serialize};
@@ -91,10 +95,24 @@ impl MCPSessionManager {
                 timeout.as_millis().hash(&mut hasher);
                 format!("stdio_{:x}", hasher.finish())
             }
-            MCPConnectionParams::Http { url, .. } => {
-                // Hash the HTTP URL and headers
+            MCPConnectionParams::Http {
+                url,
+                headers: param_headers,
+                timeout,
+            } => {
+                // Hash the HTTP URL, headers from params, and timeout
                 "http".hash(&mut hasher);
                 url.hash(&mut hasher);
+
+                // Hash headers from connection params (base headers for the client)
+                let mut sorted: Vec<_> = param_headers.iter().collect();
+                sorted.sort_by_key(|&(k, _)| k);
+                for (k, v) in sorted {
+                    k.hash(&mut hasher);
+                    v.hash(&mut hasher);
+                }
+
+                // Also hash per-session headers if provided
                 if let Some(hdrs) = headers {
                     let mut sorted: Vec<_> = hdrs.iter().collect();
                     sorted.sort_by_key(|&(k, _)| k);
@@ -103,6 +121,10 @@ impl MCPSessionManager {
                         v.hash(&mut hasher);
                     }
                 }
+
+                // Hash timeout like we do for stdio
+                timeout.as_millis().hash(&mut hasher);
+
                 format!("http_{:x}", hasher.finish())
             }
         }
@@ -173,13 +195,40 @@ impl MCPSessionManager {
             }
             MCPConnectionParams::Http {
                 url,
-                headers: _headers,
-                timeout: _timeout,
+                headers,
+                timeout,
             } => {
                 debug!("Creating HTTP MCP client for: {}", url);
 
-                // Create HTTP transport using rmcp's StreamableHttpClientTransport
-                let transport = StreamableHttpClientTransport::from_uri(url.clone());
+                // Build custom reqwest client with headers and timeout
+                let mut header_map = HeaderMap::new();
+                for (key, value) in headers {
+                    let header_name = HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
+                        AgentError::ToolSetupFailed {
+                            tool_name: "mcp_http".to_string(),
+                            reason: format!("Invalid header name '{key}': {e}"),
+                        }
+                    })?;
+                    let header_value =
+                        HeaderValue::from_str(value).map_err(|e| AgentError::ToolSetupFailed {
+                            tool_name: "mcp_http".to_string(),
+                            reason: format!("Invalid header value for '{key}': {e}"),
+                        })?;
+                    header_map.insert(header_name, header_value);
+                }
+
+                let reqwest_client = reqwest::Client::builder()
+                    .default_headers(header_map)
+                    .timeout(*timeout)
+                    .build()
+                    .map_err(|e| AgentError::ToolSetupFailed {
+                        tool_name: "mcp_http".to_string(),
+                        reason: format!("Failed to build HTTP client: {e}"),
+                    })?;
+
+                // Create HTTP transport with custom client and config
+                let config = StreamableHttpClientTransportConfig::with_uri(url.clone());
+                let transport = StreamableHttpClientTransport::with_client(reqwest_client, config);
 
                 // Create proper client info for MCP handshake
                 let client_info = ClientInfo {
@@ -273,5 +322,164 @@ impl MCPSessionManager {
         }
 
         self.sessions.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_http_params_with_headers_and_timeout() {
+        // Verify HTTP params can be created with headers and timeout
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+        headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
+
+        let params = MCPConnectionParams::Http {
+            url: "https://example.com/mcp".to_string(),
+            headers: headers.clone(),
+            timeout: Duration::from_secs(30),
+        };
+
+        // Verify params are properly structured
+        if let MCPConnectionParams::Http {
+            url,
+            headers: h,
+            timeout,
+        } = params
+        {
+            assert_eq!(url, "https://example.com/mcp");
+            assert_eq!(h.len(), 2);
+            assert_eq!(h.get("Authorization"), Some(&"Bearer token123".to_string()));
+            assert_eq!(h.get("X-Custom-Header"), Some(&"custom-value".to_string()));
+            assert_eq!(timeout, Duration::from_secs(30));
+        } else {
+            panic!("Expected HTTP params");
+        }
+    }
+
+    #[test]
+    fn test_session_key_generation_includes_headers() {
+        // Create manager with HTTP params
+        let mut headers1 = HashMap::new();
+        headers1.insert("Authorization".to_string(), "Bearer token1".to_string());
+
+        let params1 = MCPConnectionParams::Http {
+            url: "https://example.com/mcp".to_string(),
+            headers: headers1.clone(),
+            timeout: Duration::from_secs(30),
+        };
+
+        let manager1 = MCPSessionManager::new(params1);
+        let key1 = manager1.generate_session_key(None);
+
+        // Create manager with different headers
+        let mut headers2 = HashMap::new();
+        headers2.insert("Authorization".to_string(), "Bearer token2".to_string());
+
+        let params2 = MCPConnectionParams::Http {
+            url: "https://example.com/mcp".to_string(),
+            headers: headers2.clone(),
+            timeout: Duration::from_secs(30),
+        };
+
+        let manager2 = MCPSessionManager::new(params2);
+        let key2 = manager2.generate_session_key(None);
+
+        // Different headers should produce different session keys
+        assert_ne!(key1, key2, "Session keys should differ when headers differ");
+    }
+
+    #[test]
+    fn test_session_key_generation_http_includes_url() {
+        // Same headers, different URLs
+        let headers = HashMap::new();
+
+        let params1 = MCPConnectionParams::Http {
+            url: "https://example.com/mcp1".to_string(),
+            headers: headers.clone(),
+            timeout: Duration::from_secs(30),
+        };
+
+        let manager1 = MCPSessionManager::new(params1);
+        let key1 = manager1.generate_session_key(None);
+
+        let params2 = MCPConnectionParams::Http {
+            url: "https://example.com/mcp2".to_string(),
+            headers: headers.clone(),
+            timeout: Duration::from_secs(30),
+        };
+
+        let manager2 = MCPSessionManager::new(params2);
+        let key2 = manager2.generate_session_key(None);
+
+        // Different URLs should produce different session keys
+        assert_ne!(key1, key2, "Session keys should differ when URLs differ");
+
+        // Both should start with "http_"
+        assert!(key1.starts_with("http_"));
+        assert!(key2.starts_with("http_"));
+    }
+
+    #[test]
+    fn test_session_key_stdio_vs_http() {
+        // Create stdio params
+        let stdio_params = MCPConnectionParams::Stdio {
+            command: "test".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            timeout: Duration::from_secs(5),
+        };
+
+        let stdio_manager = MCPSessionManager::new(stdio_params);
+        let stdio_key = stdio_manager.generate_session_key(None);
+
+        // Create HTTP params
+        let http_params = MCPConnectionParams::Http {
+            url: "https://example.com/mcp".to_string(),
+            headers: HashMap::new(),
+            timeout: Duration::from_secs(30),
+        };
+
+        let http_manager = MCPSessionManager::new(http_params);
+        let http_key = http_manager.generate_session_key(None);
+
+        // Different connection types should produce different keys
+        assert_ne!(stdio_key, http_key);
+        assert!(stdio_key.starts_with("stdio_"));
+        assert!(http_key.starts_with("http_"));
+    }
+
+    #[test]
+    fn test_session_key_deterministic() {
+        // Same params should produce same key
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token".to_string());
+
+        let params1 = MCPConnectionParams::Http {
+            url: "https://example.com/mcp".to_string(),
+            headers: headers.clone(),
+            timeout: Duration::from_secs(30),
+        };
+
+        let manager1 = MCPSessionManager::new(params1);
+
+        let params2 = MCPConnectionParams::Http {
+            url: "https://example.com/mcp".to_string(),
+            headers: headers.clone(),
+            timeout: Duration::from_secs(30),
+        };
+
+        let manager2 = MCPSessionManager::new(params2);
+
+        let key1 = manager1.generate_session_key(None);
+        let key2 = manager2.generate_session_key(None);
+
+        // Same params should produce same session key
+        assert_eq!(
+            key1, key2,
+            "Session keys should be deterministic for same params"
+        );
     }
 }
