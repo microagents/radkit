@@ -39,6 +39,28 @@ fn value_to_string(value: &serde_json::Value) -> String {
     }
 }
 
+/// Percent-encode a string for use in URL path parameters
+///
+/// This encodes all characters except unreserved characters (A-Z, a-z, 0-9, -, _, ., ~)
+/// according to RFC 3986. This prevents special URL characters like /, ?, #, % from
+/// breaking the URL structure or causing security issues.
+fn percent_encode_path_param(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            // Unreserved characters per RFC 3986 - do not encode
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            // Encode everything else
+            _ => {
+                // Convert char to UTF-8 bytes and percent-encode each byte
+                c.to_string()
+                    .bytes()
+                    .map(|b| format!("%{:02X}", b))
+                    .collect()
+            }
+        })
+        .collect()
+}
+
 /// Convert OpenAPI Schema to JSON Schema
 fn convert_schema_to_json_schema(schema: &openapiv3::Schema) -> serde_json::Value {
     let mut json_schema = serde_json::json!({});
@@ -150,10 +172,14 @@ impl OpenApiOperationTool {
         let mut url = format!("{}{}", self.spec.base_url(), path);
 
         // Replace path parameters like {petId} with actual values
+        // Use percent-encoding to prevent special characters from breaking the URL structure
         for (key, value) in args {
             let placeholder = format!("{{{}}}", key);
             if url.contains(&placeholder) {
-                url = url.replace(&placeholder, &value_to_string(value));
+                let value_str = value_to_string(value);
+                // Percent-encode the value to handle special URL characters (/, ?, #, %, etc.)
+                let encoded_value = percent_encode_path_param(&value_str);
+                url = url.replace(&placeholder, &encoded_value);
             }
         }
 
@@ -439,5 +465,127 @@ impl BaseTool for OpenApiOperationTool {
                 body_text
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_build_url_with_special_characters() {
+        // Create a minimal OpenApiSpec for testing
+        let spec_json = r#"{
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "servers": [{"url": "https://api.example.com"}],
+            "paths": {
+                "/pets/{petId}": {
+                    "get": {
+                        "operationId": "test_op",
+                        "responses": {
+                            "200": {"description": "Success"}
+                        }
+                    }
+                }
+            }
+        }"#;
+        let openapi_spec = Arc::new(
+            OpenApiSpec::from_str(spec_json, "https://api.example.com".to_string()).unwrap(),
+        );
+
+        let http_client = Arc::new(reqwest::Client::new());
+
+        let tool = OpenApiOperationTool::new(
+            "test_op".to_string(),
+            "Test operation".to_string(),
+            "GET".to_string(),
+            "/pets/{petId}".to_string(),
+            openapi_spec,
+            http_client,
+            None,
+        );
+
+        // Test with normal value
+        let mut args = HashMap::new();
+        args.insert("petId".to_string(), serde_json::json!("123"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/123");
+
+        // Test with value containing slash (should be encoded as %2F)
+        args.insert("petId".to_string(), serde_json::json!("foo/bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%2Fbar");
+
+        // Test with value containing question mark (should be encoded as %3F)
+        args.insert("petId".to_string(), serde_json::json!("foo?bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%3Fbar");
+
+        // Test with value containing hash (should be encoded as %23)
+        args.insert("petId".to_string(), serde_json::json!("foo#bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%23bar");
+
+        // Test with value containing percent (should be encoded as %25)
+        args.insert("petId".to_string(), serde_json::json!("foo%bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%25bar");
+
+        // Test with value containing spaces (should be encoded as %20)
+        args.insert("petId".to_string(), serde_json::json!("foo bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%20bar");
+
+        // Test with multiple special characters
+        args.insert("petId".to_string(), serde_json::json!("foo/bar?baz#qux"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%2Fbar%3Fbaz%23qux");
+    }
+
+    #[test]
+    fn test_build_url_with_multiple_path_params() {
+        // Create a minimal OpenApiSpec for testing
+        let spec_json = r#"{
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "servers": [{"url": "https://api.example.com"}],
+            "paths": {
+                "/users/{userId}/pets/{petId}": {
+                    "get": {
+                        "operationId": "test_op",
+                        "responses": {
+                            "200": {"description": "Success"}
+                        }
+                    }
+                }
+            }
+        }"#;
+        let openapi_spec = Arc::new(
+            OpenApiSpec::from_str(spec_json, "https://api.example.com".to_string()).unwrap(),
+        );
+
+        let http_client = Arc::new(reqwest::Client::new());
+
+        let tool = OpenApiOperationTool::new(
+            "test_op".to_string(),
+            "Test operation".to_string(),
+            "GET".to_string(),
+            "/users/{userId}/pets/{petId}".to_string(),
+            openapi_spec,
+            http_client,
+            None,
+        );
+
+        let mut args = HashMap::new();
+        args.insert("userId".to_string(), serde_json::json!("user/123"));
+        args.insert("petId".to_string(), serde_json::json!("pet?456"));
+
+        let url = tool.build_url("/users/{userId}/pets/{petId}", &args);
+        assert_eq!(
+            url,
+            "https://api.example.com/users/user%2F123/pets/pet%3F456"
+        );
     }
 }
