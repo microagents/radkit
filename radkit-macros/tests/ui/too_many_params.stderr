@@ -1,0 +1,23 @@
+error: Tool function can have at most 2 parameters (args struct + optional ToolContext)
+  --> tests/ui/too_many_params.rs:14:1
+   |
+14 | / async fn add(
+15 | |     args: AddArgs,
+16 | |     ctx: &ToolContext<'_>,
+17 | |     extra: String,  // Too many parameters
+18 | | ) -> ToolResult {
+   | |_______________^
+
+warning: unused imports: `ToolContext` and `ToolResult`
+ --> tests/ui/too_many_params.rs:2:21
+  |
+2 | use radkit::tools::{ToolResult, ToolContext};
+  |                     ^^^^^^^^^^  ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `serde_json::json`
+ --> tests/ui/too_many_params.rs:5:5
+  |
+5 | use serde_json::json;
+  |     ^^^^^^^^^^^^^^^^

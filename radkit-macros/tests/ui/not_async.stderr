@@ -1,0 +1,19 @@
+error: Tool function must be async
+  --> tests/ui/not_async.rs:14:1
+   |
+14 | fn add(args: AddArgs) -> ToolResult {  // Not async
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `radkit::tools::ToolResult`
+ --> tests/ui/not_async.rs:2:5
+  |
+2 | use radkit::tools::ToolResult;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `serde_json::json`
+ --> tests/ui/not_async.rs:5:5
+  |
+5 | use serde_json::json;
+  |     ^^^^^^^^^^^^^^^^

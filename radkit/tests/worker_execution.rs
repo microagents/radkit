@@ -5,27 +5,13 @@
 
 use radkit::agent::{LlmFunction, LlmWorker};
 use radkit::models::{Content, ContentPart, Event, LlmResponse, Thread, TokenUsage};
-use radkit::test_support::{FakeLlm, RecordingTool};
+use radkit::test_support::{structured_response, FakeLlm, RecordingTool};
 use radkit::tools::{BaseTool, FunctionTool, ToolCall, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-
-// Helper to create structured output response
-fn structured_response<T: Serialize>(value: &T) -> LlmResponse {
-    let tool_call = ToolCall::new(
-        "call-1",
-        "radkit_structured_output",
-        serde_json::to_value(value).unwrap(),
-    );
-
-    LlmResponse::new(
-        Content::from_parts(vec![ContentPart::ToolCall(tool_call)]),
-        TokenUsage::empty(),
-    )
-}
 
 // ============================================================================
 // Test 1: LlmFunction basic usage in skill-like scenario
@@ -58,10 +44,13 @@ async fn test_llm_function_with_system_instructions() {
     assert_eq!(result.sentiment, "positive");
     assert_eq!(result.confidence, 0.95);
 
-    // Verify system instructions were applied
+    // Verify system instructions were applied (includes structured output schema)
     let calls = llm.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].system(), Some("You are a sentiment analyzer."));
+    assert!(calls[0]
+        .system()
+        .unwrap()
+        .starts_with("You are a sentiment analyzer."));
 }
 
 // ============================================================================

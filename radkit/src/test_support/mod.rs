@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use crate::errors::{AgentError, AgentResult};
 use crate::models::{BaseLlm, Content, LlmResponse, Thread, TokenUsage};
 use crate::tools::{BaseTool, BaseToolset, FunctionDeclaration, ToolContext, ToolResult};
+use serde::Serialize;
 use serde_json::Value;
 
 /// A simple LLM implementation that returns pre-seeded responses.
@@ -141,6 +142,45 @@ pub fn user_thread(text: impl Into<String>) -> Thread {
 #[must_use]
 pub fn text_content(text: impl Into<String>) -> Content {
     Content::from_text(text)
+}
+
+/// Creates a structured output response for testing LlmWorker/LlmFunction.
+///
+/// This helper generates an [`LlmResponse`] with text-based JSON output wrapped in
+/// markdown code blocks, matching the tryparse-based structured output pattern used
+/// by `extract_structured_output()`.
+///
+/// # Arguments
+///
+/// * `value` - The value to serialize as JSON and wrap in the response
+///
+/// # Panics
+///
+/// Panics if serialization fails. This is acceptable in test code as it indicates
+/// a test setup error that should be fixed immediately.
+///
+/// # Examples
+///
+/// ```ignore
+/// use radkit::test_support::structured_response;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize)]
+/// struct Result { value: i32 }
+///
+/// let response = structured_response(&Result { value: 42 });
+/// ```
+#[must_use]
+pub fn structured_response<T: Serialize>(value: &T) -> LlmResponse {
+    // SAFETY: unwrap is acceptable in test helpers - serialization failures indicate
+    // test setup bugs that should fail fast. All types in tests implement Serialize.
+    let json_str = serde_json::to_string_pretty(value)
+        .expect("Test value serialization failed - check Serialize implementation");
+
+    LlmResponse::new(
+        Content::from_text(format!("```json\n{}\n```", json_str)),
+        TokenUsage::empty(),
+    )
 }
 
 /// Simple tool implementation that records invocations for assertions.
