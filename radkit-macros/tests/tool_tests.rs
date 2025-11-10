@@ -278,3 +278,54 @@ async fn test_nested_struct_deserialization() {
         &json!({"name": "Alice", "age": 30, "city": "New York"})
     );
 }
+
+// ============================================================================
+// Test 9: Visibility and attributes preservation
+// ============================================================================
+
+#[derive(Deserialize, JsonSchema)]
+struct SimpleArgs {
+    value: i32,
+}
+
+/// Test that pub(crate) visibility is preserved
+#[tool(description = "Crate-visible tool")]
+pub(crate) async fn crate_tool(args: SimpleArgs) -> ToolResult {
+    ToolResult::success(json!(args.value))
+}
+
+/// Test that private visibility is preserved
+#[tool(description = "Private tool")]
+async fn private_tool(args: SimpleArgs) -> ToolResult {
+    ToolResult::success(json!(args.value))
+}
+
+/// Test that cfg attributes are preserved
+#[cfg(test)]
+#[tool(description = "Conditionally compiled tool")]
+pub async fn cfg_tool(args: SimpleArgs) -> ToolResult {
+    ToolResult::success(json!(args.value))
+}
+
+/// Test that doc comments are preserved
+#[tool(description = "Documented tool")]
+/// This is a documented tool
+/// with multiple lines
+pub async fn documented_tool(args: SimpleArgs) -> ToolResult {
+    ToolResult::success(json!(args.value))
+}
+
+#[test]
+fn test_visibility_preservation() {
+    // These should compile with their respective visibilities
+    let _crate_tool = crate_tool();
+    let _private_tool = private_tool();
+    let _cfg_tool = cfg_tool();
+    let _documented_tool = documented_tool();
+
+    // Verify tools are callable
+    assert_eq!(crate_tool().name(), "crate_tool");
+    assert_eq!(private_tool().name(), "private_tool");
+    assert_eq!(cfg_tool().name(), "cfg_tool");
+    assert_eq!(documented_tool().name(), "documented_tool");
+}

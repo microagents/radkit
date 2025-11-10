@@ -67,6 +67,10 @@ pub fn generate_tool_impl(args: ToolArgs, item: TokenStream) -> TokenStream {
     let tool_name = args.name.as_deref().unwrap_or(&func_name_str);
     let description = &args.description;
     let body = &func.block;
+    let vis = &func.vis;
+    let attrs = &func.attrs;
+    let generics = &func.sig.generics;
+    let where_clause = &func.sig.generics.where_clause;
 
     // Parse parameters (args struct + optional ToolContext)
     let (args_param, ctx_param) = match parse_parameters(&func.sig) {
@@ -90,8 +94,12 @@ pub fn generate_tool_impl(args: ToolArgs, item: TokenStream) -> TokenStream {
 
     // Generate the wrapper function
     // Note: The original async fn is consumed, we generate a sync fn that returns Arc<FunctionTool>
+    // Preserves visibility, attributes, generics, and where clause from the original function
     quote! {
-        pub fn #func_name() -> ::std::sync::Arc<::radkit::tools::FunctionTool> {
+        #(#attrs)*
+        #vis fn #func_name #generics () -> ::std::sync::Arc<::radkit::tools::FunctionTool>
+        #where_clause
+        {
             ::std::sync::Arc::new(
                 ::radkit::tools::FunctionTool::new(
                     #tool_name,
