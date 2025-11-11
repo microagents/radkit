@@ -37,7 +37,7 @@ pub mod base_tool;
 pub mod base_toolset;
 mod execution_state;
 pub mod function_tool;
-#[cfg(feature = "mcp")]
+#[cfg(all(feature = "mcp", not(all(target_os = "wasi", target_env = "p1"))))]
 pub mod mcp;
 #[cfg(feature = "openapi")]
 pub mod openapi;
@@ -49,7 +49,7 @@ pub use base_tool::BaseTool;
 pub use base_toolset::{BaseToolset, CombinedToolset, SimpleToolset};
 pub use execution_state::{DefaultExecutionState, ExecutionState};
 pub use function_tool::FunctionTool;
-#[cfg(feature = "mcp")]
+#[cfg(all(feature = "mcp", not(all(target_os = "wasi", target_env = "p1"))))]
 pub use mcp::{MCPConnectionParams, MCPSessionManager, MCPTool, MCPToolFilter, MCPToolset};
 #[cfg(feature = "openapi")]
 pub use openapi::{AuthConfig, HeaderOrQuery, OpenApiToolSet};

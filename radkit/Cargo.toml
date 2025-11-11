@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 # Enables the DefaultRuntime and a full native agent server environment
-runtime = ["dep:axum", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "dep:maud"]
+runtime = ["dep:axum", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber"]
 # Enables developer UI with TypeScript type generation
 dev-ui = ["runtime", "dep:ts-rs"]
 # Enables OpenAPI toolset for connecting to REST APIs
@@ -60,7 +60,6 @@ axum = { version = "0.8.0", optional = true }
 tower-http = { version = "0.5", features = ["trace", "cors", "fs"], optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
-maud = { version = "0.26", optional = true }
 ts-rs = { version = "11.1.0", optional = true }
 # Optional MCP support (native-only)
 rmcp = { version = "0.6.3", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"], optional = true }
