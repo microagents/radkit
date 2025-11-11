@@ -15,16 +15,9 @@ use std::sync::Arc;
 
 // Helper to create structured output response
 fn structured_response<T: Serialize>(value: &T) -> LlmResponse {
-    let tool_call = ToolCall::new(
-        "call-1",
-        "radkit_structured_output",
-        serde_json::to_value(value).unwrap(),
-    );
+    let json_text = serde_json::to_string(value).expect("valid JSON");
 
-    LlmResponse::new(
-        Content::from_parts(vec![ContentPart::ToolCall(tool_call)]),
-        TokenUsage::empty(),
-    )
+    LlmResponse::new(Content::from_text(json_text), TokenUsage::empty())
 }
 
 // ============================================================================
@@ -58,10 +51,18 @@ async fn test_llm_function_with_system_instructions() {
     assert_eq!(result.sentiment, "positive");
     assert_eq!(result.confidence, 0.95);
 
-    // Verify system instructions were applied
+    // Verify system instructions were applied (includes both custom and schema instructions)
     let calls = llm.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].system(), Some("You are a sentiment analyzer."));
+    let system_instructions = calls[0].system().expect("system instructions present");
+    assert!(
+        system_instructions.contains("You are a sentiment analyzer."),
+        "Expected system instructions to contain custom instructions"
+    );
+    assert!(
+        system_instructions.contains("JSON object matching the following schema"),
+        "Expected system instructions to contain schema instructions"
+    );
 }
 
 // ============================================================================

@@ -28,17 +28,13 @@ mod tests {
 
     // Helper to create structured output response for negotiation
     fn negotiation_response(skill_id: &str) -> radkit::errors::AgentResult<LlmResponse> {
-        let tool_call = ToolCall::new(
-            "call-1",
-            "radkit_structured_output",
-            serde_json::json!({
-                "type": "start_task",
-                "skill_id": skill_id,
-                "reasoning": "Test selected this skill"
-            }),
-        );
+        let decision = serde_json::json!({
+            "type": "start_task",
+            "skill_id": skill_id,
+            "reasoning": "Test selected this skill"
+        });
         Ok(LlmResponse::new(
-            Content::from_parts(vec![ContentPart::ToolCall(tool_call)]),
+            Content::from_text(serde_json::to_string(&decision).expect("valid JSON")),
             TokenUsage::empty(),
         ))
     }
