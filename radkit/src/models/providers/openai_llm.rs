@@ -423,7 +423,6 @@ mod tests {
     use super::*;
     use crate::models::Event;
     use crate::tools::BaseTool;
-    use async_trait::async_trait;
     use serde_json::json;
 
     struct TestTool;
@@ -459,7 +458,7 @@ mod tests {
         }
     }
 
-    struct SimpleToolset(Vec<Arc<dyn BaseTool>>);
+    struct SimpleToolset(Vec<Box<dyn BaseTool>>);
 
     #[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
     #[cfg_attr(
@@ -467,8 +466,8 @@ mod tests {
         async_trait::async_trait
     )]
     impl BaseToolset for SimpleToolset {
-        async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
-            self.0.clone()
+        async fn get_tools(&self) -> Vec<&dyn BaseTool> {
+            self.0.iter().map(|b| b.as_ref()).collect()
         }
 
         async fn close(&self) {}
@@ -488,7 +487,7 @@ mod tests {
             .build_request_payload(
                 thread,
                 Some(Arc::new(SimpleToolset(vec![
-                    Arc::new(TestTool) as Arc<dyn BaseTool>
+                    Box::new(TestTool) as Box<dyn BaseTool>
                 ]))),
             )
             .await

@@ -1,0 +1,21 @@
+error: Missing required field: description
+  --> tests/ui/missing_description.rs:13:1
+   |
+13 | #[tool]  // Missing description attribute
+   | ^^^^^^^
+   |
+   = note: this error originates in the attribute macro `tool` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `radkit::tools::ToolResult`
+ --> tests/ui/missing_description.rs:2:5
+  |
+2 | use radkit::tools::ToolResult;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `serde_json::json`
+ --> tests/ui/missing_description.rs:5:5
+  |
+5 | use serde_json::json;
+  |     ^^^^^^^^^^^^^^^^

@@ -152,33 +152,45 @@ impl MCPTool {
     }
 
     /// Extract content from MCP response and convert to JSON
+    ///
+    /// Handles all MCP content types (text, image, resource, audio) by serializing
+    /// them to JSON. For text content, attempts to parse as JSON first.
     fn extract_content_as_json(content: &[Content]) -> Value {
         if content.is_empty() {
             return Value::Null;
         }
 
-        // If single text content, try to parse as JSON, fallback to string
+        // If single content item, extract it directly
         if content.len() == 1 {
-            if let Some(text_content) = content[0].as_text() {
-                // Try to parse as JSON first
-                return serde_json::from_str::<Value>(&text_content.text)
-                    .unwrap_or_else(|_| Value::String(text_content.text.clone()));
-            }
+            return Self::extract_single_content(&content[0]);
         }
 
-        // Multiple content items - collect text parts
-        let mut text_parts = Vec::new();
+        // Multiple content items - collect all as JSON array
+        let mut content_items = Vec::new();
         for item in content {
-            if let Some(text_content) = item.as_text() {
-                text_parts.push(text_content.text.clone());
-            }
+            content_items.push(Self::extract_single_content(item));
         }
 
-        if text_parts.is_empty() {
-            serde_json::json!({"message": "No text content available"})
-        } else {
-            serde_json::json!({"text": text_parts})
+        serde_json::json!({"content": content_items})
+    }
+
+    /// Extract a single content item to JSON
+    fn extract_single_content(item: &Content) -> Value {
+        // Try text content first - attempt to parse as JSON
+        if let Some(text_content) = item.as_text() {
+            // Try to parse as JSON first, fallback to string
+            return serde_json::from_str::<Value>(&text_content.text)
+                .unwrap_or_else(|_| Value::String(text_content.text.clone()));
         }
+
+        // For non-text content (image, resource, audio, etc.), serialize the entire
+        // content object to preserve all data
+        serde_json::to_value(item).unwrap_or_else(|e| {
+            serde_json::json!({
+                "error": "Failed to serialize content",
+                "details": e.to_string()
+            })
+        })
     }
 }
 
@@ -305,12 +317,31 @@ mod tests {
             Value::String("Simple text response".to_string())
         );
 
-        // Multiple text contents
+        // Multiple text contents - now wrapped in content array
         let content = vec![Content::text("First part"), Content::text("Second part")];
         let result = MCPTool::extract_content_as_json(&content);
         let expected = serde_json::json!({
-            "text": ["First part", "Second part"]
+            "content": ["First part", "Second part"]
         });
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_extract_single_content() {
+        use rmcp::model::Content;
+
+        // Text content that's valid JSON
+        let item = Content::text(r#"{"key": "value"}"#);
+        let result = MCPTool::extract_single_content(&item);
+        assert_eq!(result, serde_json::json!({"key": "value"}));
+
+        // Text content that's plain text
+        let item = Content::text("plain text");
+        let result = MCPTool::extract_single_content(&item);
+        assert_eq!(result, Value::String("plain text".to_string()));
+
+        // Non-text content should be serialized as-is
+        // Note: We can't easily test image/resource content without more setup,
+        // but the serde_json::to_value call will handle them properly
     }
 }

@@ -16,6 +16,10 @@ pub struct OpenApiOperationTool {
     operation_id: String,
     /// Operation description
     description: String,
+    /// HTTP method for this operation
+    method: String,
+    /// Path for this operation
+    path: String,
     /// Reference to the OpenAPI spec
     spec: Arc<OpenApiSpec>,
     /// Shared HTTP client
@@ -24,7 +28,7 @@ pub struct OpenApiOperationTool {
     auth: Option<AuthConfig>,
 }
 
-/// Helper function to convert JSON value to string
+/// Helper function to convert JSON value to string (for simple scalar values)
 fn value_to_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(s) => s.clone(),
@@ -33,6 +37,98 @@ fn value_to_string(value: &serde_json::Value) -> String {
         serde_json::Value::Null => String::new(),
         _ => value.to_string(),
     }
+}
+
+/// Encode a query parameter value according to OpenAPI style and explode settings
+///
+/// Handles arrays and objects according to the OpenAPI specification.
+/// Returns a vector of (key, value) pairs to support exploded arrays.
+fn encode_query_param(
+    name: &str,
+    value: &serde_json::Value,
+    style: &openapiv3::QueryStyle,
+    explode: bool,
+) -> Vec<(String, String)> {
+    use openapiv3::QueryStyle;
+
+    match value {
+        // Arrays are encoded based on style and explode
+        serde_json::Value::Array(arr) => {
+            let string_values: Vec<String> = arr.iter().map(value_to_string).collect();
+
+            match (style, explode) {
+                // Form style with explode=true (default): ?status=available&status=sold
+                (QueryStyle::Form, true) => string_values
+                    .into_iter()
+                    .map(|v| (name.to_string(), v))
+                    .collect(),
+
+                // Form style with explode=false: ?status=available,sold
+                (QueryStyle::Form, false) => {
+                    vec![(name.to_string(), string_values.join(","))]
+                }
+
+                // Space-delimited: ?status=available%20sold
+                (QueryStyle::SpaceDelimited, _) => {
+                    vec![(name.to_string(), string_values.join(" "))]
+                }
+
+                // Pipe-delimited: ?status=available|sold
+                (QueryStyle::PipeDelimited, _) => {
+                    vec![(name.to_string(), string_values.join("|"))]
+                }
+
+                // DeepObject style is for objects, not arrays
+                (QueryStyle::DeepObject, _) => {
+                    vec![(name.to_string(), string_values.join(","))]
+                }
+            }
+        }
+
+        // Objects with DeepObject style: ?obj[key1]=value1&obj[key2]=value2
+        serde_json::Value::Object(obj) if matches!(style, QueryStyle::DeepObject) => obj
+            .iter()
+            .map(|(key, val)| (format!("{}[{}]", name, key), value_to_string(val)))
+            .collect(),
+
+        // For other cases (scalars, objects with non-DeepObject style), use simple encoding
+        _ => vec![(name.to_string(), value_to_string(value))],
+    }
+}
+
+/// Encode a header parameter value (headers don't support explode in the same way)
+fn encode_header_param(name: &str, value: &serde_json::Value) -> (String, String) {
+    match value {
+        // Arrays are comma-separated
+        serde_json::Value::Array(arr) => {
+            let string_values: Vec<String> = arr.iter().map(value_to_string).collect();
+            (name.to_string(), string_values.join(","))
+        }
+        // Everything else converts to string
+        _ => (name.to_string(), value_to_string(value)),
+    }
+}
+
+/// Percent-encode a string for use in URL path parameters
+///
+/// This encodes all characters except unreserved characters (A-Z, a-z, 0-9, -, _, ., ~)
+/// according to RFC 3986. This prevents special URL characters like /, ?, #, % from
+/// breaking the URL structure or causing security issues.
+fn percent_encode_path_param(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            // Unreserved characters per RFC 3986 - do not encode
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            // Encode everything else
+            _ => {
+                // Convert char to UTF-8 bytes and percent-encode each byte
+                c.to_string()
+                    .bytes()
+                    .map(|b| format!("%{:02X}", b))
+                    .collect()
+            }
+        })
+        .collect()
 }
 
 /// Convert OpenAPI Schema to JSON Schema
@@ -98,6 +194,8 @@ impl OpenApiOperationTool {
     pub fn new(
         operation_id: String,
         description: String,
+        method: String,
+        path: String,
         spec: Arc<OpenApiSpec>,
         http_client: Arc<reqwest::Client>,
         auth: Option<AuthConfig>,
@@ -105,6 +203,8 @@ impl OpenApiOperationTool {
         Self {
             operation_id,
             description,
+            method,
+            path,
             spec,
             http_client,
             auth,
@@ -112,34 +212,87 @@ impl OpenApiOperationTool {
     }
 
     /// Find this operation in the OpenAPI spec
-    fn find_operation(&self) -> Option<(String, String, &Operation)> {
-        for (path, path_item_ref) in &self.spec.spec().paths.paths {
-            let path_item = match path_item_ref {
-                ReferenceOr::Item(item) => item,
-                ReferenceOr::Reference { .. } => continue,
-            };
+    /// Uses the stored path and method for direct lookup
+    /// Returns (method, path, path_item, operation)
+    fn find_operation(&self) -> Option<(String, String, &openapiv3::PathItem, &Operation)> {
+        // Get the path item
+        let path_item_ref = self.spec.spec().paths.paths.get(&self.path)?;
+        let path_item = match path_item_ref {
+            ReferenceOr::Item(item) => item,
+            ReferenceOr::Reference { .. } => return None,
+        };
 
-            // Check each HTTP method
-            let methods = vec![
-                ("GET", &path_item.get),
-                ("POST", &path_item.post),
-                ("PUT", &path_item.put),
-                ("DELETE", &path_item.delete),
-                ("PATCH", &path_item.patch),
-                ("HEAD", &path_item.head),
-                ("OPTIONS", &path_item.options),
-                ("TRACE", &path_item.trace),
-            ];
+        // Get the operation for this method
+        let operation = match self.method.to_uppercase().as_str() {
+            "GET" => path_item.get.as_ref()?,
+            "POST" => path_item.post.as_ref()?,
+            "PUT" => path_item.put.as_ref()?,
+            "DELETE" => path_item.delete.as_ref()?,
+            "PATCH" => path_item.patch.as_ref()?,
+            "HEAD" => path_item.head.as_ref()?,
+            "OPTIONS" => path_item.options.as_ref()?,
+            "TRACE" => path_item.trace.as_ref()?,
+            _ => return None,
+        };
 
-            for (method, maybe_op) in methods {
-                if let Some(op) = maybe_op {
-                    if op.operation_id.as_deref() == Some(&self.operation_id) {
-                        return Some((method.to_string(), path.clone(), op));
-                    }
+        Some((self.method.clone(), self.path.clone(), path_item, operation))
+    }
+
+    /// Merge path-level and operation-level parameters
+    ///
+    /// Path-level parameters apply to all operations under that path.
+    /// Operation-level parameters can override path-level ones.
+    /// A parameter is uniquely identified by (name, location) pair.
+    fn merge_parameters<'a>(
+        path_params: &'a [ReferenceOr<Parameter>],
+        operation_params: &'a [ReferenceOr<Parameter>],
+    ) -> Vec<&'a ReferenceOr<Parameter>> {
+        let mut merged = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // Add operation-level parameters first (they take precedence)
+        for param_ref in operation_params {
+            if let ReferenceOr::Item(param) = param_ref {
+                let key = Self::get_parameter_key(param);
+                seen.insert(key);
+            }
+            merged.push(param_ref);
+        }
+
+        // Add path-level parameters that aren't overridden
+        for param_ref in path_params {
+            if let ReferenceOr::Item(param) = param_ref {
+                let key = Self::get_parameter_key(param);
+                if !seen.contains(&key) {
+                    merged.push(param_ref);
                 }
+            } else {
+                // For references, we can't check uniqueness without resolving,
+                // so we include them (may result in duplicates if spec is invalid)
+                merged.push(param_ref);
             }
         }
-        None
+
+        merged
+    }
+
+    /// Get a unique key for a parameter (name + location)
+    fn get_parameter_key(param: &Parameter) -> (String, String) {
+        let (name, location) = match param {
+            Parameter::Query { parameter_data, .. } => {
+                (parameter_data.name.clone(), "query".to_string())
+            }
+            Parameter::Header { parameter_data, .. } => {
+                (parameter_data.name.clone(), "header".to_string())
+            }
+            Parameter::Path { parameter_data, .. } => {
+                (parameter_data.name.clone(), "path".to_string())
+            }
+            Parameter::Cookie { parameter_data, .. } => {
+                (parameter_data.name.clone(), "cookie".to_string())
+            }
+        };
+        (name, location)
     }
 
     /// Build the full URL with path parameters
@@ -147,31 +300,43 @@ impl OpenApiOperationTool {
         let mut url = format!("{}{}", self.spec.base_url(), path);
 
         // Replace path parameters like {petId} with actual values
+        // Use percent-encoding to prevent special characters from breaking the URL structure
         for (key, value) in args {
             let placeholder = format!("{{{}}}", key);
             if url.contains(&placeholder) {
-                url = url.replace(&placeholder, &value_to_string(value));
+                let value_str = value_to_string(value);
+                // Percent-encode the value to handle special URL characters (/, ?, #, %, etc.)
+                let encoded_value = percent_encode_path_param(&value_str);
+                url = url.replace(&placeholder, &encoded_value);
             }
         }
 
         url
     }
 
-    /// Extract parameters from operation definition
+    /// Extract parameters from path and operation definitions
+    ///
+    /// Merges path-level and operation-level parameters before extraction.
+    /// Returns (query_params, header_params, cookie_params).
+    /// Query params use Vec to support exploded arrays with duplicate keys.
     fn extract_parameters(
         &self,
+        path_item: &openapiv3::PathItem,
         operation: &Operation,
         args: &HashMap<String, serde_json::Value>,
     ) -> (
-        HashMap<String, String>,
+        Vec<(String, String)>,
         HashMap<String, String>,
         HashMap<String, String>,
     ) {
-        let mut query_params = HashMap::new();
+        let mut query_params = Vec::new();
         let mut header_params = HashMap::new();
         let mut cookie_params = HashMap::new();
 
-        for param_ref in &operation.parameters {
+        // Merge path-level and operation-level parameters
+        let all_params = Self::merge_parameters(&path_item.parameters, &operation.parameters);
+
+        for param_ref in all_params {
             let param = match param_ref {
                 ReferenceOr::Item(p) => p,
                 // TODO(Phase 2): Resolve $ref parameter references
@@ -179,14 +344,26 @@ impl OpenApiOperationTool {
             };
 
             match param {
-                Parameter::Query { parameter_data, .. } => {
+                Parameter::Query {
+                    parameter_data,
+                    style,
+                    ..
+                } => {
                     if let Some(value) = args.get(&parameter_data.name) {
-                        query_params.insert(parameter_data.name.clone(), value_to_string(value));
+                        // Determine explode setting (default is true for query params)
+                        let explode = parameter_data.explode.unwrap_or(true);
+
+                        // Encode according to OpenAPI style and explode settings
+                        let encoded =
+                            encode_query_param(&parameter_data.name, value, style, explode);
+                        query_params.extend(encoded);
                     }
                 }
                 Parameter::Header { parameter_data, .. } => {
                     if let Some(value) = args.get(&parameter_data.name) {
-                        header_params.insert(parameter_data.name.clone(), value_to_string(value));
+                        let (name, encoded_value) =
+                            encode_header_param(&parameter_data.name, value);
+                        header_params.insert(name, encoded_value);
                     }
                 }
                 Parameter::Path { .. } => {
@@ -220,7 +397,7 @@ impl BaseTool for OpenApiOperationTool {
 
     fn declaration(&self) -> FunctionDeclaration {
         // Find the operation to extract parameter schema
-        let (_, _, operation) = match self.find_operation() {
+        let (_, _, path_item, operation) = match self.find_operation() {
             Some(result) => result,
             None => {
                 // Fallback to empty schema if operation not found
@@ -239,8 +416,11 @@ impl BaseTool for OpenApiOperationTool {
         let mut properties = serde_json::Map::new();
         let mut required = Vec::new();
 
-        // Extract parameter schemas
-        for param_ref in &operation.parameters {
+        // Merge path-level and operation-level parameters
+        let all_params = Self::merge_parameters(&path_item.parameters, &operation.parameters);
+
+        // Extract parameter schemas from merged parameters
+        for param_ref in all_params {
             let param_data = match param_ref {
                 ReferenceOr::Item(p) => match p {
                     Parameter::Query { parameter_data, .. }
@@ -315,7 +495,7 @@ impl BaseTool for OpenApiOperationTool {
         _context: &ToolContext<'_>,
     ) -> ToolResult {
         // Find the operation in the spec
-        let (method, path, operation) = match self.find_operation() {
+        let (method, path, path_item, operation) = match self.find_operation() {
             Some(result) => result,
             None => {
                 return ToolResult::error(format!(
@@ -325,9 +505,9 @@ impl BaseTool for OpenApiOperationTool {
             }
         };
 
-        // Extract parameters
+        // Extract parameters (merges path-level and operation-level parameters)
         let (query_params, header_params, cookie_params) =
-            self.extract_parameters(operation, &args);
+            self.extract_parameters(path_item, operation, &args);
 
         // Build URL with path parameters
         let url = self.build_url(&path, &args);
@@ -436,5 +616,404 @@ impl BaseTool for OpenApiOperationTool {
                 body_text
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_build_url_with_special_characters() {
+        // Create a minimal OpenApiSpec for testing
+        let spec_json = r#"{
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "servers": [{"url": "https://api.example.com"}],
+            "paths": {
+                "/pets/{petId}": {
+                    "get": {
+                        "operationId": "test_op",
+                        "responses": {
+                            "200": {"description": "Success"}
+                        }
+                    }
+                }
+            }
+        }"#;
+        let openapi_spec = Arc::new(
+            OpenApiSpec::from_str(spec_json, "https://api.example.com".to_string()).unwrap(),
+        );
+
+        let http_client = Arc::new(reqwest::Client::new());
+
+        let tool = OpenApiOperationTool::new(
+            "test_op".to_string(),
+            "Test operation".to_string(),
+            "GET".to_string(),
+            "/pets/{petId}".to_string(),
+            openapi_spec,
+            http_client,
+            None,
+        );
+
+        // Test with normal value
+        let mut args = HashMap::new();
+        args.insert("petId".to_string(), serde_json::json!("123"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/123");
+
+        // Test with value containing slash (should be encoded as %2F)
+        args.insert("petId".to_string(), serde_json::json!("foo/bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%2Fbar");
+
+        // Test with value containing question mark (should be encoded as %3F)
+        args.insert("petId".to_string(), serde_json::json!("foo?bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%3Fbar");
+
+        // Test with value containing hash (should be encoded as %23)
+        args.insert("petId".to_string(), serde_json::json!("foo#bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%23bar");
+
+        // Test with value containing percent (should be encoded as %25)
+        args.insert("petId".to_string(), serde_json::json!("foo%bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%25bar");
+
+        // Test with value containing spaces (should be encoded as %20)
+        args.insert("petId".to_string(), serde_json::json!("foo bar"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%20bar");
+
+        // Test with multiple special characters
+        args.insert("petId".to_string(), serde_json::json!("foo/bar?baz#qux"));
+        let url = tool.build_url("/pets/{petId}", &args);
+        assert_eq!(url, "https://api.example.com/pets/foo%2Fbar%3Fbaz%23qux");
+    }
+
+    #[test]
+    fn test_build_url_with_multiple_path_params() {
+        // Create a minimal OpenApiSpec for testing
+        let spec_json = r#"{
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "servers": [{"url": "https://api.example.com"}],
+            "paths": {
+                "/users/{userId}/pets/{petId}": {
+                    "get": {
+                        "operationId": "test_op",
+                        "responses": {
+                            "200": {"description": "Success"}
+                        }
+                    }
+                }
+            }
+        }"#;
+        let openapi_spec = Arc::new(
+            OpenApiSpec::from_str(spec_json, "https://api.example.com".to_string()).unwrap(),
+        );
+
+        let http_client = Arc::new(reqwest::Client::new());
+
+        let tool = OpenApiOperationTool::new(
+            "test_op".to_string(),
+            "Test operation".to_string(),
+            "GET".to_string(),
+            "/users/{userId}/pets/{petId}".to_string(),
+            openapi_spec,
+            http_client,
+            None,
+        );
+
+        let mut args = HashMap::new();
+        args.insert("userId".to_string(), serde_json::json!("user/123"));
+        args.insert("petId".to_string(), serde_json::json!("pet?456"));
+
+        let url = tool.build_url("/users/{userId}/pets/{petId}", &args);
+        assert_eq!(
+            url,
+            "https://api.example.com/users/user%2F123/pets/pet%3F456"
+        );
+    }
+
+    #[test]
+    fn test_path_level_parameters() {
+        // Test that path-level parameters are included in the tool declaration
+        let spec_json = r#"{
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "servers": [{"url": "https://api.example.com"}],
+            "paths": {
+                "/pets/{petId}": {
+                    "parameters": [
+                        {
+                            "name": "petId",
+                            "in": "path",
+                            "required": true,
+                            "schema": {"type": "string"}
+                        },
+                        {
+                            "name": "version",
+                            "in": "query",
+                            "required": false,
+                            "schema": {"type": "string"}
+                        }
+                    ],
+                    "get": {
+                        "operationId": "getPet",
+                        "parameters": [
+                            {
+                                "name": "includeDetails",
+                                "in": "query",
+                                "required": false,
+                                "schema": {"type": "boolean"}
+                            }
+                        ],
+                        "responses": {
+                            "200": {"description": "Success"}
+                        }
+                    }
+                }
+            }
+        }"#;
+        let openapi_spec = Arc::new(
+            OpenApiSpec::from_str(spec_json, "https://api.example.com".to_string()).unwrap(),
+        );
+
+        let http_client = Arc::new(reqwest::Client::new());
+
+        let tool = OpenApiOperationTool::new(
+            "getPet".to_string(),
+            "Get a pet".to_string(),
+            "GET".to_string(),
+            "/pets/{petId}".to_string(),
+            openapi_spec,
+            http_client,
+            None,
+        );
+
+        // Get the declaration and check it includes both path and operation parameters
+        let declaration = tool.declaration();
+        let schema = declaration.parameters();
+
+        // Should have petId (path-level), version (path-level), and includeDetails (operation-level)
+        let properties = schema.get("properties").unwrap().as_object().unwrap();
+        assert!(
+            properties.contains_key("petId"),
+            "Missing path parameter petId"
+        );
+        assert!(
+            properties.contains_key("version"),
+            "Missing path-level query parameter version"
+        );
+        assert!(
+            properties.contains_key("includeDetails"),
+            "Missing operation-level query parameter includeDetails"
+        );
+
+        // Check required parameters
+        let required = schema.get("required").unwrap().as_array().unwrap();
+        assert!(
+            required.contains(&serde_json::json!("petId")),
+            "petId should be required"
+        );
+        assert!(
+            !required.contains(&serde_json::json!("version")),
+            "version should not be required"
+        );
+        assert!(
+            !required.contains(&serde_json::json!("includeDetails")),
+            "includeDetails should not be required"
+        );
+    }
+
+    #[test]
+    fn test_operation_parameters_override_path_parameters() {
+        // Test that operation-level parameters override path-level ones
+        let spec_json = r#"{
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "servers": [{"url": "https://api.example.com"}],
+            "paths": {
+                "/items/{itemId}": {
+                    "parameters": [
+                        {
+                            "name": "itemId",
+                            "in": "path",
+                            "required": true,
+                            "schema": {"type": "string"},
+                            "description": "Path-level description"
+                        },
+                        {
+                            "name": "format",
+                            "in": "query",
+                            "required": false,
+                            "schema": {"type": "string", "enum": ["json", "xml"]}
+                        }
+                    ],
+                    "get": {
+                        "operationId": "getItem",
+                        "parameters": [
+                            {
+                                "name": "format",
+                                "in": "query",
+                                "required": true,
+                                "schema": {"type": "string", "enum": ["json", "xml", "yaml"]},
+                                "description": "Operation-level override"
+                            }
+                        ],
+                        "responses": {
+                            "200": {"description": "Success"}
+                        }
+                    }
+                }
+            }
+        }"#;
+        let openapi_spec = Arc::new(
+            OpenApiSpec::from_str(spec_json, "https://api.example.com".to_string()).unwrap(),
+        );
+
+        let http_client = Arc::new(reqwest::Client::new());
+
+        let tool = OpenApiOperationTool::new(
+            "getItem".to_string(),
+            "Get an item".to_string(),
+            "GET".to_string(),
+            "/items/{itemId}".to_string(),
+            openapi_spec,
+            http_client,
+            None,
+        );
+
+        let declaration = tool.declaration();
+        let schema = declaration.parameters();
+        let properties = schema.get("properties").unwrap().as_object().unwrap();
+
+        // Should have both itemId and format
+        assert_eq!(properties.len(), 2, "Should have exactly 2 parameters");
+
+        // format should be required (from operation-level override)
+        let required = schema.get("required").unwrap().as_array().unwrap();
+        assert!(
+            required.contains(&serde_json::json!("format")),
+            "format should be required (operation-level override)"
+        );
+
+        // The enum should have yaml (from operation-level, not path-level)
+        let format_schema = properties.get("format").unwrap();
+        let format_enum = format_schema.get("enum").unwrap().as_array().unwrap();
+        assert!(
+            format_enum.contains(&serde_json::json!("yaml")),
+            "format enum should include 'yaml' from operation-level parameter"
+        );
+    }
+
+    #[test]
+    fn test_encode_query_param_array_form_explode() {
+        use openapiv3::QueryStyle;
+
+        // Array with form style and explode=true (default)
+        let value = serde_json::json!(["available", "sold"]);
+        let result = encode_query_param("status", &value, &QueryStyle::Form, true);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], ("status".to_string(), "available".to_string()));
+        assert_eq!(result[1], ("status".to_string(), "sold".to_string()));
+    }
+
+    #[test]
+    fn test_encode_query_param_array_form_no_explode() {
+        use openapiv3::QueryStyle;
+
+        // Array with form style and explode=false
+        let value = serde_json::json!(["available", "sold"]);
+        let result = encode_query_param("status", &value, &QueryStyle::Form, false);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0],
+            ("status".to_string(), "available,sold".to_string())
+        );
+    }
+
+    #[test]
+    fn test_encode_query_param_array_pipe_delimited() {
+        use openapiv3::QueryStyle;
+
+        // Array with pipe-delimited style
+        let value = serde_json::json!(["red", "green", "blue"]);
+        let result = encode_query_param("colors", &value, &QueryStyle::PipeDelimited, false);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0],
+            ("colors".to_string(), "red|green|blue".to_string())
+        );
+    }
+
+    #[test]
+    fn test_encode_query_param_array_space_delimited() {
+        use openapiv3::QueryStyle;
+
+        // Array with space-delimited style
+        let value = serde_json::json!(["red", "green", "blue"]);
+        let result = encode_query_param("colors", &value, &QueryStyle::SpaceDelimited, false);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0],
+            ("colors".to_string(), "red green blue".to_string())
+        );
+    }
+
+    #[test]
+    fn test_encode_query_param_deep_object() {
+        use openapiv3::QueryStyle;
+
+        // Object with DeepObject style
+        let value = serde_json::json!({"name": "John", "age": "30"});
+        let result = encode_query_param("user", &value, &QueryStyle::DeepObject, true);
+
+        assert_eq!(result.len(), 2);
+        // Order may vary, so check both possibilities
+        assert!(
+            result.contains(&("user[name]".to_string(), "John".to_string()))
+                || result.contains(&("user[age]".to_string(), "30".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_encode_query_param_scalar() {
+        use openapiv3::QueryStyle;
+
+        // Scalar values are encoded simply
+        let value = serde_json::json!("available");
+        let result = encode_query_param("status", &value, &QueryStyle::Form, true);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], ("status".to_string(), "available".to_string()));
+    }
+
+    #[test]
+    fn test_encode_header_param_array() {
+        // Arrays in headers are comma-separated
+        let value = serde_json::json!(["gzip", "deflate"]);
+        let (name, encoded) = encode_header_param("Accept-Encoding", &value);
+
+        assert_eq!(name, "Accept-Encoding");
+        assert_eq!(encoded, "gzip,deflate");
+    }
+
+    #[test]
+    fn test_encode_header_param_scalar() {
+        let value = serde_json::json!("application/json");
+        let (name, encoded) = encode_header_param("Content-Type", &value);
+
+        assert_eq!(name, "Content-Type");
+        assert_eq!(encoded, "application/json");
     }
 }

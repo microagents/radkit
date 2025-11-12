@@ -1,0 +1,19 @@
+error: Tool function must have at least one parameter (args struct)
+ --> tests/ui/no_params.rs:6:1
+  |
+6 | async fn no_args() -> ToolResult {  // No parameters
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `radkit::tools::ToolResult`
+ --> tests/ui/no_params.rs:2:5
+  |
+2 | use radkit::tools::ToolResult;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `serde_json::json`
+ --> tests/ui/no_params.rs:3:5
+  |
+3 | use serde_json::json;
+  |     ^^^^^^^^^^^^^^^^

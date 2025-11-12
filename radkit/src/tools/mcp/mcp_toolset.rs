@@ -3,6 +3,7 @@ use crate::errors::{AgentError, AgentResult};
 use crate::tools::{BaseTool, BaseToolset};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 use tracing::{debug, error, info};
 
 /// Filter for selecting which MCP tools to include
@@ -32,6 +33,8 @@ impl MCPToolFilter {
 pub struct MCPToolset {
     session_manager: Arc<MCPSessionManager>,
     tool_filter: Option<MCPToolFilter>,
+    /// Cached tools discovered from the MCP server (lazily initialized)
+    tools: OnceCell<Vec<Box<dyn BaseTool>>>,
 }
 
 impl MCPToolset {
@@ -40,6 +43,7 @@ impl MCPToolset {
         Self {
             session_manager: Arc::new(MCPSessionManager::new(connection_params)),
             tool_filter: None,
+            tools: OnceCell::new(),
         }
     }
 
@@ -77,59 +81,68 @@ impl MCPToolset {
     async_trait::async_trait
 )]
 impl BaseToolset for MCPToolset {
-    async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
-        debug!("Discovering MCP tools");
+    async fn get_tools(&self) -> Vec<&dyn BaseTool> {
+        // Lazily discover and cache tools on first call
+        let tools = self
+            .tools
+            .get_or_init(|| async {
+                debug!("Discovering MCP tools");
 
-        // Create session for tool discovery
-        let session = match self.session_manager.create_session(None).await {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to create MCP session for tool discovery: {}", e);
-                return Vec::new();
-            }
-        };
+                // Create session for tool discovery
+                let session = match self.session_manager.create_session(None).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Failed to create MCP session for tool discovery: {}", e);
+                        return Vec::new();
+                    }
+                };
 
-        // Discover tools from server
-        let tools_response = match session.list_all_tools().await {
-            Ok(response) => response,
-            Err(e) => {
-                error!("Failed to list MCP tools: {:?}", e);
-                return Vec::new();
-            }
-        };
+                // Discover tools from server
+                let tools_response = match session.list_all_tools().await {
+                    Ok(response) => response,
+                    Err(e) => {
+                        error!("Failed to list MCP tools: {:?}", e);
+                        return Vec::new();
+                    }
+                };
 
-        info!("Discovered {} MCP tools", tools_response.len());
+                info!("Discovered {} MCP tools", tools_response.len());
 
-        // Convert to Radkit tools
-        let mut radkit_tools = Vec::new();
-        for mcp_tool in tools_response {
-            // Apply filter if configured
-            if let Some(ref filter) = self.tool_filter {
-                if !filter.matches(&mcp_tool.name) {
-                    debug!("Filtering out tool: {}", mcp_tool.name);
-                    continue;
+                // Convert to Radkit tools
+                let mut radkit_tools: Vec<Box<dyn BaseTool>> = Vec::new();
+                for mcp_tool in tools_response {
+                    // Apply filter if configured
+                    if let Some(ref filter) = self.tool_filter {
+                        if !filter.matches(&mcp_tool.name) {
+                            debug!("Filtering out tool: {}", mcp_tool.name);
+                            continue;
+                        }
+                    }
+
+                    let tool = Box::new(MCPTool::new(
+                        mcp_tool.name.to_string(),
+                        mcp_tool
+                            .description
+                            .map(|d| d.to_string())
+                            .unwrap_or_default(),
+                        serde_json::Value::Object((*mcp_tool.input_schema).clone()),
+                        Arc::clone(&self.session_manager),
+                    ));
+
+                    debug!("Added MCP tool: {}", tool.name());
+                    radkit_tools.push(tool);
                 }
-            }
 
-            let tool = Arc::new(MCPTool::new(
-                mcp_tool.name.to_string(),
-                mcp_tool
-                    .description
-                    .map(|d| d.to_string())
-                    .unwrap_or_default(),
-                serde_json::Value::Object((*mcp_tool.input_schema).clone()),
-                Arc::clone(&self.session_manager),
-            ));
+                info!(
+                    "Created {} Radkit tools from MCP server",
+                    radkit_tools.len()
+                );
+                radkit_tools
+            })
+            .await;
 
-            debug!("Added MCP tool: {}", tool.name());
-            radkit_tools.push(tool as Arc<dyn BaseTool>);
-        }
-
-        info!(
-            "Created {} Radkit tools from MCP server",
-            radkit_tools.len()
-        );
-        radkit_tools
+        // Return references to cached tools
+        tools.iter().map(|b| b.as_ref()).collect()
     }
 
     async fn close(&self) {

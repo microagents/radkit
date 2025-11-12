@@ -244,12 +244,10 @@ mod tests {
     use super::*;
     use crate::agent::{Agent, OnRequestResult, RegisteredSkill, SkillHandler, SkillMetadata};
     use crate::errors::{AgentError, AgentResult};
-    use crate::models::{ContentPart, LlmResponse};
+    use crate::models::LlmResponse;
     use crate::runtime::context::{Context as RuntimeContext, TaskContext as RuntimeTaskContext};
     use crate::runtime::Runtime;
     use crate::test_support::FakeLlm;
-    use crate::tools::tool::ToolCall;
-    use serde_json::json;
     use std::sync::Arc;
 
     struct StubSkill;

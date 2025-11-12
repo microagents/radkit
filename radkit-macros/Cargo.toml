@@ -18,3 +18,7 @@ proc-macro2 = "1.0"
 radkit = { path = "../radkit" }
 async-trait = "0.1"
 tokio = { version = "1", features = ["macros", "rt"] }
+serde = { version = "1.0", features = ["derive"] }
+schemars = "1.0.4"
+serde_json = "1.0"
+trybuild = "1.0"

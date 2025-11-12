@@ -277,11 +277,11 @@ where
         result
     }
 
-    async fn run_tool_loop(
+    async fn run_tool_loop<'a>(
         &self,
         mut thread: Thread,
         toolset: Option<Arc<dyn BaseToolset>>,
-        tool_cache: &HashMap<String, Arc<dyn BaseTool>>,
+        tool_cache: &HashMap<String, &'a dyn BaseTool>,
         tool_context: &ToolContext<'_>,
         max_iterations: usize,
     ) -> AgentResult<WorkerOutcome<T>> {
@@ -292,7 +292,7 @@ where
             if iterations > max_iterations {
                 return Err(AgentError::Internal {
                     component: "llm_worker".to_string(),
-                    reason: "Exceeded tool interaction iterations".to_string(),
+                    reason: format!("Exceeded tool interaction iterations (max: {max_iterations})"),
                 });
             }
 
@@ -332,12 +332,11 @@ where
             thread = thread.add_event(Event::assistant(content));
 
             for call in tool_calls {
-                let tool = tool_cache
+                let tool = *tool_cache
                     .get(call.name())
                     .ok_or_else(|| AgentError::ToolNotFound {
                         tool_name: call.name().to_string(),
-                    })?
-                    .clone();
+                    })?;
 
                 let args = value_to_arguments(call.name(), call.arguments())?;
 
@@ -354,9 +353,13 @@ struct WorkerOutcome<T> {
     thread: Thread,
 }
 
-async fn load_tool_map(
-    toolset: &Arc<dyn BaseToolset>,
-) -> AgentResult<HashMap<String, Arc<dyn BaseTool>>> {
+/// Loads tools from a toolset into a name-indexed map.
+///
+/// The returned references have the same lifetime as the toolset's internal storage.
+/// Callers must ensure the toolset remains alive while using the map.
+async fn load_tool_map<'a>(
+    toolset: &'a Arc<dyn BaseToolset>,
+) -> AgentResult<HashMap<String, &'a dyn BaseTool>> {
     let tools = toolset.get_tools().await;
     let mut map = HashMap::with_capacity(tools.len());
 
@@ -411,7 +414,7 @@ fn value_to_arguments(tool_name: &str, value: &Value) -> AgentResult<HashMap<Str
 pub struct LlmWorkerBuilder<T> {
     model: Arc<dyn BaseLlm>,
     system_instructions: Option<String>,
-    tools: Vec<Arc<dyn BaseTool>>,
+    tools: Vec<Box<dyn BaseTool>>,
     toolsets: Vec<Arc<dyn BaseToolset>>,
     max_iterations: usize,
     _phantom: std::marker::PhantomData<T>,
@@ -473,25 +476,28 @@ where
     ///
     /// # Arguments
     ///
-    /// * `tool` - A tool to add to the worker
+    /// * `tool` - A tool to add to the worker (anything implementing `BaseTool`)
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// use std::sync::Arc;
-    /// use radkit::tools::{FunctionTool, BaseTool};
+    /// use radkit::tools::{ToolResult};
+    /// use radkit_macros::tool;
+    /// use serde_json::json;
     ///
-    /// let weather_tool = Arc::new(FunctionTool::new(
-    ///     "get_weather",
-    ///     "Get weather info",
-    ///     |args, _| Box::pin(async { ToolResult::success(json!({"temp": 72})) })
-    /// )) as Arc<dyn BaseTool>;
+    /// #[tool(description = "Get weather info")]
+    /// async fn get_weather(args: WeatherArgs) -> ToolResult {
+    ///     ToolResult::success(json!({"temp": 72}))
+    /// }
     ///
     /// let builder = LlmWorker::builder(my_llm)
-    ///     .with_tool(weather_tool);
+    ///     .with_tool(get_weather);  // ← Pass the tool struct directly
     /// ```
-    pub fn with_tool(mut self, tool: Arc<dyn BaseTool>) -> Self {
-        self.tools.push(tool);
+    pub fn with_tool<U>(mut self, tool: U) -> Self
+    where
+        U: BaseTool + 'static,
+    {
+        self.tools.push(Box::new(tool));
         self
     }
 
@@ -502,7 +508,7 @@ where
     ///
     /// # Arguments
     ///
-    /// * `tools` - Iterator of tools to add
+    /// * `tools` - Iterator of tools to add (items implementing `BaseTool`)
     ///
     /// # Examples
     ///
@@ -510,11 +516,14 @@ where
     /// let builder = LlmWorker::builder(my_llm)
     ///     .with_tools(vec![tool1, tool2, tool3]);
     /// ```
-    pub fn with_tools<I>(mut self, tools: I) -> Self
+    pub fn with_tools<I, U>(mut self, tools: I) -> Self
     where
-        I: IntoIterator<Item = Arc<dyn BaseTool>>,
+        I: IntoIterator<Item = U>,
+        U: BaseTool + 'static,
     {
-        self.tools.extend(tools);
+        for tool in tools {
+            self.tools.push(Box::new(tool));
+        }
         self
     }
 
@@ -685,13 +694,13 @@ mod tests {
         model.push_response(Ok(final_response.expect("final response")));
 
         let results = VecDeque::from([ToolResult::success(json!({"ok": true}))]);
-        let recorder = Arc::new(RecordingTool::new(
+        let recorder = RecordingTool::new(
             "recording_tool",
             "Records usage",
             results,
-        ));
+        );
         let worker = LlmWorker::<Sample>::builder(model)
-            .with_tool(recorder.clone() as Arc<dyn BaseTool>)
+            .with_tool(recorder.clone())
             .build();
 
         let (result, thread) = worker
@@ -703,7 +712,7 @@ mod tests {
             thread.events().len() >= 2,
             "thread should capture tool exchange"
         );
-        assert_eq!(recorder.call_count(), 1);
+        assert_eq!(recorder.call_count(), 1, "tool should have been called once");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -724,11 +733,11 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn builder_composes_tools_and_toolsets() {
         let model = FakeLlm::with_responses("fake", [structured_response(1)]);
-        let tool = Arc::new(RecordingTool::default()) as Arc<dyn BaseTool>;
-        let toolset = Arc::new(SimpleToolset::new(vec![tool.clone()])) as Arc<dyn BaseToolset>;
+        let tool = Box::new(RecordingTool::default()) as Box<dyn BaseTool>;
+        let toolset = Arc::new(SimpleToolset::new(vec![tool])) as Arc<dyn BaseToolset>;
 
         let worker = LlmWorker::<Sample>::builder(model)
-            .with_tool(tool.clone())
+            .with_tool(RecordingTool::default())
             .with_toolset(toolset.clone())
             .with_max_iterations(5)
             .build();
@@ -747,7 +756,7 @@ mod tests {
             ]))],
         );
         let worker = LlmWorker::<Sample>::builder(model)
-            .with_tool(Arc::new(RecordingTool::default()))
+            .with_tool(RecordingTool::default())
             .with_max_iterations(1)
             .build();
 

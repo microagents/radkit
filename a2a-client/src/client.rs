@@ -623,13 +623,12 @@ impl A2AClient {
         if let JsonRpcResponse::Success {
             id: Some(resp_id), ..
         } = &json_response
+            && resp_id != &request_id
         {
-            if resp_id != &request_id {
-                eprintln!(
-                    "WARNING: RPC response ID mismatch for method {}. Expected {:?}, got {:?}",
-                    method, request_id, resp_id
-                );
-            }
+            eprintln!(
+                "WARNING: RPC response ID mismatch for method {}. Expected {:?}, got {:?}",
+                method, request_id, resp_id
+            );
         }
 
         Ok(json_response)

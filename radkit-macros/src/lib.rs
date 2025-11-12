@@ -1,12 +1,13 @@
 //! Procedural macros for the radkit agent framework.
 //!
-//! This crate provides the `#[skill]` attribute macro for defining A2A-compliant skills.
+//! This crate provides attribute macros for defining A2A-compliant skills and tools.
 
 #![deny(unsafe_code, unreachable_patterns, unused_must_use)]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::module_name_repetitions)] // Common pattern in proc macro crates
 
 mod skill;
+mod tool;
 mod validation;
 
 use proc_macro::TokenStream;
@@ -91,4 +92,74 @@ pub fn skill(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
 
     skill::generate_skill_impl(args, item).into()
+}
+
+/// Attribute macro for defining tools with automatic parameter extraction.
+///
+/// This macro generates a zero-sized struct with the function name and implements
+/// the `BaseTool` trait directly, eliminating manual parameter extraction and JSON schema construction.
+///
+/// The function name is used as the tool name, so choose function names that accurately
+/// describe the tool's purpose.
+///
+/// # Required Parameters
+///
+/// - `description`: A detailed description of what the tool does (String)
+///
+/// # Example
+///
+/// ```ignore
+/// use radkit::tools::{ToolResult, ToolContext};
+/// use radkit_macros::tool;
+/// use serde::{Deserialize};
+/// use schemars::JsonSchema;
+/// use serde_json::json;
+///
+/// #[derive(Deserialize, JsonSchema)]
+/// struct AddArgs {
+///     a: i64,
+///     b: i64,
+/// }
+///
+/// #[tool(description = "Add two numbers")]
+/// async fn add(args: AddArgs) -> ToolResult {
+///     ToolResult::success(json!({"sum": args.a + args.b}))
+/// }
+///
+/// // With ToolContext
+/// #[derive(Deserialize, JsonSchema)]
+/// struct SaveArgs {
+///     key: String,
+///     value: String,
+/// }
+///
+/// #[tool(description = "Save state")]
+/// async fn save_state(args: SaveArgs, ctx: &ToolContext<'_>) -> ToolResult {
+///     ctx.state().set_state(&args.key, json!(args.value));
+///     ToolResult::success(json!({"saved": true}))
+/// }
+/// ```
+///
+/// # Generated Code
+///
+/// The macro transforms the async function into a zero-sized struct that implements
+/// `BaseTool`. Parameters are automatically deserialized using serde and the JSON
+/// schema is generated using schemars. The function name becomes both the struct
+/// name and the tool name visible to the LLM.
+///
+/// # Usage
+///
+/// ```ignore
+/// // Pass the tool struct directly to with_tool() - no function call!
+/// let worker = LlmWorker::builder(llm)
+///     .with_tool(add)         // ← Not add()
+///     .with_tool(save_state)  // ← Not save_state()
+///     .build();
+/// ```
+#[proc_macro_attribute]
+pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as tool::ToolArgs);
+    let item = proc_macro2::TokenStream::from(item);
+
+    tool::generate_tool_impl(args, item).into()
 }

@@ -5,20 +5,12 @@
 
 use radkit::agent::{LlmFunction, LlmWorker};
 use radkit::models::{Content, ContentPart, Event, LlmResponse, Thread, TokenUsage};
-use radkit::test_support::{FakeLlm, RecordingTool};
+use radkit::test_support::{structured_response, FakeLlm, RecordingTool};
 use radkit::tools::{BaseTool, FunctionTool, ToolCall, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-
-// Helper to create structured output response
-fn structured_response<T: Serialize>(value: &T) -> LlmResponse {
-    let json_text = serde_json::to_string(value).expect("valid JSON");
-
-    LlmResponse::new(Content::from_text(json_text), TokenUsage::empty())
-}
 
 // ============================================================================
 // Test 1: LlmFunction basic usage in skill-like scenario
@@ -172,7 +164,7 @@ async fn test_llm_worker_with_tool() {
     );
 
     let worker = LlmWorker::<WeatherReport>::builder(worker_llm)
-        .with_tool(Arc::new(weather_tool))
+        .with_tool(weather_tool)
         .build();
 
     let thread = Thread::from_user("What's the weather in Seattle?");
@@ -259,8 +251,8 @@ async fn test_llm_worker_multiple_tool_calls() {
     );
 
     let worker = LlmWorker::<CalculationResult>::builder(llm)
-        .with_tool(Arc::new(add_tool))
-        .with_tool(Arc::new(multiply_tool))
+        .with_tool(add_tool)
+        .with_tool(multiply_tool)
         .build();
 
     let thread = Thread::from_user("Calculate: (2 + 3) * 4");
@@ -283,11 +275,11 @@ struct SearchResult {
 #[tokio::test]
 async fn test_llm_worker_tool_execution_verification() {
     // Create a recording tool to verify it's called
-    let recording_tool = Arc::new(RecordingTool::new("search", "Search for information", {
+    let recording_tool = RecordingTool::new("search", "Search for information", {
         let mut results = VecDeque::new();
         results.push_back(ToolResult::success(json!({"results": ["item1", "item2"]})));
         results
-    }));
+    });
 
     // First response: call the search tool
     let tool_call_response = LlmResponse::new(
@@ -314,7 +306,7 @@ async fn test_llm_worker_tool_execution_verification() {
     );
 
     let worker = LlmWorker::<SearchResult>::builder(llm)
-        .with_tool(recording_tool.clone() as Arc<dyn BaseTool>)
+        .with_tool(recording_tool.clone())
         .build();
 
     let thread = Thread::from_user("Search for rust async");
@@ -367,7 +359,7 @@ async fn test_llm_worker_respects_max_iterations() {
     }
 
     let worker = LlmWorker::<SimpleResponse>::builder(llm)
-        .with_tool(Arc::new(infinite_tool))
+        .with_tool(infinite_tool)
         .with_max_iterations(5) // Set low limit for testing
         .build();
 
