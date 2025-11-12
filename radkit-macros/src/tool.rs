@@ -4,13 +4,11 @@ use syn::{parse::Parse, parse::ParseStream, Ident, LitStr, Token};
 
 /// Parsed tool macro attributes
 pub struct ToolArgs {
-    pub name: Option<String>,
     pub description: String,
 }
 
 impl Parse for ToolArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut name = None;
         let mut description = None;
 
         while !input.is_empty() {
@@ -19,8 +17,10 @@ impl Parse for ToolArgs {
 
             match key.to_string().as_str() {
                 "name" => {
-                    let value: LitStr = input.parse()?;
-                    name = Some(value.value());
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "The 'name' attribute is not supported. Use the function name as the tool name instead.",
+                    ));
                 }
                 "description" => {
                     let value: LitStr = input.parse()?;
@@ -42,7 +42,7 @@ impl Parse for ToolArgs {
         let description = description
             .ok_or_else(|| syn::Error::new(input.span(), "Missing required field: description"))?;
 
-        Ok(Self { name, description })
+        Ok(Self { description })
     }
 }
 
@@ -64,7 +64,7 @@ pub fn generate_tool_impl(args: ToolArgs, item: TokenStream) -> TokenStream {
     // Extract function components
     let func_name = &func.sig.ident;
     let func_name_str = func_name.to_string();
-    let tool_name = args.name.as_deref().unwrap_or(&func_name_str);
+    let tool_name = &func_name_str;
     let description = &args.description;
     let body = &func.block;
     let vis = &func.vis;
@@ -92,27 +92,42 @@ pub fn generate_tool_impl(args: ToolArgs, item: TokenStream) -> TokenStream {
         ::schemars::schema_for!(#args_type).to_value()
     };
 
-    // Generate the wrapper function
-    // Note: The original async fn is consumed, we generate a sync fn that returns Arc<FunctionTool>
-    // Preserves visibility, attributes, generics, and where clause from the original function
+    // Generate a struct with the function name and implement BaseTool directly
+    // Note: The original async fn is consumed, we generate a struct that implements BaseTool
+    // Preserves visibility and attributes from the original function
     quote! {
+        #[derive(Clone, Copy, Debug)]
+        #[allow(non_camel_case_types)]
         #(#attrs)*
-        #vis fn #func_name #generics () -> ::std::sync::Arc<::radkit::tools::FunctionTool>
-        #where_clause
-        {
-            ::std::sync::Arc::new(
-                ::radkit::tools::FunctionTool::new(
+        #vis struct #func_name #generics #where_clause;
+
+        #[cfg_attr(all(target_os = "wasi", target_env = "p1"), ::async_trait::async_trait(?Send))]
+        #[cfg_attr(not(all(target_os = "wasi", target_env = "p1")), ::async_trait::async_trait)]
+        impl #generics ::radkit::tools::BaseTool for #func_name #generics #where_clause {
+            fn name(&self) -> &str {
+                #tool_name
+            }
+
+            fn description(&self) -> &str {
+                #description
+            }
+
+            fn declaration(&self) -> ::radkit::tools::FunctionDeclaration {
+                ::radkit::tools::FunctionDeclaration::new(
                     #tool_name,
                     #description,
-                    |__args, __ctx| {
-                        ::std::boxed::Box::pin(async move {
-                            #param_bindings
-                            #body
-                        })
-                    }
+                    #schema_gen
                 )
-                .with_parameters_schema(#schema_gen)
-            )
+            }
+
+            async fn run_async(
+                &self,
+                __args: ::std::collections::HashMap<::std::string::String, ::serde_json::Value>,
+                __ctx: &::radkit::tools::ToolContext<'_>,
+            ) -> ::radkit::tools::ToolResult {
+                #param_bindings
+                #body
+            }
         }
     }
 }

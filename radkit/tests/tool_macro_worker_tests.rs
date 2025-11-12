@@ -67,7 +67,7 @@ async fn test_llm_worker_with_macro_tool() {
     );
 
     let worker = LlmWorker::<WeatherReport>::builder(worker_llm)
-        .with_tool(get_weather())
+        .with_tool(get_weather)
         .build();
 
     let thread = Thread::from_user("What's the weather in Seattle?");
@@ -146,8 +146,8 @@ async fn test_llm_worker_multiple_macro_tools() {
     );
 
     let worker = LlmWorker::<CalculationResult>::builder(llm)
-        .with_tool(add())
-        .with_tool(multiply())
+        .with_tool(add)
+        .with_tool(multiply)
         .build();
 
     let thread = Thread::from_user("Calculate: (2 + 3) * 4");
@@ -231,8 +231,8 @@ async fn test_llm_worker_with_context_aware_tools() {
     );
 
     let worker = LlmWorker::<StateResult>::builder(llm)
-        .with_tool(save_state())
-        .with_tool(get_state())
+        .with_tool(save_state)
+        .with_tool(get_state)
         .build();
 
     let thread = Thread::from_user("Save 'Alice' as user_name and retrieve it");
@@ -243,7 +243,7 @@ async fn test_llm_worker_with_context_aware_tools() {
 }
 
 // ============================================================================
-// Test 4: Custom tool name
+// Test 4: Function name becomes tool name
 // ============================================================================
 
 #[derive(Deserialize, JsonSchema)]
@@ -251,8 +251,8 @@ struct ApiArgs {
     endpoint: String,
 }
 
-#[tool(name = "fetch_api", description = "Fetch data from API")]
-async fn api_call(args: ApiArgs) -> ToolResult {
+#[tool(description = "Fetch data from API")]
+async fn fetch_api(args: ApiArgs) -> ToolResult {
     ToolResult::success(json!({
         "endpoint": args.endpoint,
         "data": "mock data"
@@ -260,8 +260,8 @@ async fn api_call(args: ApiArgs) -> ToolResult {
 }
 
 #[tokio::test]
-async fn test_macro_custom_tool_name() {
-    let tool = api_call();
+async fn test_macro_function_name_as_tool_name() {
+    let tool = &fetch_api as &dyn BaseTool;
     assert_eq!(tool.name(), "fetch_api");
     assert_eq!(tool.description(), "Fetch data from API");
 }
@@ -333,7 +333,7 @@ async fn test_macro_tool_with_optional_params() {
     );
 
     let worker = LlmWorker::<SearchResult>::builder(llm)
-        .with_tool(search())
+        .with_tool(search)
         .build();
 
     let thread = Thread::from_user("Search for rust then async");
@@ -409,7 +409,7 @@ async fn test_macro_tool_with_nested_structures() {
     );
 
     let worker = LlmWorker::<UserCreated>::builder(llm)
-        .with_tool(create_user())
+        .with_tool(create_user)
         .build();
 
     let thread = Thread::from_user("Create user Alice in Seattle");
@@ -425,7 +425,7 @@ async fn test_macro_tool_with_nested_structures() {
 
 #[tokio::test]
 async fn test_macro_tool_declarations() {
-    let add_tool = add();
+    let add_tool = &add as &dyn BaseTool;
     let declaration = add_tool.declaration();
 
     // Verify name and description
@@ -466,7 +466,7 @@ async fn test_macro_tool_declarations() {
 async fn test_macro_tool_invalid_arguments() {
     use radkit::tools::DefaultExecutionState;
 
-    let tool = add();
+    let tool = &add as &dyn BaseTool;
     let state = DefaultExecutionState::new();
     let ctx = ToolContext::builder()
         .with_state(&state)

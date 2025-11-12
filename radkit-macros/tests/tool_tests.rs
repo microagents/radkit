@@ -19,7 +19,7 @@ async fn add(args: AddArgs) -> ToolResult {
 
 #[tokio::test]
 async fn test_basic_tool_execution() {
-    let tool = add();
+    let tool = &add as &dyn BaseTool;
     assert_eq!(tool.name(), "add");
     assert_eq!(tool.description(), "Add two numbers");
 
@@ -55,7 +55,7 @@ async fn save_state(args: SaveArgs, ctx: &ToolContext<'_>) -> ToolResult {
 
 #[tokio::test]
 async fn test_tool_with_context() {
-    let tool = save_state();
+    let tool = &save_state as &dyn BaseTool;
     assert_eq!(tool.name(), "save_state");
     assert_eq!(tool.description(), "Save state");
 
@@ -83,20 +83,20 @@ async fn test_tool_with_context() {
     assert_eq!(saved_value, Some(json!("test_value")));
 }
 
-// Test 3: Custom tool name
+// Test 3: Function name becomes tool name
 #[derive(Deserialize, JsonSchema)]
 struct GetWeatherArgs {
     location: String,
 }
 
-#[tool(name = "weather_api", description = "Get weather")]
-async fn get_weather(args: GetWeatherArgs) -> ToolResult {
+#[tool(description = "Get weather")]
+async fn weather_api(args: GetWeatherArgs) -> ToolResult {
     ToolResult::success(json!({"temp": 72, "location": args.location}))
 }
 
 #[test]
-fn test_custom_tool_name() {
-    let tool = get_weather();
+fn test_function_name_as_tool_name() {
+    let tool = &weather_api as &dyn BaseTool;
     assert_eq!(tool.name(), "weather_api");
     assert_eq!(tool.description(), "Get weather");
 }
@@ -104,7 +104,7 @@ fn test_custom_tool_name() {
 // Test 4: Schema generation
 #[test]
 fn test_schema_generation() {
-    let tool = add();
+    let tool = &add as &dyn BaseTool;
     let declaration = tool.declaration();
     let schema = declaration.parameters();
 
@@ -141,7 +141,7 @@ async fn search(args: SearchArgs) -> ToolResult {
 
 #[tokio::test]
 async fn test_optional_parameters_with_default() {
-    let tool = search();
+    let tool = &search as &dyn BaseTool;
 
     let state = DefaultExecutionState::new();
     let ctx = ToolContext::builder()
@@ -175,7 +175,7 @@ async fn test_optional_parameters_with_default() {
 // Test 6: Invalid arguments (missing required field)
 #[tokio::test]
 async fn test_missing_required_parameter() {
-    let tool = add();
+    let tool = &add as &dyn BaseTool;
 
     let state = DefaultExecutionState::new();
     let ctx = ToolContext::builder()
@@ -199,7 +199,7 @@ async fn test_missing_required_parameter() {
 // Test 7: Wrong type for parameter
 #[tokio::test]
 async fn test_wrong_parameter_type() {
-    let tool = add();
+    let tool = &add as &dyn BaseTool;
 
     let state = DefaultExecutionState::new();
     let ctx = ToolContext::builder()
@@ -247,7 +247,7 @@ async fn create_user(args: UserArgs) -> ToolResult {
 
 #[tokio::test]
 async fn test_nested_struct_deserialization() {
-    let tool = create_user();
+    let tool = &create_user as &dyn BaseTool;
 
     let state = DefaultExecutionState::new();
     let ctx = ToolContext::builder()
@@ -318,14 +318,14 @@ pub async fn documented_tool(args: SimpleArgs) -> ToolResult {
 #[test]
 fn test_visibility_preservation() {
     // These should compile with their respective visibilities
-    let _crate_tool = crate_tool();
-    let _private_tool = private_tool();
-    let _cfg_tool = cfg_tool();
-    let _documented_tool = documented_tool();
+    let _crate_tool = &crate_tool as &dyn BaseTool;
+    let _private_tool = &private_tool as &dyn BaseTool;
+    let _cfg_tool = &cfg_tool as &dyn BaseTool;
+    let _documented_tool = &documented_tool as &dyn BaseTool;
 
     // Verify tools are callable
-    assert_eq!(crate_tool().name(), "crate_tool");
-    assert_eq!(private_tool().name(), "private_tool");
-    assert_eq!(cfg_tool().name(), "cfg_tool");
-    assert_eq!(documented_tool().name(), "documented_tool");
+    assert_eq!(crate_tool.name(), "crate_tool");
+    assert_eq!(private_tool.name(), "private_tool");
+    assert_eq!(cfg_tool.name(), "cfg_tool");
+    assert_eq!(documented_tool.name(), "documented_tool");
 }

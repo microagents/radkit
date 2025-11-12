@@ -160,7 +160,7 @@ async fn test_llm_worker_with_tool() {
     );
 
     let worker = LlmWorker::<WeatherReport>::builder(worker_llm)
-        .with_tool(Arc::new(weather_tool))
+        .with_tool(weather_tool)
         .build();
 
     let thread = Thread::from_user("What's the weather in Seattle?");
@@ -247,8 +247,8 @@ async fn test_llm_worker_multiple_tool_calls() {
     );
 
     let worker = LlmWorker::<CalculationResult>::builder(llm)
-        .with_tool(Arc::new(add_tool))
-        .with_tool(Arc::new(multiply_tool))
+        .with_tool(add_tool)
+        .with_tool(multiply_tool)
         .build();
 
     let thread = Thread::from_user("Calculate: (2 + 3) * 4");
@@ -271,11 +271,11 @@ struct SearchResult {
 #[tokio::test]
 async fn test_llm_worker_tool_execution_verification() {
     // Create a recording tool to verify it's called
-    let recording_tool = Arc::new(RecordingTool::new("search", "Search for information", {
+    let recording_tool = RecordingTool::new("search", "Search for information", {
         let mut results = VecDeque::new();
         results.push_back(ToolResult::success(json!({"results": ["item1", "item2"]})));
         results
-    }));
+    });
 
     // First response: call the search tool
     let tool_call_response = LlmResponse::new(
@@ -302,7 +302,7 @@ async fn test_llm_worker_tool_execution_verification() {
     );
 
     let worker = LlmWorker::<SearchResult>::builder(llm)
-        .with_tool(recording_tool.clone() as Arc<dyn BaseTool>)
+        .with_tool(recording_tool.clone())
         .build();
 
     let thread = Thread::from_user("Search for rust async");
@@ -355,7 +355,7 @@ async fn test_llm_worker_respects_max_iterations() {
     }
 
     let worker = LlmWorker::<SimpleResponse>::builder(llm)
-        .with_tool(Arc::new(infinite_tool))
+        .with_tool(infinite_tool)
         .with_max_iterations(5) // Set low limit for testing
         .build();
 

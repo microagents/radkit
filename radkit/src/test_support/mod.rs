@@ -184,11 +184,15 @@ pub fn structured_response<T: Serialize>(value: &T) -> LlmResponse {
 }
 
 /// Simple tool implementation that records invocations for assertions.
+///
+/// This tool can be cloned cheaply because it uses `Arc` for interior state.
+/// This allows passing one clone to a worker while keeping another to inspect calls.
+#[derive(Clone)]
 pub struct RecordingTool {
     name: String,
     description: String,
-    results: Mutex<VecDeque<ToolResult>>,
-    calls: Mutex<Vec<HashMap<String, Value>>>,
+    results: Arc<Mutex<VecDeque<ToolResult>>>,
+    calls: Arc<Mutex<Vec<HashMap<String, Value>>>>,
 }
 
 impl RecordingTool {
@@ -201,8 +205,8 @@ impl RecordingTool {
         Self {
             name: name.into(),
             description: description.into(),
-            results: Mutex::new(results.into()),
-            calls: Mutex::new(Vec::new()),
+            results: Arc::new(Mutex::new(results.into())),
+            calls: Arc::new(Mutex::new(Vec::new())),
         }
     }
 

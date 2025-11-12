@@ -6,12 +6,11 @@
 use radkit::agent::LlmWorker;
 use radkit::models::{Content, ContentPart, LlmResponse, Thread, TokenUsage};
 use radkit::test_support::{structured_response, FakeLlm};
-use radkit::tools::{BaseToolset, ToolCall, ToolResult};
+use radkit::tools::{BaseTool, BaseToolset, ToolCall, ToolResult};
 use radkit_macros::tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 
 // ============================================================================
 // E2E Test 1: Customer Service Agent with macro tools
@@ -111,8 +110,8 @@ async fn test_customer_service_agent_with_macro_tools() {
     );
 
     let worker = LlmWorker::<ServiceResult>::builder(llm)
-        .with_tool(get_customer())
-        .with_tool(update_email())
+        .with_tool(get_customer)
+        .with_tool(update_email)
         .build();
 
     let thread =
@@ -240,9 +239,9 @@ async fn test_data_analysis_workflow() {
     );
 
     let worker = LlmWorker::<AnalysisResult>::builder(llm)
-        .with_tool(load_dataset())
-        .with_tool(filter_data())
-        .with_tool(aggregate())
+        .with_tool(load_dataset)
+        .with_tool(filter_data)
+        .with_tool(aggregate)
         .build();
 
     let thread = Thread::from_user("Load sales_data, filter for values > 100, and compute average");
@@ -347,8 +346,8 @@ async fn test_agent_with_stateful_macro_tools() {
     );
 
     let worker = LlmWorker::<NotificationResult>::builder(llm)
-        .with_tool(send_notification())
-        .with_tool(log_event())
+        .with_tool(send_notification)
+        .with_tool(log_event)
         .build();
 
     let thread = Thread::from_user("Send welcome notification and log it");
@@ -363,17 +362,17 @@ async fn test_agent_with_stateful_macro_tools() {
 // ============================================================================
 
 struct MacroToolset {
-    tools: Vec<Arc<dyn radkit::tools::BaseTool>>,
+    tools: Vec<Box<dyn BaseTool>>,
 }
 
 impl MacroToolset {
     fn new() -> Self {
         Self {
             tools: vec![
-                get_customer(),
-                update_email(),
-                send_notification(),
-                log_event(),
+                Box::new(get_customer),
+                Box::new(update_email),
+                Box::new(send_notification),
+                Box::new(log_event),
             ],
         }
     }
@@ -385,8 +384,8 @@ impl MacroToolset {
     async_trait::async_trait
 )]
 impl BaseToolset for MacroToolset {
-    async fn get_tools(&self) -> Vec<Arc<dyn radkit::tools::BaseTool>> {
-        self.tools.clone()
+    async fn get_tools(&self) -> Vec<&dyn BaseTool> {
+        self.tools.iter().map(|b| b.as_ref()).collect()
     }
 
     async fn close(&self) {
@@ -527,9 +526,9 @@ async fn test_order_processing_workflow() {
     );
 
     let worker = LlmWorker::<OrderProcessingResult>::builder(llm)
-        .with_tool(validate_order())
-        .with_tool(charge_payment())
-        .with_tool(ship_order())
+        .with_tool(validate_order)
+        .with_tool(charge_payment)
+        .with_tool(ship_order)
         .build();
 
     let thread = Thread::from_user("Process order ORD-001");

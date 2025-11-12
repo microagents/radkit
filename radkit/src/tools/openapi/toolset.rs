@@ -18,8 +18,8 @@ pub struct OpenApiToolSet {
     /// Path or URL to the spec file
     spec_path: String,
     /// Generated tools (one per operation)
-    /// Each tool has its own Arc references to spec, http_client, and auth
-    tools: Vec<Arc<OpenApiOperationTool>>,
+    /// Each tool internally holds Arc references to spec and http_client for efficient sharing
+    tools: Vec<Box<dyn BaseTool>>,
 }
 
 impl OpenApiToolSet {
@@ -89,7 +89,7 @@ impl OpenApiToolSet {
         let http_client = Arc::new(Self::create_http_client(&auth)?);
 
         // Generate tools for each operation
-        let mut tools = Vec::new();
+        let mut tools: Vec<Box<dyn BaseTool>> = Vec::new();
 
         for (path, path_item_ref) in &spec.spec().paths.paths {
             let path_item = match path_item_ref {
@@ -116,7 +116,7 @@ impl OpenApiToolSet {
                     .or_else(|| operation.description.clone())
                     .unwrap_or_else(|| format!("{} {}", method, path));
 
-                let tool = Arc::new(OpenApiOperationTool::new(
+                let tool = Box::new(OpenApiOperationTool::new(
                     operation_id,
                     description,
                     method.to_string(),
@@ -226,11 +226,8 @@ pub enum HeaderOrQuery {
 // Implement BaseToolset
 #[async_trait]
 impl BaseToolset for OpenApiToolSet {
-    async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
-        self.tools
-            .iter()
-            .map(|t| t.clone() as Arc<dyn BaseTool>)
-            .collect()
+    async fn get_tools(&self) -> Vec<&dyn BaseTool> {
+        self.tools.iter().map(|b| b.as_ref()).collect()
     }
 
     async fn close(&self) {

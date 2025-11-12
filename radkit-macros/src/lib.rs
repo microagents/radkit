@@ -96,16 +96,15 @@ pub fn skill(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Attribute macro for defining tools with automatic parameter extraction.
 ///
-/// This macro generates `FunctionTool` implementations from function signatures,
-/// eliminating manual parameter extraction and JSON schema construction.
+/// This macro generates a zero-sized struct with the function name and implements
+/// the `BaseTool` trait directly, eliminating manual parameter extraction and JSON schema construction.
+///
+/// The function name is used as the tool name, so choose function names that accurately
+/// describe the tool's purpose.
 ///
 /// # Required Parameters
 ///
 /// - `description`: A detailed description of what the tool does (String)
-///
-/// # Optional Parameters
-///
-/// - `name`: Override the tool name (default: function name)
 ///
 /// # Example
 ///
@@ -143,14 +142,19 @@ pub fn skill(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// # Generated Code
 ///
-/// The macro transforms the async function into a sync function that returns
-/// `Arc<FunctionTool>`. Parameters are automatically deserialized using serde
-/// and the JSON schema is generated using schemars.
+/// The macro transforms the async function into a zero-sized struct that implements
+/// `BaseTool`. Parameters are automatically deserialized using serde and the JSON
+/// schema is generated using schemars. The function name becomes both the struct
+/// name and the tool name visible to the LLM.
 ///
 /// # Usage
 ///
 /// ```ignore
-/// let add_tool = add();  // Returns Arc<FunctionTool>
+/// // Pass the tool struct directly to with_tool() - no function call!
+/// let worker = LlmWorker::builder(llm)
+///     .with_tool(add)         // ← Not add()
+///     .with_tool(save_state)  // ← Not save_state()
+///     .build();
 /// ```
 #[proc_macro_attribute]
 pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {

@@ -14,10 +14,9 @@
 //! ```ignore
 //! use radkit::tools::{SimpleToolset, FunctionTool, ToolResult};
 //! use serde_json::json;
-//! use std::sync::Arc;
 //!
 //! // Create individual tools
-//! let weather_tool = Arc::new(FunctionTool::new(
+//! let weather_tool = Box::new(FunctionTool::new(
 //!     "get_weather",
 //!     "Get weather info",
 //!     |args, _| Box::pin(async { ToolResult::success(json!({"temp": 72})) })
@@ -53,16 +52,14 @@ use crate::{MaybeSend, MaybeSync};
     async_trait::async_trait
 )]
 pub trait BaseToolset: MaybeSend + MaybeSync {
-    /// Returns all tools in the toolset.
+    /// Returns references to all tools in the toolset.
     ///
     /// # Performance Note
     ///
-    /// This method may clone internal data structures. For [`SimpleToolset`],
-    /// this clones the `Vec<Arc<dyn BaseTool>>`, which is relatively cheap
-    /// (cloning Arcs, not the tools themselves), but still allocates.
-    ///
-    /// If you need to call this repeatedly, consider caching the result.
-    async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>>;
+    /// This method returns references to tools, avoiding cloning the tools themselves.
+    /// However, it does allocate a Vec to hold the references. The returned references
+    /// are valid for the lifetime of the toolset.
+    async fn get_tools(&self) -> Vec<&dyn BaseTool>;
 
     /// Performs cleanup and releases resources held by the toolset.
     ///
@@ -77,13 +74,13 @@ pub trait BaseToolset: MaybeSend + MaybeSync {
 /// Default implementation of `BaseToolset` for simple collections of tools
 #[derive(Default)]
 pub struct SimpleToolset {
-    tools: Vec<Arc<dyn BaseTool>>,
+    tools: Vec<Box<dyn BaseTool>>,
 }
 
 impl SimpleToolset {
     pub fn new<T>(tools: T) -> Self
     where
-        T: IntoIterator<Item = Arc<dyn BaseTool>>,
+        T: IntoIterator<Item = Box<dyn BaseTool>>,
     {
         Self {
             tools: tools.into_iter().collect(),
@@ -91,30 +88,36 @@ impl SimpleToolset {
     }
 
     /// Add a single tool to this toolset.
-    pub fn add_tool(&mut self, tool: Arc<dyn BaseTool>) {
+    pub fn add_tool(&mut self, tool: Box<dyn BaseTool>) {
         self.tools.push(tool);
     }
 
     /// Extend the toolset with additional tools.
     pub fn add_tools<T>(&mut self, tools: T)
     where
-        T: IntoIterator<Item = Arc<dyn BaseTool>>,
+        T: IntoIterator<Item = Box<dyn BaseTool>>,
     {
         self.tools.extend(tools);
     }
 
     /// Builder-style helper to add a tool while consuming the toolset.
-    pub fn with_tool(mut self, tool: Arc<dyn BaseTool>) -> Self {
-        self.add_tool(tool);
+    pub fn with_tool<U>(mut self, tool: U) -> Self
+    where
+        U: BaseTool + 'static,
+    {
+        self.add_tool(Box::new(tool));
         self
     }
 
     /// Builder-style helper to add multiple tools while consuming the toolset.
-    pub fn with_tools<T>(mut self, tools: T) -> Self
+    pub fn with_tools<I, U>(mut self, tools: I) -> Self
     where
-        T: IntoIterator<Item = Arc<dyn BaseTool>>,
+        I: IntoIterator<Item = U>,
+        U: BaseTool + 'static,
     {
-        self.add_tools(tools);
+        for tool in tools {
+            self.add_tool(Box::new(tool));
+        }
         self
     }
 }
@@ -125,8 +128,8 @@ impl SimpleToolset {
     async_trait::async_trait
 )]
 impl BaseToolset for SimpleToolset {
-    async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
-        self.tools.clone()
+    async fn get_tools(&self) -> Vec<&dyn BaseTool> {
+        self.tools.iter().map(|b| b.as_ref()).collect()
     }
 
     async fn close(&self) {
@@ -140,6 +143,12 @@ impl BaseToolset for SimpleToolset {
 /// - Combining multiple MCP toolsets
 /// - Combining MCP toolset with built-in tools
 /// - Chaining multiple `CombinedToolsets` for complex compositions
+///
+/// # Tool Name Collisions
+///
+/// If both toolsets contain tools with the same name, both tools will be present
+/// in the returned list from `get_tools()`. When used with `LlmWorker`, the last
+/// tool added (from the right toolset) will override earlier ones with the same name.
 pub struct CombinedToolset {
     left: Arc<dyn BaseToolset>,
     right: Arc<dyn BaseToolset>,
@@ -170,7 +179,7 @@ impl CombinedToolset {
     async_trait::async_trait
 )]
 impl BaseToolset for CombinedToolset {
-    async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
+    async fn get_tools(&self) -> Vec<&dyn BaseTool> {
         let mut all_tools = self.left.get_tools().await;
         all_tools.extend(self.right.get_tools().await);
         all_tools
@@ -189,16 +198,15 @@ mod tests {
     use crate::tools::function_tool::FunctionTool;
     use serde_json::json;
 
-    fn build_tool(name: &str) -> Arc<dyn BaseTool> {
-        Arc::new(FunctionTool::new(name, "test tool", |_, _| {
+    fn build_tool(name: &str) -> Box<dyn BaseTool> {
+        Box::new(FunctionTool::new(name, "test tool", |_, _| {
             Box::pin(async { crate::tools::ToolResult::success(json!(null)) })
         }))
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn simple_toolset_returns_cloned_tools() {
-        let tool = build_tool("alpha");
-        let toolset = SimpleToolset::new(vec![Arc::clone(&tool)]);
+    async fn simple_toolset_returns_tools() {
+        let toolset = SimpleToolset::new(vec![build_tool("alpha")]);
 
         let tools = toolset.get_tools().await;
         assert_eq!(tools.len(), 1);
@@ -213,8 +221,7 @@ mod tests {
         let left = Arc::new(SimpleToolset::new(vec![build_tool("left")]));
         let right = Arc::new(SimpleToolset::new(vec![build_tool("right")]));
 
-        let combined =
-            CombinedToolset::new(Arc::clone(&left) as Arc<_>, Arc::clone(&right) as Arc<_>);
+        let combined = CombinedToolset::new(left, right);
         let tools = combined.get_tools().await;
 
         let names: Vec<_> = tools.iter().map(|tool| tool.name().to_string()).collect();
@@ -228,8 +235,7 @@ mod tests {
         let left = Arc::new(SimpleToolset::new(vec![build_tool("clash")]));
         let right = Arc::new(SimpleToolset::new(vec![build_tool("clash")]));
 
-        let combined =
-            CombinedToolset::new(Arc::clone(&left) as Arc<_>, Arc::clone(&right) as Arc<_>);
+        let combined = CombinedToolset::new(left, right);
         let tools = combined.get_tools().await;
 
         let names: Vec<_> = tools.iter().map(|tool| tool.name().to_string()).collect();
