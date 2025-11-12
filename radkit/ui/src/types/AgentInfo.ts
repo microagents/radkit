@@ -4,7 +4,7 @@
  * Agent information returned to the development UI.
  *
  * This struct contains essential agent metadata including the ID,
- * which is not part of the A2A AgentCard specification.
+ * which is not part of the A2A `AgentCard` specification.
  */
 export type AgentInfo = { 
 /**

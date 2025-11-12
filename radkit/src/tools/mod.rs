@@ -29,7 +29,7 @@
 //! );
 //!
 //! // Create a toolset
-//! let toolset = SimpleToolset::new(vec![Arc::new(weather_tool)]);
+//! let toolset = SimpleToolset::new(vec![Box::new(weather_tool)]);
 //! ```
 
 mod a2a_agent_tool;
