@@ -58,3 +58,9 @@ pub mod error;
 
 pub use client::A2AClient;
 pub use error::{A2AError, A2AResult};
+
+/// Re-export A2A protocol types so downstream crates can ensure they use the
+/// exact same type definitions as the client.
+pub mod types {
+    pub use a2a_types::*;
+}

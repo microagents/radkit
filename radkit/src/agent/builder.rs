@@ -25,6 +25,7 @@
 //! ```
 
 use crate::agent::skill::{RegisteredSkill, SkillHandler, SkillMetadata};
+use std::sync::Arc;
 use uuid::Uuid;
 
 const DEFAULT_AGENT_VERSION: &str = "0.0.1";
@@ -63,7 +64,7 @@ pub struct Agent;
 /// used internally by the agent definition.
 pub struct SkillRegistration {
     pub(crate) metadata: &'static SkillMetadata,
-    pub(crate) handler: Box<dyn SkillHandler>,
+    pub(crate) handler: Arc<dyn SkillHandler>,
 }
 
 impl Agent {
@@ -188,7 +189,7 @@ impl AgentBuilder {
         let metadata = T::metadata();
         self.inner.skills.push(SkillRegistration {
             metadata,
-            handler: Box::new(skill),
+            handler: Arc::new(skill),
         });
         self
     }
@@ -285,6 +286,12 @@ impl SkillRegistration {
     #[must_use]
     pub fn handler(&self) -> &dyn SkillHandler {
         &*self.handler
+    }
+
+    /// Returns a shareable handle to the skill handler.
+    #[must_use]
+    pub fn handler_arc(&self) -> Arc<dyn SkillHandler> {
+        Arc::clone(&self.handler)
     }
 
     /// Returns the metadata associated with the skill.

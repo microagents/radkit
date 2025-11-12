@@ -120,6 +120,12 @@ pub trait TaskManager: MaybeSend + MaybeSync {
         context_id: Option<&str>,
     ) -> AgentResult<Vec<String>>;
 
+    /// Lists all known context IDs for the current auth context.
+    ///
+    /// This aggregates both contexts with persisted tasks and contexts that
+    /// only contain negotiation messages (no tasks yet).
+    async fn list_context_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>>;
+
     /// Saves the task context state for multi-turn conversations.
     ///
     /// This allows skills to persist data between `on_request` and `on_input_received` calls.

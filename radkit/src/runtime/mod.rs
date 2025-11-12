@@ -59,6 +59,10 @@ use {
     tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt},
 };
 
+// Conditional imports for dev-ui feature
+#[cfg(all(feature = "dev-ui", not(all(target_os = "wasi", target_env = "p1"))))]
+use tower_http::services::{ServeDir, ServeFile};
+
 /// Core trait for runtime implementations.
 ///
 /// Runtimes provide access to services needed during agent execution,
@@ -226,24 +230,65 @@ impl DefaultRuntime {
         // Share the runtime state with the handlers
         let shared_runtime = Arc::new(self);
 
-        // Build the Axum router
-        let app = Router::new()
-            .merge(web::dev_ui::router())
+        // Build the Axum router with A2A API routes
+        let api_routes = Router::new()
             .route(
-                "/:agent_id/.well-known/agent-card.json",
+                "/{agent_id}/.well-known/agent-card.json",
                 get(web::agent_card_handler),
             )
-            .route("/:agent_id/:version/rpc", post(web::json_rpc_handler))
+            .route("/{agent_id}/{version}/rpc", post(web::json_rpc_handler))
             .route(
-                "/:agent_id/:version/message:stream",
+                "/{agent_id}/{version}/message:stream",
                 post(web::message_stream_handler),
             )
             .route(
-                "/:agent_id/:version/tasks/:task_id/subscribe",
+                "/{agent_id}/{version}/tasks/{task_id}/subscribe",
                 post(web::task_resubscribe_handler),
             )
-            .with_state(shared_runtime)
-            .layer(TraceLayer::new_for_http());
+            .with_state(Arc::clone(&shared_runtime));
+
+        // Serve the React UI when dev-ui feature is enabled
+        #[cfg(feature = "dev-ui")]
+        let app = {
+            // Path to the UI dist directory relative to the radkit crate location
+            let ui_dist_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("ui")
+                .join("dist");
+
+            // Serve static files from ui/dist, with index.html as fallback for client-side routing
+            let serve_dir = ServeDir::new(&ui_dist_path)
+                .not_found_service(ServeFile::new(ui_dist_path.join("index.html")));
+
+            // UI-specific API routes under /ui/*
+            let ui_api_routes = Router::new()
+                .route("/ui/agents", get(web::list_agents_handler))
+                .route(
+                    "/ui/{agent_id}/{version}/contexts",
+                    get(web::list_contexts_handler),
+                )
+                .route(
+                    "/ui/{agent_id}/{version}/contexts/{context_id}/tasks",
+                    get(web::context_tasks_handler),
+                )
+                .route(
+                    "/ui/{agent_id}/{version}/tasks/{task_id}/events",
+                    get(web::task_events_handler),
+                )
+                .route(
+                    "/ui/{agent_id}/{version}/tasks/{task_id}/transitions",
+                    get(web::task_transitions_handler),
+                )
+                .with_state(Arc::clone(&shared_runtime));
+
+            // Priority: A2A routes → UI API routes → static files
+            api_routes
+                .merge(ui_api_routes)
+                .fallback_service(serve_dir)
+                .layer(TraceLayer::new_for_http())
+        };
+
+        #[cfg(not(feature = "dev-ui"))]
+        let app = api_routes.layer(TraceLayer::new_for_http());
 
         tracing::debug!("starting server on {}", address);
 

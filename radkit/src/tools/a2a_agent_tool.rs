@@ -4,11 +4,11 @@
 //! The tool handles routing, context tracking, and multi-turn conversations with remote agents.
 
 use crate::tools::{BaseTool, FunctionDeclaration, ToolContext, ToolResult};
-use a2a_client::A2AClient;
-use a2a_types::{
+use a2a_client::types::{
     AgentCard, Message, MessageRole, MessageSendParams, Part, SendMessageResponse,
     SendMessageResult, SendStreamingMessageResult, TaskState,
 };
+use a2a_client::A2AClient;
 use chrono::Utc;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -405,7 +405,7 @@ impl A2AAgentTool {
     }
 
     /// Format artifacts for display
-    fn format_artifacts(&self, artifacts: &[a2a_types::Artifact]) -> String {
+    fn format_artifacts(&self, artifacts: &[a2a_client::types::Artifact]) -> String {
         if artifacts.is_empty() {
             return String::from("No artifacts");
         }

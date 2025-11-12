@@ -55,6 +55,7 @@
 
 #![deny(unsafe_code, unreachable_patterns, unused_must_use)]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![recursion_limit = "512"]
 
 pub mod agent;
 pub mod compat;

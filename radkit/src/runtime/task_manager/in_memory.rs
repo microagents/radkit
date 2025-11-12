@@ -21,6 +21,7 @@ mod native {
         TaskManager,
     };
     use dashmap::DashMap;
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     /// An in-memory, thread-safe implementation of the [`TaskManager`].
@@ -217,6 +218,33 @@ mod native {
             Ok(task_ids)
         }
 
+        async fn list_context_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>> {
+            let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
+            let mut contexts: BTreeSet<String> = BTreeSet::new();
+
+            for task in self
+                .tasks
+                .iter()
+                .filter(|item| item.key().starts_with(&prefix))
+            {
+                contexts.insert(task.value().context_id.clone());
+            }
+
+            for entry in self
+                .events
+                .iter()
+                .filter(|item| item.key().starts_with(&prefix))
+            {
+                if let Some(stripped) = entry.key().strip_prefix(&prefix) {
+                    if let Some(context_id) = stripped.strip_prefix("_negotiation:") {
+                        contexts.insert(context_id.to_string());
+                    }
+                }
+            }
+
+            Ok(contexts.into_iter().collect())
+        }
+
         async fn save_task_context(
             &self,
             auth_ctx: &AuthContext,
@@ -291,7 +319,7 @@ mod wasm {
         TaskManager,
     };
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
 
     /// An in-memory, single-threaded implementation of the [`TaskManager`] for WASM.
     ///
@@ -442,7 +470,9 @@ mod wasm {
                 }
             }
 
-            // TODO: Sort messages chronologically by timestamp if available
+            // Sort deterministically by message id so results match native behavior.
+            messages.sort_by(|a, b| a.message_id.cmp(&b.message_id));
+
             Ok(messages)
         }
 
@@ -463,6 +493,35 @@ mod wasm {
                 .collect();
 
             Ok(task_ids)
+        }
+
+        async fn list_context_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>> {
+            let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
+            let mut contexts: BTreeSet<String> = BTreeSet::new();
+
+            for (_, task) in self
+                .tasks
+                .borrow()
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+            {
+                contexts.insert(task.context_id.clone());
+            }
+
+            for (key, _) in self
+                .events
+                .borrow()
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+            {
+                if let Some(stripped) = key.strip_prefix(&prefix) {
+                    if let Some(context_id) = stripped.strip_prefix("_negotiation:") {
+                        contexts.insert(context_id.to_string());
+                    }
+                }
+            }
+
+            Ok(contexts.into_iter().collect())
         }
 
         async fn save_task_context(

@@ -163,7 +163,13 @@ impl OpenApiToolSet {
 
     /// Create HTTP client with optional authentication
     fn create_http_client(auth: &Option<AuthConfig>) -> Result<reqwest::Client, String> {
-        let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
+        let mut builder = reqwest::Client::builder();
+
+        // Timeout is only supported on native targets
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            builder = builder.timeout(std::time::Duration::from_secs(30));
+        }
 
         // Configure default headers based on auth
         if let Some(auth) = auth {
@@ -222,7 +228,11 @@ pub enum HeaderOrQuery {
 }
 
 // Implement BaseToolset
-#[async_trait]
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
 impl BaseToolset for OpenApiToolSet {
     async fn get_tools(&self) -> Vec<Arc<dyn BaseTool>> {
         self.tools
