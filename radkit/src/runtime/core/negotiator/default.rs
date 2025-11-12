@@ -118,14 +118,18 @@ Your role is to analyze user requests and determine the appropriate action."#,
         if agent_def.skills().is_empty() {
             prompt.push_str("No skills are currently available.\n");
         } else {
-            // TODO: add skill examples once examples are added to definition
             for skill in agent_def.skills() {
+                let metadata = skill.metadata();
                 prompt.push_str(&format!(
                     "- **{}** (`{}`): {}\n",
-                    skill.name(),
-                    skill.id(),
-                    skill.description()
+                    metadata.name, metadata.id, metadata.description
                 ));
+                if !metadata.examples.is_empty() {
+                    prompt.push_str("  Examples:\n");
+                    for example in metadata.examples {
+                        prompt.push_str(&format!("    - {example}\n"));
+                    }
+                }
             }
         }
 

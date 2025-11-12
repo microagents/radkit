@@ -48,7 +48,7 @@ struct JsonRpcRequest<T> {
 }
 
 /// JSON-RPC 2.0 response structure
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum JsonRpcResponse<T> {
     Success { id: Option<JSONRPCId>, result: T },
@@ -193,6 +193,86 @@ mod sse_parser {
             }),
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use a2a_types::{
+            JSONRPCError, JSONRPCErrorResponse, JSONRPCId, Message, MessageRole, Part,
+        };
+        use bytes::Bytes;
+        use futures_util::{StreamExt, stream};
+
+        fn sample_message(text: &str) -> Message {
+            Message {
+                kind: "message".to_string(),
+                message_id: format!("msg-{text}"),
+                role: MessageRole::Agent,
+                parts: vec![Part::Text {
+                    text: text.to_string(),
+                    metadata: None,
+                }],
+                context_id: Some("ctx-1".into()),
+                task_id: Some("task-1".into()),
+                reference_task_ids: Vec::new(),
+                extensions: Vec::new(),
+                metadata: None,
+            }
+        }
+
+        #[tokio::test]
+        async fn sse_parser_emits_multiple_events_in_order() {
+            let first = JsonRpcResponse::Success {
+                id: Some(JSONRPCId::Integer(1)),
+                result: SendStreamingMessageResult::Message(sample_message("one")),
+            };
+            let second = JsonRpcResponse::Success {
+                id: Some(JSONRPCId::Integer(2)),
+                result: SendStreamingMessageResult::Message(sample_message("two")),
+            };
+            let payload = format!(
+                "data: {}\n\ndata: {}\n\n",
+                serde_json::to_string(&first).expect("json"),
+                serde_json::to_string(&second).expect("json")
+            );
+            let byte_stream = stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from(payload))]);
+
+            let mut parser = SseParser::new(byte_stream);
+            let first_item = parser.next().await.expect("first event").expect("ok");
+            let second_item = parser.next().await.expect("second event").expect("ok");
+
+            match first_item {
+                SendStreamingMessageResult::Message(msg) => {
+                    assert!(msg.parts.iter().any(|part| part.as_data().is_none()));
+                }
+                other => panic!("expected message, got {other:?}"),
+            }
+
+            match second_item {
+                SendStreamingMessageResult::Message(msg) => {
+                    assert!(msg.message_id.contains("two"));
+                }
+                other => panic!("expected message, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn process_sse_event_returns_error_for_remote_failure() {
+            let error =
+                JsonRpcResponse::<SendStreamingMessageResult>::Error(JSONRPCErrorResponse {
+                    jsonrpc: "2.0".into(),
+                    error: JSONRPCError {
+                        code: -1,
+                        message: "boom".into(),
+                        data: None,
+                    },
+                    id: Some(JSONRPCId::Integer(1)),
+                });
+            let json = serde_json::to_string(&error).expect("json");
+            let result = process_sse_event(&json);
+            assert!(matches!(result, Err(A2AError::RemoteAgentError { .. })));
+        }
+    }
 }
 
 impl A2AClient {
@@ -226,6 +306,8 @@ impl A2AClient {
     /// # Example
     ///
     /// ```no_run
+    /// # #[cfg(not(target_family = "wasm"))]
+    /// # {
     /// use a2a_client::A2AClient;
     /// use reqwest::Client;
     /// use std::time::Duration;
@@ -240,6 +322,7 @@ impl A2AClient {
     ///     http_client
     /// ).await?;
     /// # Ok(())
+    /// # }
     /// # }
     /// ```
     pub async fn from_card_url_with_client(
@@ -316,6 +399,8 @@ impl A2AClient {
     /// # Example
     ///
     /// ```no_run
+    /// # #[cfg(not(target_family = "wasm"))]
+    /// # {
     /// use a2a_client::A2AClient;
     /// use a2a_types::AgentCard;
     /// use reqwest::Client;
@@ -333,6 +418,7 @@ impl A2AClient {
     ///
     /// let client = A2AClient::from_card_with_client(agent_card, http_client)?;
     /// # Ok(())
+    /// # }
     /// # }
     /// ```
     pub fn from_card_with_client(agent_card: AgentCard, http_client: Client) -> A2AResult<Self> {
@@ -937,5 +1023,28 @@ mod tests {
         if let Err(err) = result {
             assert!(matches!(err, A2AError::InvalidParameter { .. }));
         }
+    }
+
+    #[test]
+    fn next_request_id_is_monotonic() {
+        let client = A2AClient::from_card(AgentCard::new(
+            "Test",
+            "desc",
+            "1.0.0",
+            "https://example.com",
+        ))
+        .expect("valid card");
+
+        let first = match client.next_request_id() {
+            JSONRPCId::Integer(value) => value,
+            other => panic!("unexpected id variant: {other:?}"),
+        };
+        let second = match client.next_request_id() {
+            JSONRPCId::Integer(value) => value,
+            other => panic!("unexpected id variant: {other:?}"),
+        };
+
+        assert_eq!(first, 1);
+        assert_eq!(second, 2);
     }
 }

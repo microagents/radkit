@@ -3,10 +3,12 @@
 //! Web server handlers for the `DefaultRuntime`.
 
 use crate::agent::AgentDefinition;
-use crate::errors::AgentError;
+use crate::errors::{AgentError, AgentResult};
+use crate::runtime::context::AuthContext;
 use crate::runtime::core::error_mapper;
 use crate::runtime::core::executor::{PreparedSendMessage, RequestExecutor, TaskStream};
-use crate::runtime::DefaultRuntime;
+use crate::runtime::task_manager::{Task, TaskEvent};
+use crate::runtime::{DefaultRuntime, Runtime};
 use a2a_types::{
     A2ARequestPayload, AgentCard, AgentSkill, CancelTaskResponse, CancelTaskSuccessResponse,
     GetTaskResponse, GetTaskSuccessResponse, JSONRPCErrorResponse, JSONRPCId, MessageSendParams,
@@ -136,8 +138,6 @@ pub(crate) fn build_agent_card(runtime: &DefaultRuntime, agent: &AgentDefinition
     card
 }
 
-pub mod dev_ui;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,16 +195,12 @@ mod tests {
         }
 
         fn negotiation_response(skill_id: &str) -> AgentResult<LlmResponse> {
-            let tool_call = ToolCall::new(
-                "call-1",
-                "radkit_structured_output",
-                json!({
-                    "type": "start_task",
-                    "skill_id": skill_id,
-                    "reasoning": "selected in test"
-                }),
-            );
-            FakeLlm::content_response(Content::from_parts(vec![ContentPart::ToolCall(tool_call)]))
+            let decision = json!({
+                "type": "start_task",
+                "skill_id": skill_id,
+                "reasoning": "selected in test"
+            });
+            FakeLlm::text_response(serde_json::to_string(&decision).expect("valid JSON"))
         }
 
         fn create_message(
@@ -401,6 +397,8 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
             let body = response_bytes(response).await;
             let body_str = String::from_utf8(body).expect("utf8");
+            #[cfg(test)]
+            dbg!(&body_str);
             let mut events: Vec<SendStreamingMessageResponse> = Vec::new();
             for chunk in body_str
                 .split("\n\n")
@@ -427,7 +425,14 @@ mod tests {
                     SendStreamingMessageResult::Task(task) => {
                         assert_eq!(task.status.state, TaskState::Completed);
                     }
-                    other => panic!("expected final task event, got {:?}", other),
+                    SendStreamingMessageResult::TaskStatusUpdate(status_update) => {
+                        assert_eq!(status_update.status.state, TaskState::Completed);
+                        assert!(status_update.is_final, "expected final status update");
+                    }
+                    other => panic!(
+                        "expected final task or status update event, got {:?}",
+                        other
+                    ),
                 },
                 other => panic!("unexpected error event: {:?}", other),
             }
@@ -469,36 +474,126 @@ mod tests {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn build_streaming_sse_emits_final_event() {
+        async fn build_task_with_history_collects_event_messages() {
+            use crate::runtime::task_manager::{Task, TaskEvent};
+
+            let llm = FakeLlm::with_responses("fake-llm", std::iter::empty());
+            let runtime = Arc::new(DefaultRuntime::new(llm));
+            let auth_ctx = runtime.auth_service().get_auth_context();
+            let task_manager = runtime.task_manager();
+
+            let mut stored_task = Task {
+                id: "task-42".to_string(),
+                context_id: "ctx-99".to_string(),
+                status: a2a_types::TaskStatus {
+                    state: TaskState::Working,
+                    timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                    message: None,
+                },
+                artifacts: Vec::new(),
+            };
+
+            task_manager
+                .save_task(&auth_ctx, &stored_task)
+                .await
+                .expect("store task");
+
+            let user_message = Message {
+                kind: a2a_types::MESSAGE_KIND.to_string(),
+                message_id: "msg-1".to_string(),
+                role: MessageRole::User,
+                parts: vec![Part::Text {
+                    text: "Hello runtime".to_string(),
+                    metadata: None,
+                }],
+                context_id: Some(stored_task.context_id.clone()),
+                task_id: Some(stored_task.id.clone()),
+                reference_task_ids: Vec::new(),
+                extensions: Vec::new(),
+                metadata: None,
+            };
+
+            task_manager
+                .add_task_event(&auth_ctx, &TaskEvent::Message(user_message.clone()))
+                .await
+                .expect("store user message");
+
+            let agent_message = Message {
+                kind: a2a_types::MESSAGE_KIND.to_string(),
+                message_id: "msg-2".to_string(),
+                role: MessageRole::Agent,
+                parts: vec![Part::Text {
+                    text: "Finished".to_string(),
+                    metadata: None,
+                }],
+                context_id: Some(stored_task.context_id.clone()),
+                task_id: Some(stored_task.id.clone()),
+                reference_task_ids: Vec::new(),
+                extensions: Vec::new(),
+                metadata: None,
+            };
+
+            let status_update = a2a_types::TaskStatusUpdateEvent {
+                kind: a2a_types::STATUS_UPDATE_KIND.to_string(),
+                task_id: stored_task.id.clone(),
+                context_id: stored_task.context_id.clone(),
+                status: a2a_types::TaskStatus {
+                    state: TaskState::Completed,
+                    timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                    message: Some(agent_message.clone()),
+                },
+                is_final: true,
+                metadata: None,
+            };
+
+            task_manager
+                .add_task_event(&auth_ctx, &TaskEvent::StatusUpdate(status_update))
+                .await
+                .expect("store status update");
+
+            stored_task.status.state = TaskState::Completed;
+            task_manager
+                .save_task(&auth_ctx, &stored_task)
+                .await
+                .expect("update task status");
+
+            let task = build_task_with_history(runtime.as_ref(), &auth_ctx, &stored_task)
+                .await
+                .expect("task reconstruction");
+
+            assert_eq!(task.id, stored_task.id);
+            assert_eq!(task.history.len(), 2);
+            assert!(task
+                .history
+                .iter()
+                .any(|msg| msg.role == MessageRole::User && msg.parts.len() == 1));
+            assert!(task
+                .history
+                .iter()
+                .any(|msg| msg.role == MessageRole::Agent && msg.parts.len() == 1));
+            assert_eq!(task.status.state, TaskState::Completed);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn build_streaming_sse_sends_only_status_events() {
             use crate::runtime::core::executor::TaskStream;
             use crate::runtime::task_manager::TaskEvent;
             use axum::response::IntoResponse;
 
-            let task = a2a_types::Task {
-                kind: a2a_types::TASK_KIND.to_string(),
-                id: "task-1".into(),
+            let status_event = a2a_types::TaskStatusUpdateEvent {
+                kind: a2a_types::STATUS_UPDATE_KIND.to_string(),
+                task_id: "task-1".into(),
                 context_id: "ctx-1".into(),
                 status: a2a_types::TaskStatus {
                     state: TaskState::Completed,
                     timestamp: Some(chrono::Utc::now().to_rfc3339()),
                     message: None,
                 },
-                history: Vec::new(),
-                artifacts: Vec::new(),
-                metadata: None,
-            };
-
-            let status_event = a2a_types::TaskStatusUpdateEvent {
-                kind: a2a_types::STATUS_UPDATE_KIND.to_string(),
-                task_id: task.id.clone(),
-                context_id: task.context_id.clone(),
-                status: task.status.clone(),
                 is_final: true,
                 metadata: None,
             };
 
             let stream = TaskStream {
-                task: task.clone(),
                 initial_events: vec![TaskEvent::StatusUpdate(status_event)],
                 receiver: None,
             };
@@ -521,11 +616,16 @@ mod tests {
                 })
                 .collect();
 
-            assert!(events.iter().any(|event| matches!(
-                event,
-                SendStreamingMessageResponse::Success(success)
-                    if matches!(success.result, SendStreamingMessageResult::Task(_))
-            )));
+            assert_eq!(events.len(), 1);
+            match &events[0] {
+                SendStreamingMessageResponse::Success(success) => match &success.result {
+                    SendStreamingMessageResult::TaskStatusUpdate(update) => {
+                        assert!(update.is_final);
+                    }
+                    other => panic!("unexpected streaming payload: {other:?}"),
+                },
+                other => panic!("unexpected response: {other:?}"),
+            }
         }
     }
 }
@@ -686,8 +786,13 @@ fn build_streaming_sse(
     request_id: Option<JSONRPCId>,
     stream_state: TaskStream,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    #[cfg(test)]
+    let init_event_len = stream_state.initial_events.len();
+    #[cfg(test)]
+    let has_receiver = stream_state.receiver.is_some();
     let mut initial_events = stream_state.initial_events.into_iter();
-    let task = stream_state.task.clone();
+    #[cfg(test)]
+    eprintln!("stream init events={init_event_len} receiver={has_receiver}");
     let id_clone = request_id.clone();
     let receiver = stream_state.receiver;
     let stream = stream! {
@@ -698,9 +803,6 @@ fn build_streaming_sse(
                 yield Ok(evt);
                 if is_final {
                     final_seen = true;
-                    if let Some(task_evt) = task_to_event(&request_id, &task) {
-                        yield Ok(task_evt);
-                    }
                     break;
                 }
             }
@@ -712,15 +814,10 @@ fn build_streaming_sse(
                     if let Some((evt, is_final)) = task_event_to_event(&id_clone, event) {
                         yield Ok(evt);
                         if is_final {
-                            if let Some(task_evt) = task_to_event(&id_clone, &task) {
-                                yield Ok(task_evt);
-                            }
                             break;
                         }
                     }
                 }
-            } else if let Some(task_evt) = task_to_event(&id_clone, &task) {
-                yield Ok(task_evt);
             }
         }
     };
@@ -832,22 +929,7 @@ fn task_event_to_event(
     request_id: &Option<JSONRPCId>,
     event: crate::runtime::task_manager::TaskEvent,
 ) -> Option<(Event, bool)> {
-    let (result, is_final) = match event {
-        crate::runtime::task_manager::TaskEvent::StatusUpdate(update) => {
-            let is_final = update.is_final;
-            (
-                SendStreamingMessageResult::TaskStatusUpdate(update),
-                is_final,
-            )
-        }
-        crate::runtime::task_manager::TaskEvent::ArtifactUpdate(update) => (
-            SendStreamingMessageResult::TaskArtifactUpdate(update),
-            false,
-        ),
-        crate::runtime::task_manager::TaskEvent::Message(message) => {
-            (SendStreamingMessageResult::Message(message), false)
-        }
-    };
+    let (result, is_final) = convert_task_event(event);
 
     let response =
         SendStreamingMessageResponse::Success(Box::new(SendStreamingMessageSuccessResponse {
@@ -861,15 +943,383 @@ fn task_event_to_event(
         .map(|data| (Event::default().data(data), is_final))
 }
 
-fn task_to_event(request_id: &Option<JSONRPCId>, task: &a2a_types::Task) -> Option<Event> {
-    let response =
-        SendStreamingMessageResponse::Success(Box::new(SendStreamingMessageSuccessResponse {
-            jsonrpc: "2.0".to_string(),
-            result: SendStreamingMessageResult::Task(task.clone()),
-            id: request_id.clone(),
-        }));
+fn convert_task_event(event: TaskEvent) -> (SendStreamingMessageResult, bool) {
+    match event {
+        TaskEvent::StatusUpdate(update) => {
+            let is_final = update.is_final;
+            (
+                SendStreamingMessageResult::TaskStatusUpdate(update),
+                is_final,
+            )
+        }
+        TaskEvent::ArtifactUpdate(update) => (
+            SendStreamingMessageResult::TaskArtifactUpdate(update),
+            false,
+        ),
+        TaskEvent::Message(message) => (SendStreamingMessageResult::Message(message), false),
+    }
+}
 
-    serde_json::to_string(&response)
-        .ok()
-        .map(|data| Event::default().data(data))
+/// Agent information returned to the development UI.
+///
+/// This struct contains essential agent metadata including the ID,
+/// which is not part of the A2A `AgentCard` specification.
+#[cfg(feature = "dev-ui")]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../ui/src/types/")]
+pub struct AgentInfo {
+    /// Unique identifier for this agent
+    pub id: String,
+    /// Human-readable agent name
+    pub name: String,
+    /// Agent version string
+    pub version: String,
+    /// Optional description of agent capabilities
+    #[ts(optional)]
+    pub description: Option<String>,
+    /// Number of skills registered with this agent
+    pub skill_count: usize,
+}
+
+#[cfg(feature = "dev-ui")]
+impl AgentInfo {
+    /// Create an `AgentInfo` from an `AgentDefinition`
+    fn from_agent_definition(agent: &crate::agent::AgentDefinition) -> Self {
+        Self {
+            id: agent.id().to_string(),
+            name: agent.name().to_string(),
+            version: agent.version().to_string(),
+            description: agent.description().map(String::from),
+            skill_count: agent.skills.len(),
+        }
+    }
+}
+
+/// Handler for listing all registered agents (dev-ui only)
+///
+/// Returns a JSON array of agent information for all registered agents.
+/// This endpoint is used by the development UI for agent discovery.
+#[cfg(feature = "dev-ui")]
+pub async fn list_agents_handler(
+    State(runtime): State<Arc<DefaultRuntime>>,
+) -> Json<Vec<AgentInfo>> {
+    let agents = runtime
+        .agents
+        .iter()
+        .map(AgentInfo::from_agent_definition)
+        .collect();
+
+    Json(agents)
+}
+
+/// Handler for listing context IDs for an agent (dev-ui only)
+///
+/// Returns a JSON array of context IDs that have tasks associated with them.
+#[cfg(feature = "dev-ui")]
+pub async fn list_contexts_handler(
+    State(runtime): State<Arc<DefaultRuntime>>,
+    Path((agent_id, _version)): Path<(String, String)>,
+) -> Response {
+    let agent = runtime.agents.iter().find(|agent| agent.id() == agent_id);
+
+    if agent.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Agent not found"})),
+        )
+            .into_response();
+    }
+
+    let auth_ctx = runtime.auth_service().get_auth_context();
+    match runtime.task_manager().list_context_ids(&auth_ctx).await {
+        Ok(context_ids) => Json(context_ids).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+#[cfg(feature = "dev-ui")]
+#[derive(serde::Serialize)]
+struct UiTaskSummary {
+    task: a2a_types::Task,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending_slot: Option<serde_json::Value>,
+}
+
+#[cfg(feature = "dev-ui")]
+#[derive(serde::Serialize)]
+struct UiTaskEvent {
+    result: SendStreamingMessageResult,
+    is_final: bool,
+}
+
+#[cfg(feature = "dev-ui")]
+#[derive(serde::Serialize)]
+struct UiTaskEventsResponse {
+    events: Vec<UiTaskEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task: Option<a2a_types::Task>,
+}
+
+#[cfg(feature = "dev-ui")]
+pub async fn context_tasks_handler(
+    State(runtime): State<Arc<DefaultRuntime>>,
+    Path((agent_id, version, context_id)): Path<(String, String, String)>,
+) -> Response {
+    match fetch_context_tasks(&runtime, &agent_id, &version, &context_id).await {
+        Ok(tasks) => Json(tasks).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+#[cfg(feature = "dev-ui")]
+pub async fn task_events_handler(
+    State(runtime): State<Arc<DefaultRuntime>>,
+    Path((agent_id, version, task_id)): Path<(String, String, String)>,
+) -> Response {
+    match fetch_task_events(&runtime, &agent_id, &version, &task_id).await {
+        Ok(body) => Json(body).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+#[cfg(feature = "dev-ui")]
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "dev-ui", derive(ts_rs::TS))]
+#[cfg_attr(feature = "dev-ui", ts(export, export_to = "../ui/src/types/"))]
+pub struct StateTransition {
+    from_state: Option<String>,
+    to_state: String,
+    timestamp: String,
+    trigger: String,
+}
+
+#[cfg(feature = "dev-ui")]
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "dev-ui", derive(ts_rs::TS))]
+#[cfg_attr(feature = "dev-ui", ts(export, export_to = "../ui/src/types/"))]
+pub struct TaskTransitionsResponse {
+    transitions: Vec<StateTransition>,
+}
+
+#[cfg(feature = "dev-ui")]
+pub async fn task_transitions_handler(
+    State(runtime): State<Arc<DefaultRuntime>>,
+    Path((agent_id, version, task_id)): Path<(String, String, String)>,
+) -> Response {
+    match fetch_task_transitions(&runtime, &agent_id, &version, &task_id).await {
+        Ok(transitions) => Json(transitions).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+#[cfg(feature = "dev-ui")]
+async fn fetch_task_transitions(
+    runtime: &Arc<DefaultRuntime>,
+    agent_id: &str,
+    version: &str,
+    task_id: &str,
+) -> AgentResult<TaskTransitionsResponse> {
+    use a2a_types::TaskState;
+
+    let agent = runtime
+        .agents
+        .iter()
+        .find(|agent| agent.id() == agent_id)
+        .ok_or_else(|| AgentError::AgentNotFound {
+            agent_id: agent_id.to_string(),
+        })?;
+
+    if agent.version() != version {
+        return Err(AgentError::AgentNotFound {
+            agent_id: agent_id.to_string(),
+        });
+    }
+
+    let auth_ctx = runtime.auth_service().get_auth_context();
+    let events = runtime
+        .task_manager()
+        .get_task_events(&auth_ctx, task_id)
+        .await?;
+
+    let mut transitions = Vec::new();
+    let mut prev_state: Option<TaskState> = None;
+
+    for event in events {
+        if let TaskEvent::StatusUpdate(update) = event {
+            let current_state = update.status.state.clone();
+
+            // Determine trigger type based on state transition
+            let trigger = match (&prev_state, &current_state) {
+                // Initial transition to Submitted or Working
+                (None, TaskState::Submitted | TaskState::Working) => "on_request",
+                // Transition from InputRequired back to Working
+                (Some(TaskState::InputRequired), TaskState::Working) => "on_input_received",
+                // All other transitions
+                _ => "status_update",
+            };
+
+            transitions.push(StateTransition {
+                from_state: prev_state.as_ref().map(|s| format!("{s:?}")),
+                to_state: format!("{current_state:?}"),
+                timestamp: update
+                    .status
+                    .timestamp
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                trigger: trigger.to_string(),
+            });
+
+            prev_state = Some(current_state);
+        }
+    }
+
+    Ok(TaskTransitionsResponse { transitions })
+}
+
+#[cfg(feature = "dev-ui")]
+async fn fetch_context_tasks(
+    runtime: &Arc<DefaultRuntime>,
+    agent_id: &str,
+    version: &str,
+    context_id: &str,
+) -> AgentResult<Vec<UiTaskSummary>> {
+    let agent = runtime
+        .agents
+        .iter()
+        .find(|agent| agent.id() == agent_id)
+        .ok_or_else(|| AgentError::AgentNotFound {
+            agent_id: agent_id.to_string(),
+        })?;
+
+    if agent.version() != version {
+        return Err(AgentError::AgentNotFound {
+            agent_id: agent_id.to_string(),
+        });
+    }
+
+    let auth_ctx = runtime.auth_service().get_auth_context();
+    let task_ids = runtime
+        .task_manager()
+        .list_task_ids(&auth_ctx, Some(context_id))
+        .await?;
+
+    let mut summaries = Vec::new();
+    for task_id in task_ids {
+        if let Some(stored_task) = runtime.task_manager().get_task(&auth_ctx, &task_id).await? {
+            let task = build_task_with_history(runtime.as_ref(), &auth_ctx, &stored_task).await?;
+            let skill_id = runtime
+                .task_manager()
+                .get_task_skill(&auth_ctx, &task_id)
+                .await?;
+            let pending_slot = runtime
+                .task_manager()
+                .load_task_context(&auth_ctx, &task_id)
+                .await?
+                .and_then(|ctx| {
+                    ctx.current_slot()
+                        .and_then(|slot| slot.deserialize::<serde_json::Value>().ok())
+                });
+
+            summaries.push(UiTaskSummary {
+                task,
+                skill_id,
+                pending_slot,
+            });
+        }
+    }
+
+    summaries.sort_by(|a, b| b.task.status.timestamp.cmp(&a.task.status.timestamp));
+
+    Ok(summaries)
+}
+
+#[cfg(feature = "dev-ui")]
+async fn fetch_task_events(
+    runtime: &Arc<DefaultRuntime>,
+    agent_id: &str,
+    version: &str,
+    task_id: &str,
+) -> AgentResult<UiTaskEventsResponse> {
+    let agent = runtime
+        .agents
+        .iter()
+        .find(|agent| agent.id() == agent_id)
+        .ok_or_else(|| AgentError::AgentNotFound {
+            agent_id: agent_id.to_string(),
+        })?;
+
+    if agent.version() != version {
+        return Err(AgentError::AgentNotFound {
+            agent_id: agent_id.to_string(),
+        });
+    }
+
+    let auth_ctx = runtime.auth_service().get_auth_context();
+    let events = runtime
+        .task_manager()
+        .get_task_events(&auth_ctx, task_id)
+        .await?;
+
+    let mut serialized_events = Vec::new();
+    let mut final_seen = false;
+    for event in events {
+        let (result, is_final) = convert_task_event(event);
+        if is_final {
+            final_seen = true;
+        }
+        serialized_events.push(UiTaskEvent { result, is_final });
+    }
+
+    let stored_task = runtime.task_manager().get_task(&auth_ctx, task_id).await?;
+
+    let task_snapshot = if let Some(task) = stored_task {
+        Some(build_task_with_history(runtime.as_ref(), &auth_ctx, &task).await?)
+    } else {
+        None
+    };
+
+    if final_seen {
+        if let Some(task) = &task_snapshot {
+            serialized_events.push(UiTaskEvent {
+                result: SendStreamingMessageResult::Task(task.clone()),
+                is_final: true,
+            });
+        }
+    }
+
+    Ok(UiTaskEventsResponse {
+        events: serialized_events,
+        task: task_snapshot,
+    })
+}
+
+async fn build_task_with_history(
+    runtime: &DefaultRuntime,
+    auth_ctx: &AuthContext,
+    stored_task: &Task,
+) -> AgentResult<a2a_types::Task> {
+    let events = runtime
+        .task_manager()
+        .get_task_events(auth_ctx, &stored_task.id)
+        .await?;
+
+    let history: Vec<a2a_types::Message> = events
+        .into_iter()
+        .filter_map(|event| match event {
+            TaskEvent::Message(msg) => Some(msg),
+            TaskEvent::StatusUpdate(update) => update.status.message,
+            _ => None,
+        })
+        .collect();
+
+    Ok(a2a_types::Task {
+        id: stored_task.id.clone(),
+        context_id: stored_task.context_id.clone(),
+        status: stored_task.status.clone(),
+        artifacts: stored_task.artifacts.clone(),
+        history,
+        kind: a2a_types::TASK_KIND.to_string(),
+        metadata: None,
+    })
 }

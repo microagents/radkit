@@ -11,7 +11,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 
 // ============================================================================
 // Test 1: LlmFunction basic usage in skill-like scenario
@@ -44,13 +43,18 @@ async fn test_llm_function_with_system_instructions() {
     assert_eq!(result.sentiment, "positive");
     assert_eq!(result.confidence, 0.95);
 
-    // Verify system instructions were applied (includes structured output schema)
+    // Verify system instructions were applied (includes both custom and schema instructions)
     let calls = llm.calls();
     assert_eq!(calls.len(), 1);
-    assert!(calls[0]
-        .system()
-        .unwrap()
-        .starts_with("You are a sentiment analyzer."));
+    let system_instructions = calls[0].system().expect("system instructions present");
+    assert!(
+        system_instructions.contains("You are a sentiment analyzer."),
+        "Expected system instructions to contain custom instructions"
+    );
+    assert!(
+        system_instructions.contains("JSON object matching the following schema"),
+        "Expected system instructions to contain schema instructions"
+    );
 }
 
 // ============================================================================

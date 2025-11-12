@@ -1309,3 +1309,81 @@ pub struct TaskArtifactUpdateEvent {
 fn default_artifact_update_kind() -> String {
     ARTIFACT_UPDATE_KIND.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_message(role: MessageRole, text: &str) -> Message {
+        Message {
+            kind: MESSAGE_KIND.to_string(),
+            message_id: format!("msg-{text}"),
+            role,
+            parts: vec![Part::Text {
+                text: text.to_string(),
+                metadata: None,
+            }],
+            context_id: Some("ctx-1".into()),
+            task_id: Some("task-1".into()),
+            reference_task_ids: Vec::new(),
+            extensions: Vec::new(),
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn json_parse_error_defaults_match_constants() {
+        let err = JSONParseError::default();
+        assert_eq!(err.code, JSON_PARSE_ERROR_CODE);
+        assert_eq!(err.message, JSON_PARSE_ERROR_MESSAGE);
+        assert!(err.data.is_none());
+    }
+
+    #[test]
+    fn task_serialization_includes_default_kind_and_history() {
+        let status = TaskStatus {
+            state: TaskState::Working,
+            timestamp: Some("2024-01-01T00:00:00Z".into()),
+            message: Some(sample_message(MessageRole::Agent, "status")),
+        };
+        let task = Task {
+            kind: default_task_kind(),
+            id: "task-1".into(),
+            context_id: "ctx-1".into(),
+            status,
+            history: vec![sample_message(MessageRole::User, "hello")],
+            artifacts: Vec::new(),
+            metadata: None,
+        };
+
+        let serialized = serde_json::to_value(&task).expect("task json");
+        assert_eq!(serialized["kind"], json!(TASK_KIND));
+        assert_eq!(serialized["history"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn send_message_response_round_trips() {
+        let response = SendMessageResponse::Success(Box::new(SendMessageSuccessResponse {
+            jsonrpc: "2.0".to_string(),
+            result: SendMessageResult::Message(sample_message(MessageRole::Agent, "result")),
+            id: Some(JSONRPCId::Integer(7)),
+        }));
+
+        let json = serde_json::to_string(&response).expect("serialize");
+        let decoded: SendMessageResponse = serde_json::from_str(&json).expect("deserialize");
+
+        match decoded {
+            SendMessageResponse::Success(success) => {
+                assert_eq!(success.id, Some(JSONRPCId::Integer(7)));
+                match success.result {
+                    SendMessageResult::Message(msg) => {
+                        assert!(msg.message_id.contains("result"));
+                    }
+                    other => panic!("expected message result, got {other:?}"),
+                }
+            }
+            other => panic!("expected success response, got {other:?}"),
+        }
+    }
+}

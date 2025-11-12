@@ -169,7 +169,7 @@ where
 
         // Combine with user system instructions if present
         let combined_instructions = if let Some(user_instructions) = &self.system_instructions {
-            format!("{}\n\n{}", user_instructions, structured_instructions)
+            format!("{user_instructions}\n\n{structured_instructions}")
         } else {
             structured_instructions
         };

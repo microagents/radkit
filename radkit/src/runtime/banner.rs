@@ -26,10 +26,15 @@ pub fn display_banner(address: &str, base_url: Option<&str>, agents: &Arc<Vec<Ag
     println!("  Agentic SDK for Rust");
     let effective_base_url = base_url.map_or_else(|| infer_base_url(address), String::from);
 
+    #[cfg(feature = "dev-ui")]
     println!(
         "  Dev UI:     {}/",
         effective_base_url.trim_end_matches('/')
     );
+
+    #[cfg(not(feature = "dev-ui"))]
+    println!("  API URL:    {}", effective_base_url.trim_end_matches('/'));
+
     println!();
 
     // Server info

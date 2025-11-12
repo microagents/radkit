@@ -68,8 +68,8 @@ Example response format:
 /// - Unquoted keys
 /// - Type mismatches (e.g., string numbers)
 /// - Mixed text and JSON
-/// - Fuzzy field name matching (user_name matches userName, user-name, etc.)
-/// - Fuzzy enum matching (InProgress matches "in_progress", "inprogress", etc.)
+/// - Fuzzy field name matching (`user_name` matches userName, user-name, etc.)
+/// - Fuzzy enum matching (`InProgress` matches "`in_progress`", "inprogress", etc.)
 ///
 /// For types that derive `serde::Deserialize`, this provides basic parsing with
 /// automatic type coercion (e.g., "42" -> 42). Tryparse will use its standard

@@ -234,7 +234,7 @@ where
 
         // Combine with user system instructions if present
         let combined_instructions = if let Some(user_instructions) = &self.system_instructions {
-            format!("{}\n\n{}", user_instructions, structured_instructions)
+            format!("{user_instructions}\n\n{structured_instructions}")
         } else {
             structured_instructions
         };
@@ -316,18 +316,15 @@ where
             // If there are no tool calls, try to parse the content as final structured output
             if tool_calls.is_empty() {
                 // Try to extract structured output from text
-                match extract_structured_output::<T>(content.clone()) {
-                    Ok(value) => {
-                        // Successfully parsed - add assistant content and return
-                        thread = thread.add_event(Event::assistant(content));
-                        return Ok(WorkerOutcome { value, thread });
-                    }
-                    Err(_) => {
-                        // Parsing failed - this might be intermediate reasoning text
-                        // Add it to the thread and continue (LLM might need another turn)
-                        thread = thread.add_event(Event::assistant(content));
-                        continue;
-                    }
+                if let Ok(value) = extract_structured_output::<T>(content.clone()) {
+                    // Successfully parsed - add assistant content and return
+                    thread = thread.add_event(Event::assistant(content));
+                    return Ok(WorkerOutcome { value, thread });
+                } else {
+                    // Parsing failed - this might be intermediate reasoning text
+                    // Add it to the thread and continue (LLM might need another turn)
+                    thread = thread.add_event(Event::assistant(content));
+                    continue;
                 }
             }
 
