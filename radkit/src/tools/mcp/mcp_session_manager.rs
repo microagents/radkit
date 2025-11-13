@@ -407,7 +407,7 @@ mod tests {
 
         let params2 = MCPConnectionParams::Http {
             url: "https://example.com/mcp2".to_string(),
-            headers: headers.clone(),
+            headers,
             timeout: Duration::from_secs(30),
         };
 

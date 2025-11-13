@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// This enum is marked `#[non_exhaustive]` to allow adding new roles
 /// (e.g., `Function`, `Developer`) without breaking changes.
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, derive_more::Display)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, derive_more::Display)]
 pub enum Role {
     System,
     User,

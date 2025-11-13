@@ -108,6 +108,7 @@ impl AgentBuilder {
     /// let builder = Agent::builder()
     ///     .with_id("weather-agent");
     /// ```
+    #[must_use]
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.inner.id = id.into();
         self
@@ -127,12 +128,14 @@ impl AgentBuilder {
     /// let builder = Agent::builder()
     ///     .with_name("Weather Assistant");
     /// ```
+    #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.inner.name = name.into();
         self
     }
 
     /// Sets the agent version string used for versioned transport routes.
+    #[must_use]
     pub fn with_version(mut self, version: impl Into<String>) -> Self {
         self.inner.version = version.into();
         self
@@ -152,6 +155,7 @@ impl AgentBuilder {
     /// let builder = Agent::builder()
     ///     .with_description("Provides weather forecasts and alerts");
     /// ```
+    #[must_use]
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.inner.description = Some(description.into());
         self
@@ -172,6 +176,7 @@ impl AgentBuilder {
     /// let builder = Agent::builder()
     ///     .with_dispatcher_prompt("Select the appropriate weather skill");
     /// ```
+    #[must_use]
     pub fn with_dispatcher_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.inner.dispatcher_prompt = Some(prompt.into());
         self
@@ -182,6 +187,7 @@ impl AgentBuilder {
     /// The skill must implement [`RegisteredSkill`], typically derived by the
     /// `#[skill]` macro. Metadata such as the id, name, and MIME modes are sourced
     /// from the skill implementation itself.
+    #[must_use]
     pub fn with_skill<T>(mut self, skill: T) -> Self
     where
         T: RegisteredSkill + 'static,

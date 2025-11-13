@@ -116,6 +116,7 @@ impl GeminiLlm {
     }
 
     /// Sets a custom base URL for the API endpoint.
+    #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
@@ -154,162 +155,7 @@ impl GeminiLlm {
             system_parts.push(system);
         }
 
-        for event in events {
-            let role = event.role().clone();
-            let content = event.into_content();
-
-            match role {
-                Role::System => {
-                    // System messages go into systemInstruction
-                    if let Some(text) = content.joined_texts() {
-                        system_parts.push(text);
-                    }
-                }
-                Role::User => {
-                    // User role maps to "user" in Gemini
-                    let mut parts = Vec::new();
-
-                    for part in content {
-                        match part {
-                            ContentPart::Text(text) => {
-                                parts.push(json!({"text": text}));
-                            }
-                            ContentPart::Data(data) => {
-                                let part = match data.source {
-                                    crate::models::DataSource::Base64(b64) => {
-                                        json!({
-                                            "inline_data": {
-                                                "mime_type": data.content_type,
-                                                "data": b64
-                                            }
-                                        })
-                                    }
-                                    crate::models::DataSource::Uri(uri) => {
-                                        json!({
-                                            "fileData": {
-                                                "mime_type": data.content_type,
-                                                "fileUri": uri
-                                            }
-                                        })
-                                    }
-                                };
-                                parts.push(part);
-                            }
-                            ContentPart::ToolCall(tool_call) => {
-                                // Tool calls in user messages (for echoing back)
-                                parts.push(json!({
-                                    "functionCall": {
-                                        "name": tool_call.name(),
-                                        "args": tool_call.arguments()
-                                    }
-                                }));
-                            }
-                            ContentPart::ToolResponse(tool_response) => {
-                                // Tool responses go as functionResponse
-                                let result = tool_response.result();
-                                let response_content = if result.is_success() {
-                                    result.data().clone()
-                                } else {
-                                    json!({
-                                        "error": result.error_message().unwrap_or("Unknown error")
-                                    })
-                                };
-
-                                parts.push(json!({
-                                    "functionResponse": {
-                                        "name": tool_response.tool_call_id(),
-                                        "response": {
-                                            "name": tool_response.tool_call_id(),
-                                            "content": response_content
-                                        }
-                                    }
-                                }));
-                            }
-                        }
-                    }
-
-                    if !parts.is_empty() {
-                        contents.push(json!({
-                            "role": "user",
-                            "parts": parts
-                        }));
-                    }
-                }
-                Role::Assistant => {
-                    // Assistant role maps to "model" in Gemini
-                    let mut parts = Vec::new();
-
-                    for part in content {
-                        match part {
-                            ContentPart::Text(text) => {
-                                parts.push(json!({"text": text}));
-                            }
-                            ContentPart::ToolCall(tool_call) => {
-                                parts.push(json!({
-                                    "functionCall": {
-                                        "name": tool_call.name(),
-                                        "args": tool_call.arguments()
-                                    }
-                                }));
-                            }
-                            _ => {} // Gemini doesn't support other types in assistant messages
-                        }
-                    }
-
-                    if !parts.is_empty() {
-                        contents.push(json!({
-                            "role": "model",
-                            "parts": parts
-                        }));
-                    }
-                }
-                Role::Tool => {
-                    // Tool role messages go as user messages with functionResponse
-                    let mut parts = Vec::new();
-
-                    for part in content {
-                        match part {
-                            ContentPart::ToolResponse(tool_response) => {
-                                let result = tool_response.result();
-                                let response_content = if result.is_success() {
-                                    result.data().clone()
-                                } else {
-                                    json!({
-                                        "error": result.error_message().unwrap_or("Unknown error")
-                                    })
-                                };
-
-                                parts.push(json!({
-                                    "functionResponse": {
-                                        "name": tool_response.tool_call_id(),
-                                        "response": {
-                                            "name": tool_response.tool_call_id(),
-                                            "content": response_content
-                                        }
-                                    }
-                                }));
-                            }
-                            ContentPart::ToolCall(tool_call) => {
-                                parts.push(json!({
-                                    "functionCall": {
-                                        "name": tool_call.name(),
-                                        "args": tool_call.arguments()
-                                    }
-                                }));
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if !parts.is_empty() {
-                        contents.push(json!({
-                            "role": "user",
-                            "parts": parts
-                        }));
-                    }
-                }
-            }
-        }
+        Self::build_contents_from_events(events, &mut contents, &mut system_parts);
 
         // Build the base payload
         let mut payload = json!({
@@ -325,21 +171,215 @@ impl GeminiLlm {
         }
 
         // Add generationConfig
+        Self::add_generation_config(&mut payload, self.temperature, self.max_tokens);
+
+        // Add tools if provided
+        Self::add_tools_to_payload(&mut payload, toolset).await;
+
+        Ok(payload)
+    }
+
+    /// Builds Gemini-formatted contents from thread events.
+    fn build_contents_from_events(
+        events: Vec<crate::models::Event>,
+        contents: &mut Vec<Value>,
+        system_parts: &mut Vec<String>,
+    ) {
+        for event in events {
+            let role = *event.role();
+            let content = event.into_content();
+
+            match role {
+                Role::System => {
+                    Self::process_system_message(&content, system_parts);
+                }
+                Role::User => {
+                    Self::process_user_message(content, contents);
+                }
+                Role::Assistant => {
+                    Self::process_assistant_message(content, contents);
+                }
+                Role::Tool => {
+                    Self::process_tool_message(content, contents);
+                }
+            }
+        }
+    }
+
+    /// Processes system messages.
+    fn process_system_message(content: &Content, system_parts: &mut Vec<String>) {
+        if let Some(text) = content.joined_texts() {
+            system_parts.push(text);
+        }
+    }
+
+    /// Processes user messages.
+    fn process_user_message(content: Content, contents: &mut Vec<Value>) {
+        let mut parts = Vec::new();
+
+        for part in content {
+            match part {
+                ContentPart::Text(text) => {
+                    parts.push(json!({"text": text}));
+                }
+                ContentPart::Data(data) => {
+                    let part = match data.source {
+                        crate::models::DataSource::Base64(b64) => {
+                            json!({
+                                "inline_data": {
+                                    "mime_type": data.content_type,
+                                    "data": b64
+                                }
+                            })
+                        }
+                        crate::models::DataSource::Uri(uri) => {
+                            json!({
+                                "fileData": {
+                                    "mime_type": data.content_type,
+                                    "fileUri": uri
+                                }
+                            })
+                        }
+                    };
+                    parts.push(part);
+                }
+                ContentPart::ToolCall(tool_call) => {
+                    parts.push(json!({
+                        "functionCall": {
+                            "name": tool_call.name(),
+                            "args": tool_call.arguments()
+                        }
+                    }));
+                }
+                ContentPart::ToolResponse(tool_response) => {
+                    let result = tool_response.result();
+                    let response_content = if result.is_success() {
+                        result.data().clone()
+                    } else {
+                        json!({
+                            "error": result.error_message().unwrap_or("Unknown error")
+                        })
+                    };
+
+                    parts.push(json!({
+                        "functionResponse": {
+                            "name": tool_response.tool_call_id(),
+                            "response": {
+                                "name": tool_response.tool_call_id(),
+                                "content": response_content
+                            }
+                        }
+                    }));
+                }
+            }
+        }
+
+        if !parts.is_empty() {
+            contents.push(json!({
+                "role": "user",
+                "parts": parts
+            }));
+        }
+    }
+
+    /// Processes assistant messages.
+    fn process_assistant_message(content: Content, contents: &mut Vec<Value>) {
+        let mut parts = Vec::new();
+
+        for part in content {
+            match part {
+                ContentPart::Text(text) => {
+                    parts.push(json!({"text": text}));
+                }
+                ContentPart::ToolCall(tool_call) => {
+                    parts.push(json!({
+                        "functionCall": {
+                            "name": tool_call.name(),
+                            "args": tool_call.arguments()
+                        }
+                    }));
+                }
+                _ => {} // Gemini doesn't support other types in assistant messages
+            }
+        }
+
+        if !parts.is_empty() {
+            contents.push(json!({
+                "role": "model",
+                "parts": parts
+            }));
+        }
+    }
+
+    /// Processes tool messages.
+    fn process_tool_message(content: Content, contents: &mut Vec<Value>) {
+        let mut parts = Vec::new();
+
+        for part in content {
+            match part {
+                ContentPart::ToolResponse(tool_response) => {
+                    let result = tool_response.result();
+                    let response_content = if result.is_success() {
+                        result.data().clone()
+                    } else {
+                        json!({
+                            "error": result.error_message().unwrap_or("Unknown error")
+                        })
+                    };
+
+                    parts.push(json!({
+                        "functionResponse": {
+                            "name": tool_response.tool_call_id(),
+                            "response": {
+                                "name": tool_response.tool_call_id(),
+                                "content": response_content
+                            }
+                        }
+                    }));
+                }
+                ContentPart::ToolCall(tool_call) => {
+                    parts.push(json!({
+                        "functionCall": {
+                            "name": tool_call.name(),
+                            "args": tool_call.arguments()
+                        }
+                    }));
+                }
+                _ => {}
+            }
+        }
+
+        if !parts.is_empty() {
+            contents.push(json!({
+                "role": "user",
+                "parts": parts
+            }));
+        }
+    }
+
+    /// Adds generation configuration to payload.
+    fn add_generation_config(
+        payload: &mut Value,
+        temperature: Option<f32>,
+        max_tokens: Option<u32>,
+    ) {
         let mut generation_config = json!({});
 
-        if let Some(temperature) = self.temperature {
+        if let Some(temperature) = temperature {
             generation_config["temperature"] = json!(temperature);
         }
 
-        if let Some(max_tokens) = self.max_tokens {
+        if let Some(max_tokens) = max_tokens {
             generation_config["maxOutputTokens"] = json!(max_tokens);
         }
 
         if !generation_config.as_object().unwrap().is_empty() {
             payload["generationConfig"] = generation_config;
         }
+    }
 
-        // Add tools if provided
+    /// Adds tool configuration to the payload if tools are available.
+    async fn add_tools_to_payload(payload: &mut Value, toolset: Option<Arc<dyn BaseToolset>>) {
         if let Some(toolset) = toolset {
             let tools_list = toolset.get_tools().await;
             if !tools_list.is_empty() {
@@ -360,12 +400,10 @@ impl GeminiLlm {
                 }]);
             }
         }
-
-        Ok(payload)
     }
 
     /// Parses Gemini API response into Content.
-    fn parse_response(&self, response_body: &Value) -> AgentResult<Content> {
+    fn parse_response(response_body: &Value) -> AgentResult<Content> {
         let mut content = Content::default();
 
         // Extract first candidate
@@ -424,27 +462,26 @@ impl GeminiLlm {
     ///
     /// **Important**: Gemini's `candidatesTokenCount` does NOT include `thoughtsTokenCount`.
     /// We must add them together to get total completion tokens (OpenAI-style normalization).
-    fn parse_usage(&self, response_body: &Value) -> TokenUsage {
-        let usage_obj = match response_body.get("usageMetadata") {
-            Some(obj) => obj,
-            None => return TokenUsage::empty(),
+    fn parse_usage(response_body: &Value) -> TokenUsage {
+        let Some(usage_obj) = response_body.get("usageMetadata") else {
+            return TokenUsage::empty();
         };
 
         let prompt_tokens = usage_obj
             .get("promptTokenCount")
             .and_then(serde_json::Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
 
         // Extract candidates tokens and thoughts tokens separately
         let candidates_tokens = usage_obj
             .get("candidatesTokenCount")
             .and_then(serde_json::Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
 
         let thoughts_tokens = usage_obj
             .get("thoughtsTokenCount")
             .and_then(serde_json::Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
 
         // IMPORTANT: For Gemini, thoughtsTokenCount is NOT included in candidatesTokenCount
         // We must add them together to normalize to OpenAI-style completion_tokens
@@ -458,7 +495,7 @@ impl GeminiLlm {
         let total_tokens = usage_obj
             .get("totalTokenCount")
             .and_then(serde_json::Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
 
         TokenUsage::partial(prompt_tokens, completion_tokens, total_tokens)
     }
@@ -561,7 +598,7 @@ mod tests {
 
     #[test]
     fn parse_response_extracts_text_and_tool_calls() {
-        let llm = GeminiLlm::new("gemini-2.0-flash-exp", "api-key");
+        let _llm = GeminiLlm::new("gemini-2.0-flash-exp", "api-key");
         let body = json!({
             "candidates": [
                 {
@@ -582,13 +619,13 @@ mod tests {
             }
         });
 
-        let content = llm.parse_response(&body).expect("content");
+        let content = GeminiLlm::parse_response(&body).expect("content");
         assert_eq!(content.first_text(), Some("Hello user"));
         let calls = content.tool_calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name(), "lookup");
 
-        let usage = llm.parse_usage(&body);
+        let usage = GeminiLlm::parse_usage(&body);
         assert_eq!(usage.input_tokens_opt(), Some(8));
         assert_eq!(usage.output_tokens_opt(), Some(6)); // 4 + 2
         assert_eq!(usage.total_tokens_opt(), Some(14));
@@ -596,9 +633,9 @@ mod tests {
 
     #[test]
     fn parse_response_missing_candidates_errors() {
-        let llm = GeminiLlm::new("gemini-2.0-flash-exp", "api-key");
+        let _llm = GeminiLlm::new("gemini-2.0-flash-exp", "api-key");
         let body = json!({});
-        let err = llm.parse_response(&body).expect_err("expected error");
+        let err = GeminiLlm::parse_response(&body).expect_err("expected error");
         match err {
             AgentError::LlmProvider { provider, .. } => assert_eq!(provider, "Gemini"),
             other => panic!("unexpected error: {other:?}"),
@@ -700,8 +737,8 @@ impl BaseLlm for GeminiLlm {
         }
 
         // Parse content and usage
-        let content = self.parse_response(&response_body)?;
-        let usage = self.parse_usage(&response_body);
+        let content = Self::parse_response(&response_body)?;
+        let usage = Self::parse_usage(&response_body);
 
         Ok(LlmResponse::new(content, usage))
     }

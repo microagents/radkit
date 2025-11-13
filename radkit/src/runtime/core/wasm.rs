@@ -106,6 +106,7 @@ impl WasmRuntime {
     ///     .serve().await?;
     /// ```
     #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    #[allow(clippy::unused_async)] // Kept async for API consistency; will need async when implemented
     pub async fn serve(self) -> AgentResult<()> {
         // Store agents for future use
         let _agents = self.agents;
@@ -119,8 +120,13 @@ impl WasmRuntime {
     /// On non-wasm32 targets, this method returns an error indicating that
     /// `WasmRuntime` should not be used. Use [`DefaultRuntime`] instead.
     ///
+    /// # Errors
+    ///
+    /// Always returns an error on non-WASM targets.
+    ///
     /// [`DefaultRuntime`]: super::DefaultRuntime
     #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+    #[allow(clippy::unused_async)] // Kept async for API consistency with WASM implementation
     pub async fn serve(self) -> AgentResult<()> {
         Err(AgentError::InvalidConfiguration {
             field: "runtime".to_string(),

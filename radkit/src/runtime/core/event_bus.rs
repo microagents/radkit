@@ -25,12 +25,6 @@ struct Subscribers {
 }
 
 impl Subscribers {
-    const fn new() -> Self {
-        Self {
-            senders: Vec::new(),
-        }
-    }
-
     fn add(&mut self, sender: UnboundedSender<TaskEvent>) {
         self.senders.push(sender);
     }
@@ -78,7 +72,7 @@ impl TaskEventBus {
     /// Publishes an event to all subscribers interested in the task.
     pub fn publish(&self, event: &TaskEvent) {
         if let Some(task_id) = extract_task_id(event) {
-            self.broadcast(task_id, event);
+            self.broadcast(&task_id, event);
         }
     }
 
@@ -97,14 +91,14 @@ impl TaskEventBus {
         }
     }
 
-    fn broadcast(&self, task_id: TaskId, event: &TaskEvent) {
+    fn broadcast(&self, task_id: &str, event: &TaskEvent) {
         #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         {
-            if let Some(mut entry) = self.inner.get_mut(&task_id) {
+            if let Some(mut entry) = self.inner.get_mut(task_id) {
                 entry.broadcast(event);
                 if entry.is_empty() {
                     drop(entry);
-                    self.inner.remove(&task_id);
+                    self.inner.remove(task_id);
                 }
             }
         }
@@ -112,10 +106,10 @@ impl TaskEventBus {
         #[cfg(all(target_os = "wasi", target_env = "p1"))]
         {
             let mut map = self.inner.borrow_mut();
-            if let Some(subs) = map.get_mut(&task_id) {
+            if let Some(subs) = map.get_mut(task_id) {
                 subs.broadcast(event);
                 if subs.is_empty() {
-                    map.remove(&task_id);
+                    map.remove(task_id);
                 }
             }
         }

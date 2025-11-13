@@ -181,6 +181,10 @@ impl TaskContext {
     ///
     /// The value must be serializable. If a value already exists for the key,
     /// it will be replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be serialized to JSON.
     pub fn save_data<T>(&mut self, key: &str, value: &T) -> Result<(), AgentError>
     where
         T: Serialize,
@@ -195,6 +199,10 @@ impl TaskContext {
     ///
     /// Returns `Ok(None)` if the key doesn't exist. The data is deserialized
     /// into the target type `T`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stored value cannot be deserialized into type T.
     pub fn load_data<T>(&self, key: &str) -> Result<Option<T>, AgentError>
     where
         T: DeserializeOwned,
@@ -232,6 +240,10 @@ impl TaskContext {
     }
 
     /// Loads and deserializes the currently expected input slot into the desired type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the slot value cannot be deserialized into type T.
     pub fn load_slot<T>(&self) -> Result<Option<T>, AgentError>
     where
         T: DeserializeOwned,
@@ -255,6 +267,10 @@ impl TaskContext {
     }
 
     /// Sends an intermediate status update (`TaskState::Working`, final=false).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime handles are not available or the task event cannot be added.
     #[cfg(feature = "runtime")]
     pub async fn send_intermediate_update(
         &mut self,
@@ -282,11 +298,15 @@ impl TaskContext {
     }
 
     /// Sends a partial artifact update (`is_final=false`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime handles are not available or the task event cannot be added.
     #[cfg(feature = "runtime")]
     pub async fn send_partial_artifact(&mut self, artifact: Artifact) -> AgentResult<()> {
         let (auth, task_manager, task_id, context_id) = self.handles()?;
 
-        let a2a_artifact = utils::artifact_to_a2a(artifact);
+        let a2a_artifact = utils::artifact_to_a2a(&artifact);
         let event = TaskArtifactUpdateEvent {
             kind: a2a_types::ARTIFACT_UPDATE_KIND.to_string(),
             task_id,

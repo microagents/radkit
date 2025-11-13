@@ -42,6 +42,11 @@ impl FakeLlm {
     }
 
     /// Pushes an additional response to the back of the queue.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex has been poisoned due to a panic in another thread
+    /// while holding the lock.
     pub fn push_response(&self, response: AgentResult<LlmResponse>) {
         let mut guard = self
             .responses
@@ -51,6 +56,11 @@ impl FakeLlm {
     }
 
     /// Returns the threads the fake has been asked to process so far.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex has been poisoned due to a panic in another thread
+    /// while holding the lock.
     #[must_use]
     pub fn calls(&self) -> Vec<Thread> {
         self.calls
@@ -60,7 +70,11 @@ impl FakeLlm {
     }
 
     /// Creates a successful LLM response from plain text for convenience.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// This function always returns `Ok` and does not produce errors.
+    #[must_use = "Propagate the AgentResult to surface fake LLM failures"]
     pub fn text_response(text: impl Into<String>) -> AgentResult<LlmResponse> {
         Ok(LlmResponse::new(
             Content::from_text(text),
@@ -69,12 +83,21 @@ impl FakeLlm {
     }
 
     /// Creates a successful response from the provided content.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// This function always returns `Ok` and does not produce errors.
+    #[must_use = "Propagate the AgentResult to surface fake LLM failures"]
     pub fn content_response(content: Content) -> AgentResult<LlmResponse> {
         Ok(LlmResponse::new(content, TokenUsage::empty()))
     }
 
     /// Returns the number of times the fake model has been invoked.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex has been poisoned due to a panic in another thread
+    /// while holding the lock.
     #[must_use]
     pub fn call_count(&self) -> usize {
         self.calls
@@ -178,7 +201,7 @@ pub fn structured_response<T: Serialize>(value: &T) -> LlmResponse {
         .expect("Test value serialization failed - check Serialize implementation");
 
     LlmResponse::new(
-        Content::from_text(format!("```json\n{}\n```", json_str)),
+        Content::from_text(format!("```json\n{json_str}\n```")),
         TokenUsage::empty(),
     )
 }
@@ -211,6 +234,11 @@ impl RecordingTool {
     }
 
     /// Returns the number of times the tool was invoked.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex has been poisoned due to a panic in another thread
+    /// while holding the lock.
     #[must_use]
     pub fn call_count(&self) -> usize {
         self.calls
@@ -220,6 +248,11 @@ impl RecordingTool {
     }
 
     /// Returns the captured argument list.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex has been poisoned due to a panic in another thread
+    /// while holding the lock.
     #[must_use]
     pub fn calls(&self) -> Vec<HashMap<String, Value>> {
         self.calls

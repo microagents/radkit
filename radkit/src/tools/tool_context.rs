@@ -58,6 +58,7 @@ pub struct ToolContextBuilder<'a> {
 }
 
 impl<'a> ToolContextBuilder<'a> {
+    #[must_use]
     pub fn with_state(mut self, state: &'a dyn ExecutionState) -> Self {
         self.state = Some(state);
         self

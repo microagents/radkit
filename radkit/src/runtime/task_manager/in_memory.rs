@@ -68,7 +68,7 @@ mod native {
         }
 
         /// Creates a namespaced key from the auth context and the original key.
-        fn get_namespaced_key(&self, auth_ctx: &AuthContext, key: &str) -> String {
+        fn get_namespaced_key(auth_ctx: &AuthContext, key: &str) -> String {
             format!("{}:{}:{}", auth_ctx.app_name, auth_ctx.user_name, key)
         }
     }
@@ -80,7 +80,7 @@ mod native {
             auth_ctx: &AuthContext,
             task_id: &str,
         ) -> AgentResult<Option<Task>> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             Ok(self.tasks.get(&key).map(|t| t.value().clone()))
         }
 
@@ -125,7 +125,7 @@ mod native {
         }
 
         async fn save_task(&self, auth_ctx: &AuthContext, task: &Task) -> AgentResult<()> {
-            let key = self.get_namespaced_key(auth_ctx, &task.id);
+            let key = Self::get_namespaced_key(auth_ctx, &task.id);
             self.tasks.insert(key, task.clone());
             Ok(())
         }
@@ -153,9 +153,8 @@ mod native {
                 TaskEvent::ArtifactUpdate(update) => update.task_id.clone(),
             };
 
-            let key = self.get_namespaced_key(auth_ctx, &event_key);
-            let mut event_log = self.events.entry(key).or_default();
-            event_log.push(event.clone());
+            let key = Self::get_namespaced_key(auth_ctx, &event_key);
+            self.events.entry(key).or_default().push(event.clone());
             Ok(())
         }
 
@@ -164,7 +163,7 @@ mod native {
             auth_ctx: &AuthContext,
             task_id: &str,
         ) -> AgentResult<Vec<TaskEvent>> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             Ok(self
                 .events
                 .get(&key)
@@ -251,7 +250,7 @@ mod native {
             task_id: &str,
             context: &crate::runtime::context::TaskContext,
         ) -> AgentResult<()> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             // Serialize TaskContext to JSON
             let json_str = serde_json::to_string(context).map_err(|e| {
                 crate::errors::AgentError::Serialization {
@@ -268,7 +267,7 @@ mod native {
             auth_ctx: &AuthContext,
             task_id: &str,
         ) -> AgentResult<Option<crate::runtime::context::TaskContext>> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             match self.task_contexts.get(&key) {
                 Some(json_ref) => {
                     let context = serde_json::from_str(json_ref.value()).map_err(|e| {
@@ -289,7 +288,7 @@ mod native {
             task_id: &str,
             skill_id: &str,
         ) -> AgentResult<()> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             self.task_skills.insert(key, skill_id.to_string());
             Ok(())
         }
@@ -299,7 +298,7 @@ mod native {
             auth_ctx: &AuthContext,
             task_id: &str,
         ) -> AgentResult<Option<String>> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             Ok(self.task_skills.get(&key).map(|s| s.value().clone()))
         }
     }
@@ -343,7 +342,7 @@ mod wasm {
         }
 
         /// Creates a namespaced key from the auth context and the original key.
-        fn get_namespaced_key(&self, auth_ctx: &AuthContext, key: &str) -> String {
+        fn get_namespaced_key(auth_ctx: &AuthContext, key: &str) -> String {
             format!("{}:{}:{}", auth_ctx.app_name, auth_ctx.user_name, key)
         }
     }
@@ -355,7 +354,7 @@ mod wasm {
             auth_ctx: &AuthContext,
             task_id: &str,
         ) -> AgentResult<Option<Task>> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             Ok(self.tasks.borrow().get(&key).cloned())
         }
 
@@ -401,7 +400,7 @@ mod wasm {
         }
 
         async fn save_task(&self, auth_ctx: &AuthContext, task: &Task) -> AgentResult<()> {
-            let key = self.get_namespaced_key(auth_ctx, &task.id);
+            let key = Self::get_namespaced_key(auth_ctx, &task.id);
             self.tasks.borrow_mut().insert(key, task.clone());
             Ok(())
         }
@@ -429,7 +428,7 @@ mod wasm {
                 TaskEvent::ArtifactUpdate(update) => update.task_id.clone(),
             };
 
-            let key = self.get_namespaced_key(auth_ctx, &event_key);
+            let key = Self::get_namespaced_key(auth_ctx, &event_key);
             self.events
                 .borrow_mut()
                 .entry(key)
@@ -443,7 +442,7 @@ mod wasm {
             auth_ctx: &AuthContext,
             task_id: &str,
         ) -> AgentResult<Vec<TaskEvent>> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             Ok(self.events.borrow().get(&key).cloned().unwrap_or_default())
         }
 
@@ -530,7 +529,7 @@ mod wasm {
             task_id: &str,
             context: &crate::runtime::context::TaskContext,
         ) -> AgentResult<()> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             // Serialize TaskContext to JSON
             let json_str = serde_json::to_string(context).map_err(|e| {
                 crate::errors::AgentError::Serialization {
@@ -547,7 +546,7 @@ mod wasm {
             auth_ctx: &AuthContext,
             task_id: &str,
         ) -> AgentResult<Option<crate::runtime::context::TaskContext>> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             match self.task_contexts.borrow().get(&key) {
                 Some(json_str) => {
                     let context = serde_json::from_str(json_str).map_err(|e| {
@@ -568,7 +567,7 @@ mod wasm {
             task_id: &str,
             skill_id: &str,
         ) -> AgentResult<()> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             self.task_skills
                 .borrow_mut()
                 .insert(key, skill_id.to_string());
@@ -580,7 +579,7 @@ mod wasm {
             auth_ctx: &AuthContext,
             task_id: &str,
         ) -> AgentResult<Option<String>> {
-            let key = self.get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_id);
             Ok(self.task_skills.borrow().get(&key).cloned())
         }
     }

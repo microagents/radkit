@@ -1,16 +1,23 @@
-//! OpenAPI Operation Tool - Individual tool for each API operation
+//! `OpenAPI` Operation Tool - Individual tool for each API operation
 //!
-//! This module implements BaseTool for individual OpenAPI operations.
+//! This module implements `BaseTool` for individual `OpenAPI` operations.
 
 use crate::tools::openapi::{AuthConfig, HeaderOrQuery, OpenApiSpec};
 use crate::tools::{BaseTool, FunctionDeclaration, ToolContext, ToolResult};
 use openapiv3::{Operation, Parameter, ParameterSchemaOrContent, ReferenceOr, SchemaKind, Type};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
-/// Individual tool for a single OpenAPI operation
+type ExtractedParams = (
+    Vec<(String, String)>,
+    HashMap<String, String>,
+    HashMap<String, String>,
+);
+
+/// Individual tool for a single `OpenAPI` operation
 ///
-/// Each operation in the OpenAPI spec gets its own tool with typed parameters.
+/// Each operation in the `OpenAPI` spec gets its own tool with typed parameters.
 pub struct OpenApiOperationTool {
     /// Operation ID (tool name)
     operation_id: String,
@@ -20,7 +27,7 @@ pub struct OpenApiOperationTool {
     method: String,
     /// Path for this operation
     path: String,
-    /// Reference to the OpenAPI spec
+    /// Reference to the `OpenAPI` spec
     spec: Arc<OpenApiSpec>,
     /// Shared HTTP client
     http_client: Arc<reqwest::Client>,
@@ -39,9 +46,9 @@ fn value_to_string(value: &serde_json::Value) -> String {
     }
 }
 
-/// Encode a query parameter value according to OpenAPI style and explode settings
+/// Encode a query parameter value according to `OpenAPI` style and explode settings
 ///
-/// Handles arrays and objects according to the OpenAPI specification.
+/// Handles arrays and objects according to the `OpenAPI` specification.
 /// Returns a vector of (key, value) pairs to support exploded arrays.
 fn encode_query_param(
     name: &str,
@@ -64,7 +71,7 @@ fn encode_query_param(
                     .collect(),
 
                 // Form style with explode=false: ?status=available,sold
-                (QueryStyle::Form, false) => {
+                (QueryStyle::Form, false) | (QueryStyle::DeepObject, _) => {
                     vec![(name.to_string(), string_values.join(","))]
                 }
 
@@ -77,18 +84,13 @@ fn encode_query_param(
                 (QueryStyle::PipeDelimited, _) => {
                     vec![(name.to_string(), string_values.join("|"))]
                 }
-
-                // DeepObject style is for objects, not arrays
-                (QueryStyle::DeepObject, _) => {
-                    vec![(name.to_string(), string_values.join(","))]
-                }
             }
         }
 
         // Objects with DeepObject style: ?obj[key1]=value1&obj[key2]=value2
         serde_json::Value::Object(obj) if matches!(style, QueryStyle::DeepObject) => obj
             .iter()
-            .map(|(key, val)| (format!("{}[{}]", name, key), value_to_string(val)))
+            .map(|(key, val)| (format!("{name}[{key}]"), value_to_string(val)))
             .collect(),
 
         // For other cases (scalars, objects with non-DeepObject style), use simple encoding
@@ -115,23 +117,24 @@ fn encode_header_param(name: &str, value: &serde_json::Value) -> (String, String
 /// according to RFC 3986. This prevents special URL characters like /, ?, #, % from
 /// breaking the URL structure or causing security issues.
 fn percent_encode_path_param(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
+    let mut encoded = String::new();
+    for c in s.chars() {
+        match c {
             // Unreserved characters per RFC 3986 - do not encode
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => encoded.push(c),
             // Encode everything else
             _ => {
-                // Convert char to UTF-8 bytes and percent-encode each byte
-                c.to_string()
-                    .bytes()
-                    .map(|b| format!("%{:02X}", b))
-                    .collect()
+                let mut buf = [0u8; 4];
+                for byte in c.encode_utf8(&mut buf).as_bytes() {
+                    let _ = write!(&mut encoded, "%{byte:02X}");
+                }
             }
-        })
-        .collect()
+        }
+    }
+    encoded
 }
 
-/// Convert OpenAPI Schema to JSON Schema
+/// Convert `OpenAPI` Schema to JSON Schema
 fn convert_schema_to_json_schema(schema: &openapiv3::Schema) -> serde_json::Value {
     let mut json_schema = serde_json::json!({});
 
@@ -191,6 +194,8 @@ fn convert_schema_to_json_schema(schema: &openapiv3::Schema) -> serde_json::Valu
 
 impl OpenApiOperationTool {
     /// Create a new operation tool
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Owned Strings/Arcs require heap allocation, so this cannot be const.
     pub fn new(
         operation_id: String,
         description: String,
@@ -211,9 +216,9 @@ impl OpenApiOperationTool {
         }
     }
 
-    /// Find this operation in the OpenAPI spec
+    /// Find this operation in the `OpenAPI` spec
     /// Uses the stored path and method for direct lookup
-    /// Returns (method, path, path_item, operation)
+    /// Returns (method, path, `path_item`, operation)
     fn find_operation(&self) -> Option<(String, String, &openapiv3::PathItem, &Operation)> {
         // Get the path item
         let path_item_ref = self.spec.spec().paths.paths.get(&self.path)?;
@@ -302,7 +307,7 @@ impl OpenApiOperationTool {
         // Replace path parameters like {petId} with actual values
         // Use percent-encoding to prevent special characters from breaking the URL structure
         for (key, value) in args {
-            let placeholder = format!("{{{}}}", key);
+            let placeholder = format!("{{{key}}}");
             if url.contains(&placeholder) {
                 let value_str = value_to_string(value);
                 // Percent-encode the value to handle special URL characters (/, ?, #, %, etc.)
@@ -317,18 +322,13 @@ impl OpenApiOperationTool {
     /// Extract parameters from path and operation definitions
     ///
     /// Merges path-level and operation-level parameters before extraction.
-    /// Returns (query_params, header_params, cookie_params).
+    /// Returns (`query_params`, `header_params`, `cookie_params`).
     /// Query params use Vec to support exploded arrays with duplicate keys.
     fn extract_parameters(
-        &self,
         path_item: &openapiv3::PathItem,
         operation: &Operation,
         args: &HashMap<String, serde_json::Value>,
-    ) -> (
-        Vec<(String, String)>,
-        HashMap<String, String>,
-        HashMap<String, String>,
-    ) {
+    ) -> ExtractedParams {
         let mut query_params = Vec::new();
         let mut header_params = HashMap::new();
         let mut cookie_params = HashMap::new();
@@ -397,20 +397,17 @@ impl BaseTool for OpenApiOperationTool {
 
     fn declaration(&self) -> FunctionDeclaration {
         // Find the operation to extract parameter schema
-        let (_, _, path_item, operation) = match self.find_operation() {
-            Some(result) => result,
-            None => {
-                // Fallback to empty schema if operation not found
-                return FunctionDeclaration::new(
-                    self.operation_id.clone(),
-                    self.description.clone(),
-                    serde_json::json!({
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }),
-                );
-            }
+        let Some((_, _, path_item, operation)) = self.find_operation() else {
+            // Fallback to empty schema if operation not found
+            return FunctionDeclaration::new(
+                self.operation_id.clone(),
+                self.description.clone(),
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            );
         };
 
         let mut properties = serde_json::Map::new();
@@ -495,19 +492,16 @@ impl BaseTool for OpenApiOperationTool {
         _context: &ToolContext<'_>,
     ) -> ToolResult {
         // Find the operation in the spec
-        let (method, path, path_item, operation) = match self.find_operation() {
-            Some(result) => result,
-            None => {
-                return ToolResult::error(format!(
-                    "Operation '{}' not found in OpenAPI spec",
-                    self.operation_id
-                ));
-            }
+        let Some((method, path, path_item, operation)) = self.find_operation() else {
+            return ToolResult::error(format!(
+                "Operation '{}' not found in OpenAPI spec",
+                self.operation_id
+            ));
         };
 
         // Extract parameters (merges path-level and operation-level parameters)
         let (query_params, header_params, cookie_params) =
-            self.extract_parameters(path_item, operation, &args);
+            Self::extract_parameters(path_item, operation, &args);
 
         // Build URL with path parameters
         let url = self.build_url(&path, &args);
@@ -521,7 +515,7 @@ impl BaseTool for OpenApiOperationTool {
             "PATCH" => self.http_client.patch(&url),
             "HEAD" => self.http_client.head(&url),
             _ => {
-                return ToolResult::error(format!("Unsupported HTTP method: {}", method));
+                return ToolResult::error(format!("Unsupported HTTP method: {method}"));
             }
         };
 
@@ -539,7 +533,7 @@ impl BaseTool for OpenApiOperationTool {
         if !cookie_params.is_empty() {
             let cookie_header = cookie_params
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()
                 .join("; ");
             request_builder = request_builder.header("Cookie", cookie_header);
@@ -577,7 +571,7 @@ impl BaseTool for OpenApiOperationTool {
         let response = match request_builder.send().await {
             Ok(resp) => resp,
             Err(e) => {
-                return ToolResult::error(format!("HTTP request failed: {}", e));
+                return ToolResult::error(format!("HTTP request failed: {e}"));
             }
         };
 
@@ -588,22 +582,25 @@ impl BaseTool for OpenApiOperationTool {
         let body_text = match response.text().await {
             Ok(text) => text,
             Err(e) => {
-                return ToolResult::error(format!("Failed to read response body: {}", e));
+                return ToolResult::error(format!("Failed to read response body: {e}"));
             }
         };
 
         // Try to parse as JSON, fallback to plain text
-        let result_value = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body_text) {
-            serde_json::json!({
-                "status": status_code,
-                "body": json,
-            })
-        } else {
-            serde_json::json!({
-                "status": status_code,
-                "body": body_text,
-            })
-        };
+        let result_value = serde_json::from_str::<serde_json::Value>(&body_text).map_or_else(
+            |_| {
+                serde_json::json!({
+                    "status": status_code,
+                    "body": body_text.clone(),
+                })
+            },
+            |json| {
+                serde_json::json!({
+                    "status": status_code,
+                    "body": json,
+                })
+            },
+        );
 
         // Check if the request was successful
         if status.is_success() {

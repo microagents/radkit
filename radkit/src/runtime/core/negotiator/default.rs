@@ -102,7 +102,7 @@ impl DefaultNegotiator {
     /// - Agent metadata (name, description)
     /// - Available skills with descriptions
     /// - Decision instructions
-    fn build_negotiation_prompt(&self, agent_def: &AgentDefinition) -> String {
+    fn build_negotiation_prompt(agent_def: &AgentDefinition) -> String {
         let mut prompt = format!(
             r#"You are the negotiator for the "{}" agent.
 
@@ -118,16 +118,18 @@ Your role is to analyze user requests and determine the appropriate action."#,
         if agent_def.skills().is_empty() {
             prompt.push_str("No skills are currently available.\n");
         } else {
+            use std::fmt::Write;
             for skill in agent_def.skills() {
                 let metadata = skill.metadata();
-                prompt.push_str(&format!(
-                    "- **{}** (`{}`): {}\n",
+                let _ = writeln!(
+                    prompt,
+                    "- **{}** (`{}`): {}",
                     metadata.name, metadata.id, metadata.description
-                ));
+                );
                 if !metadata.examples.is_empty() {
                     prompt.push_str("  Examples:\n");
                     for example in metadata.examples {
-                        prompt.push_str(&format!("    - {example}\n"));
+                        let _ = writeln!(prompt, "    - {example}");
                     }
                 }
             }
@@ -220,7 +222,7 @@ impl Negotiator for DefaultNegotiator {
         history: Vec<Message>,
     ) -> AgentResult<NegotiationDecision> {
         // Build the negotiation system prompt
-        let system_prompt = self.build_negotiation_prompt(agent_def);
+        let system_prompt = Self::build_negotiation_prompt(agent_def);
 
         // Create thread from history + new user message
         let thread = if history.is_empty() {

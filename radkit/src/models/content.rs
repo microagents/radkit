@@ -67,6 +67,7 @@ impl Content {
     }
 
     /// Appends a `ContentPart` to the content.
+    #[must_use]
     pub fn append(mut self, part: impl Into<ContentPart>) -> Self {
         self.parts.push(part.into());
         self
@@ -78,6 +79,7 @@ impl Content {
     }
 
     /// Extends the content with an iterator of `ContentPart`s.
+    #[must_use]
     pub fn extended<I>(mut self, iter: I) -> Self
     where
         I: IntoIterator<Item = ContentPart>,
@@ -211,6 +213,20 @@ impl Content {
     #[must_use]
     pub const fn len(&self) -> usize {
         self.parts.len()
+    }
+
+    /// Returns an iterator over the content parts.
+    ///
+    /// This method is provided to complement the `IntoIterator` implementation.
+    pub fn iter(&self) -> Iter<'_, ContentPart> {
+        self.parts.iter()
+    }
+
+    /// Returns a mutable iterator over the content parts.
+    ///
+    /// This method is provided to complement the `IntoIterator` implementation.
+    pub fn iter_mut(&mut self) -> IterMut<'_, ContentPart> {
+        self.parts.iter_mut()
     }
 
     /// Returns `true` if all parts are empty or whitespace-only text.

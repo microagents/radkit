@@ -60,7 +60,6 @@
 pub mod agent;
 pub mod compat;
 pub mod errors;
-mod macros;
 pub mod models;
 pub mod runtime;
 pub mod tools;

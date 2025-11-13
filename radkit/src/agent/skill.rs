@@ -16,7 +16,7 @@
 //!
 //! ```ignore
 //! use radkit::agent::{SkillHandler, OnRequestResult, Artifact};
-//! use anyhow::Result;
+//! use radkit::errors::AgentResult;
 //!
 //! struct WeatherSkill;
 //!
@@ -28,7 +28,7 @@
 //!         context: &Context,
 //!         runtime: &dyn Runtime,
 //!         content: Content,
-//!     ) -> Result<OnRequestResult> {
+//!     ) -> AgentResult<OnRequestResult> {
 //!         let artifact = Artifact::from_json("forecast.json", &weather_data)?;
 //!         Ok(OnRequestResult::Completed {
 //!             message: Some(Content::from_text("Weather retrieved")),
@@ -130,11 +130,11 @@ impl Artifact {
     /// * `mime_type` - MIME type of the file
     /// * `data` - File bytes
     #[must_use]
-    pub fn from_file(name: &str, mime_type: &str, data: Vec<u8>) -> Self {
+    pub fn from_file(name: &str, mime_type: &str, data: &[u8]) -> Self {
         use crate::models::content_part::{ContentPart, Data, DataSource};
 
         // Encode file bytes as base64 for A2A protocol
-        let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+        let base64_data = base64::engine::general_purpose::STANDARD.encode(data);
 
         let data_part = Data {
             content_type: mime_type.to_string(),
@@ -176,12 +176,21 @@ impl SkillSlot {
     /// # Arguments
     ///
     /// * `value` - Slot value (typically an enum variant)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value cannot be serialized to JSON. This should only occur
+    /// if the type's `Serialize` implementation is broken or returns an error.
     pub fn new<T: Serialize>(value: T) -> Self {
         let serialized = serde_json::to_value(value).expect("Failed to serialize skill slot value");
         Self { value: serialized }
     }
 
     /// Deserialize the slot value into the requested type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be deserialized into type T.
     pub fn deserialize<T>(&self) -> Result<T, AgentError>
     where
         T: serde::de::DeserializeOwned,
@@ -328,6 +337,8 @@ pub enum OnInputResult {
 /// # Examples
 ///
 /// ```ignore
+/// use radkit::errors::AgentResult;
+///
 /// #[skill(
 ///     id = "my_skill",
 ///     name = "My Skill",
@@ -347,7 +358,7 @@ pub enum OnInputResult {
 ///         context: &Context,
 ///         runtime: &dyn Runtime,
 ///         content: Content,
-///     ) -> Result<OnRequestResult> {
+///     ) -> AgentResult<OnRequestResult> {
 ///         // Implementation here
 ///         Ok(OnRequestResult::Completed {
 ///             message: Some(Content::from_text("Done")),
@@ -457,7 +468,7 @@ mod tests {
 
     #[test]
     fn artifact_from_file_wraps_bytes() {
-        let artifact = Artifact::from_file("image.png", "image/png", vec![1, 2, 3, 4]);
+        let artifact = Artifact::from_file("image.png", "image/png", &[1, 2, 3, 4]);
         assert_eq!(artifact.name(), "image.png");
 
         let data_part = match &artifact.content().parts()[0] {

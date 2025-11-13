@@ -20,9 +20,9 @@ pub fn to_jsonrpc_error(error: AgentError) -> JSONRPCError {
     };
 
     match error {
-        InvalidInput(message) => invalid_params_error(Some(message), None),
-        MissingInput(message) => invalid_params_error(Some(message), None),
-        SkillSlot(message) => invalid_params_error(Some(message), None),
+        InvalidInput(message) | MissingInput(message) | SkillSlot(message) => {
+            invalid_params_error(Some(message), None)
+        }
         TaskNotFound { task_id } => task_not_found_error(
             Some(format!("Task not found: {task_id}")),
             Some(json!({ "taskId": task_id })),

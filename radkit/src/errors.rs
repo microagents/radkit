@@ -220,12 +220,67 @@ impl From<serde_json::Error> for AgentError {
     }
 }
 
+impl From<std::io::Error> for AgentError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Internal {
+            component: "io".to_string(),
+            reason: error.to_string(),
+        }
+    }
+}
+
+impl From<tokio::task::JoinError> for AgentError {
+    fn from(error: tokio::task::JoinError) -> Self {
+        let reason = if error.is_cancelled() {
+            "task cancelled".to_string()
+        } else if error.is_panic() {
+            "task panicked".to_string()
+        } else {
+            error.to_string()
+        };
+
+        Self::Internal {
+            component: "task".to_string(),
+            reason,
+        }
+    }
+}
+
 impl From<reqwest::Error> for AgentError {
     fn from(error: reqwest::Error) -> Self {
         Self::Network {
             operation: "http_request".to_string(),
             reason: error.to_string(),
         }
+    }
+}
+
+impl From<std::num::ParseIntError> for AgentError {
+    fn from(error: std::num::ParseIntError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for AgentError {
+    fn from(error: std::num::ParseFloatError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl From<serde_yaml::Error> for AgentError {
+    fn from(error: serde_yaml::Error) -> Self {
+        Self::Serialization {
+            format: "yaml".to_string(),
+            reason: error.to_string(),
+        }
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl From<url::ParseError> for AgentError {
+    fn from(error: url::ParseError) -> Self {
+        Self::InvalidUri(error.to_string())
     }
 }
 

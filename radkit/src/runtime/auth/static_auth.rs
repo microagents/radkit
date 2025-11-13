@@ -48,7 +48,9 @@ impl StaticAuthService {
             },
         }
     }
+}
 
+impl Default for StaticAuthService {
     /// Creates a new static authentication service with default values.
     ///
     /// Uses `"default-app"` as the app name and `"default-user"` as the user name.
@@ -60,8 +62,7 @@ impl StaticAuthService {
     ///
     /// let auth_service = StaticAuthService::default();
     /// ```
-    #[must_use]
-    pub fn default() -> Self {
+    fn default() -> Self {
         Self::new("default-app", "default-user")
     }
 }
@@ -69,12 +70,6 @@ impl StaticAuthService {
 impl AuthService for StaticAuthService {
     fn get_auth_context(&self) -> AuthContext {
         self.context.clone()
-    }
-}
-
-impl Default for StaticAuthService {
-    fn default() -> Self {
-        Self::new("default-app", "default-user")
     }
 }
 

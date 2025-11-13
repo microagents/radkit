@@ -1,3 +1,9 @@
 [workspace]
 members = ["a2a-types", "a2a-client", "radkit", "radkit-macros"]
 resolver = "2"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = 'z'
+lto = true
+codegen-units = 1

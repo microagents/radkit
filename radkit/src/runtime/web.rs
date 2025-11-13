@@ -29,7 +29,7 @@ use axum::{
 use futures::Stream;
 use std::convert::Infallible;
 use std::sync::Arc;
-use tokio::time::Duration;
+use std::time::Duration;
 
 /// Infers a base URL from a bind address.
 ///
@@ -169,11 +169,10 @@ mod tests {
             Agent, OnInputResult, OnRequestResult, RegisteredSkill, SkillHandler, SkillMetadata,
         };
         use crate::errors::{AgentError, AgentResult};
-        use crate::models::{Content, ContentPart, LlmResponse};
+        use crate::models::{Content, LlmResponse};
         use crate::runtime::context::{Context, TaskContext};
         use crate::runtime::{DefaultRuntime, Runtime};
         use crate::test_support::FakeLlm;
-        use crate::tools::ToolCall;
         use a2a_types::{
             A2ARequest, A2ARequestPayload, JSONRPCId, Message, MessageRole, MessageSendParams,
             Part, SendMessageResponse, SendStreamingMessageResponse, SendStreamingMessageResult,
@@ -356,11 +355,11 @@ mod tests {
                             assert_eq!(task.status.state, TaskState::Completed);
                             assert!(!task.history.is_empty());
                         }
-                        other => panic!("expected task, got {:?}", other),
+                        other => panic!("expected task, got {other:?}"),
                     }
                 }
                 SendMessageResponse::Error(err) => {
-                    panic!("unexpected error response: {:?}", err);
+                    panic!("unexpected error response: {err:?}");
                 }
             }
         }
@@ -429,12 +428,11 @@ mod tests {
                         assert_eq!(status_update.status.state, TaskState::Completed);
                         assert!(status_update.is_final, "expected final status update");
                     }
-                    other => panic!(
-                        "expected final task or status update event, got {:?}",
-                        other
-                    ),
+                    other => panic!("expected final task or status update event, got {other:?}"),
                 },
-                other => panic!("unexpected error event: {:?}", other),
+                other @ SendStreamingMessageResponse::Error(_) => {
+                    panic!("unexpected error event: {other:?}")
+                }
             }
         }
 
@@ -624,7 +622,9 @@ mod tests {
                     }
                     other => panic!("unexpected streaming payload: {other:?}"),
                 },
-                other => panic!("unexpected response: {other:?}"),
+                other @ SendStreamingMessageResponse::Error(_) => {
+                    panic!("unexpected response: {other:?}")
+                }
             }
         }
     }
@@ -639,12 +639,13 @@ pub async fn agent_card_handler(
 ) -> Response {
     let agent_def = runtime.agents.iter().find(|a| a.id() == agent_id);
 
-    if let Some(agent) = agent_def {
-        let card = build_agent_card(&runtime, agent);
-        (StatusCode::OK, Json(card)).into_response()
-    } else {
-        (StatusCode::NOT_FOUND, "Agent not found").into_response()
-    }
+    agent_def.map_or_else(
+        || (StatusCode::NOT_FOUND, "Agent not found").into_response(),
+        |agent| {
+            let card = build_agent_card(&runtime, agent);
+            (StatusCode::OK, Json(card)).into_response()
+        },
+    )
 }
 
 /// Axum handler for agent-specific JSON-RPC requests.
@@ -655,9 +656,8 @@ pub async fn json_rpc_handler(
     Path((agent_id, version)): Path<(String, String)>,
     Json(payload): Json<a2a_types::A2ARequest>,
 ) -> Response {
-    let agent_def = match runtime.agents.iter().find(|a| a.id() == agent_id) {
-        Some(agent) => agent,
-        None => return AgentError::AgentNotFound { agent_id }.into_response(),
+    let Some(agent_def) = runtime.agents.iter().find(|a| a.id() == agent_id) else {
+        return AgentError::AgentNotFound { agent_id }.into_response();
     };
 
     if agent_def.version() != version {
@@ -719,9 +719,8 @@ pub async fn message_stream_handler(
     Path((agent_id, version)): Path<(String, String)>,
     Json(params): Json<MessageSendParams>,
 ) -> Response {
-    let agent_def = match runtime.agents.iter().find(|a| a.id() == agent_id) {
-        Some(agent) => agent,
-        None => return AgentError::AgentNotFound { agent_id }.into_response(),
+    let Some(agent_def) = runtime.agents.iter().find(|a| a.id() == agent_id) else {
+        return AgentError::AgentNotFound { agent_id }.into_response();
     };
 
     if agent_def.version() != version {
@@ -748,9 +747,8 @@ pub async fn task_resubscribe_handler(
     State(runtime): State<Arc<DefaultRuntime>>,
     Path((agent_id, version, raw_task_id)): Path<(String, String, String)>,
 ) -> Response {
-    let agent_def = match runtime.agents.iter().find(|a| a.id() == agent_id) {
-        Some(agent) => agent,
-        None => return AgentError::AgentNotFound { agent_id }.into_response(),
+    let Some(agent_def) = runtime.agents.iter().find(|a| a.id() == agent_id) else {
+        return AgentError::AgentNotFound { agent_id }.into_response();
     };
 
     if agent_def.version() != version {
@@ -799,7 +797,7 @@ fn build_streaming_sse(
         let mut final_seen = false;
 
         for event in initial_events.by_ref() {
-            if let Some((evt, is_final)) = task_event_to_event(&request_id, event) {
+            if let Some((evt, is_final)) = task_event_to_event(request_id.as_ref(), event) {
                 yield Ok(evt);
                 if is_final {
                     final_seen = true;
@@ -811,7 +809,7 @@ fn build_streaming_sse(
         if !final_seen {
             if let Some(mut rx) = receiver {
                 while let Some(event) = rx.recv().await {
-                    if let Some((evt, is_final)) = task_event_to_event(&id_clone, event) {
+                    if let Some((evt, is_final)) = task_event_to_event(id_clone.as_ref(), event) {
                         yield Ok(evt);
                         if is_final {
                             break;
@@ -926,7 +924,7 @@ fn build_streaming_error_response(request_id: Option<JSONRPCId>, error: AgentErr
 }
 
 fn task_event_to_event(
-    request_id: &Option<JSONRPCId>,
+    request_id: Option<&JSONRPCId>,
     event: crate::runtime::task_manager::TaskEvent,
 ) -> Option<(Event, bool)> {
     let (result, is_final) = convert_task_event(event);
@@ -935,7 +933,7 @@ fn task_event_to_event(
         SendStreamingMessageResponse::Success(Box::new(SendStreamingMessageSuccessResponse {
             jsonrpc: "2.0".to_string(),
             result,
-            id: request_id.clone(),
+            id: request_id.cloned(),
         }));
 
     serde_json::to_string(&response)
@@ -1309,7 +1307,7 @@ async fn build_task_with_history(
         .filter_map(|event| match event {
             TaskEvent::Message(msg) => Some(msg),
             TaskEvent::StatusUpdate(update) => update.status.message,
-            _ => None,
+            TaskEvent::ArtifactUpdate(_) => None,
         })
         .collect();
 

@@ -84,6 +84,10 @@ impl ContentPart {
     }
 
     /// Creates a new data content part from base64 with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the content type is invalid or base64 data is empty.
     pub fn from_base64(
         content_type: impl Into<String>,
         base64: impl Into<String>,
@@ -97,6 +101,10 @@ impl ContentPart {
     }
 
     /// Creates a new data content part from a URI.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the content type is invalid or URI is empty.
     pub fn from_uri(
         content_type: impl Into<String>,
         uri: impl Into<String>,
@@ -241,6 +249,10 @@ impl ContentPart {
 
 impl Data {
     /// Creates a new data block with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the MIME type format is invalid or data source is empty.
     pub fn new(
         content_type: impl Into<String>,
         source: DataSource,

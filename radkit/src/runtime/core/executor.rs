@@ -121,6 +121,11 @@ impl<'a> RequestExecutor<'a> {
         Self { runtime, agent_def }
     }
 
+    /// Handles a message send request and returns the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if message processing fails or the task cannot be created.
     pub async fn handle_send_message(
         &self,
         params: MessageSendParams,
@@ -383,6 +388,11 @@ impl<'a> RequestExecutor<'a> {
         })
     }
 
+    /// Retrieves a task by its ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task is not found or cannot be retrieved.
     pub async fn handle_get_task(&self, params: TaskQueryParams) -> AgentResult<a2a_types::Task> {
         self.handle_get_task_internal(params).await
     }
@@ -406,14 +416,17 @@ impl<'a> RequestExecutor<'a> {
         self.reconstruct_a2a_task(&auth_context, &stored_task).await
     }
 
+    /// Cancels a task by its ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error as this feature is not yet implemented.
+    #[allow(clippy::unused_async)] // Kept async for API consistency; will need async when implemented
     pub async fn handle_cancel_task(&self, params: TaskIdParams) -> AgentResult<a2a_types::Task> {
-        self.handle_cancel_task_internal(params).await
+        Self::handle_cancel_task_internal(&params)
     }
 
-    async fn handle_cancel_task_internal(
-        &self,
-        params: TaskIdParams,
-    ) -> AgentResult<a2a_types::Task> {
+    fn handle_cancel_task_internal(params: &TaskIdParams) -> AgentResult<a2a_types::Task> {
         Err(AgentError::NotImplemented {
             feature: format!("tasks/cancel for task_id {}", params.id),
         })
@@ -467,7 +480,7 @@ impl<'a> RequestExecutor<'a> {
             .filter_map(|event| match event {
                 TaskEvent::Message(msg) => Some(msg),
                 TaskEvent::StatusUpdate(update) => update.status.message,
-                _ => None,
+                TaskEvent::ArtifactUpdate(_) => None,
             })
             .collect();
 
@@ -546,13 +559,13 @@ impl<'a> RequestExecutor<'a> {
             task_id.clone(),
         );
         let handler = skill_reg.handler_arc();
+        let identifiers = TaskIdentifiers::new(context_id.to_string(), task_id.clone());
         let task = drive_on_request(
             Arc::clone(&self.runtime),
             handler,
             task_context,
             auth_ctx.clone(),
-            context_id.to_string(),
-            task_id.clone(),
+            identifiers,
             initial_message,
             task,
         )
@@ -616,13 +629,13 @@ impl<'a> RequestExecutor<'a> {
             .await?;
 
         let handler = skill_reg.handler_arc();
+        let identifiers = TaskIdentifiers::new(task.context_id.clone(), task.id.clone());
         let task = drive_on_input(
             Arc::clone(&self.runtime),
             handler,
             task_context,
             auth_ctx.clone(),
-            task.context_id.clone(),
-            task.id.clone(),
+            identifiers,
             user_message,
             task,
         )
@@ -755,31 +768,32 @@ impl<'a> RequestExecutor<'a> {
         );
 
         let handler = skill_reg.handler_arc();
+        let identifiers = TaskIdentifiers::new(context_id.to_string(), task_id.clone());
         let runtime = Arc::clone(&self.runtime);
         let auth_clone = auth_ctx.clone();
-        let context_clone = context_id.to_string();
-        let task_id_clone = task_id.clone();
         let message_clone = initial_message.clone();
         let receiver = Some(self.runtime.event_bus().subscribe(&task_id));
 
-        compat::spawn(async move {
-            if let Err(err) = drive_on_request(
-                runtime,
-                handler,
-                task_context,
-                auth_clone,
-                context_clone,
-                task_id_clone.clone(),
-                message_clone,
-                task,
-            )
-            .await
-            {
-                error!(
-                    task_id = %task_id_clone,
-                    error = %err,
-                    "failed to execute streaming task"
-                );
+        compat::spawn({
+            let log_task_id = identifiers.task_id.clone();
+            async move {
+                if let Err(err) = drive_on_request(
+                    runtime,
+                    handler,
+                    task_context,
+                    auth_clone,
+                    identifiers,
+                    message_clone,
+                    task,
+                )
+                .await
+                {
+                    error!(
+                        task_id = %log_task_id,
+                        error = %err,
+                        "failed to execute streaming task"
+                    );
+                }
             }
         });
 
@@ -842,25 +856,22 @@ impl<'a> RequestExecutor<'a> {
         );
 
         let handler = skill_reg.handler_arc();
+        let identifiers = TaskIdentifiers::new(task.context_id.clone(), task.id.clone());
         let runtime = Arc::clone(&self.runtime);
         let auth_clone = auth_ctx.clone();
-        let context_clone = task.context_id.clone();
-        let task_id_clone = task.id.clone();
         let user_content_clone = user_message.clone();
-        let receiver = Some(self.runtime.event_bus().subscribe(&task_id_clone));
+        let receiver = Some(self.runtime.event_bus().subscribe(&task.id));
         let task_for_execution = task;
 
         compat::spawn({
-            let context_for_exec = context_clone;
-            let task_id_for_exec = task_id_clone;
+            let task_id_for_exec = identifiers.task_id.clone();
             async move {
                 if let Err(err) = drive_on_input(
                     runtime,
                     handler,
                     task_context,
                     auth_clone,
-                    context_for_exec.clone(),
-                    task_id_for_exec.clone(),
+                    identifiers,
                     user_content_clone,
                     task_for_execution,
                 )
@@ -918,16 +929,35 @@ impl<'a> RequestExecutor<'a> {
     }
 }
 
+#[derive(Clone)]
+struct TaskIdentifiers {
+    context_id: String,
+    task_id: String,
+}
+
+impl TaskIdentifiers {
+    #[allow(clippy::missing_const_for_fn)] // Takes owned `String`s, so it cannot be const.
+    fn new(context_id: String, task_id: String) -> Self {
+        Self {
+            context_id,
+            task_id,
+        }
+    }
+}
+
 async fn drive_on_request(
     runtime: Arc<dyn Runtime>,
     handler: Arc<dyn SkillHandler>,
     mut task_context: TaskContext,
     auth_ctx: AuthContext,
-    context_id: String,
-    task_id: String,
+    identifiers: TaskIdentifiers,
     initial_message: Content,
     mut task: Task,
 ) -> AgentResult<Task> {
+    let TaskIdentifiers {
+        context_id,
+        task_id,
+    } = identifiers;
     let context = Context::new(auth_ctx.clone());
     let result = handler
         .on_request(
@@ -942,14 +972,14 @@ async fn drive_on_request(
     task.status = final_status.clone();
 
     if let OnRequestResult::Completed { artifacts, .. } = &result {
-        task.artifacts = utils::artifacts_to_a2a(artifacts.clone());
+        task.artifacts = utils::artifacts_to_a2a(artifacts);
 
         for artifact in artifacts {
             let event = a2a_types::TaskArtifactUpdateEvent {
                 kind: a2a_types::ARTIFACT_UPDATE_KIND.to_string(),
                 task_id: task_id.clone(),
                 context_id: context_id.clone(),
-                artifact: utils::artifact_to_a2a(artifact.clone()),
+                artifact: utils::artifact_to_a2a(artifact),
                 append: None,
                 last_chunk: Some(true),
                 metadata: None,
@@ -1004,11 +1034,14 @@ async fn drive_on_input(
     handler: Arc<dyn SkillHandler>,
     mut task_context: TaskContext,
     auth_ctx: AuthContext,
-    context_id: String,
-    task_id: String,
+    identifiers: TaskIdentifiers,
     user_message: Content,
     mut task: Task,
 ) -> AgentResult<Task> {
+    let TaskIdentifiers {
+        context_id,
+        task_id,
+    } = identifiers;
     let context = Context::new(auth_ctx.clone());
     let result = handler
         .on_input_received(&mut task_context, &context, runtime.as_ref(), user_message)
@@ -1018,14 +1051,14 @@ async fn drive_on_input(
     task.status = final_status.clone();
 
     if let OnInputResult::Completed { artifacts, .. } = &result {
-        task.artifacts = utils::artifacts_to_a2a(artifacts.clone());
+        task.artifacts = utils::artifacts_to_a2a(artifacts);
 
         for artifact in artifacts {
             let event = a2a_types::TaskArtifactUpdateEvent {
                 kind: a2a_types::ARTIFACT_UPDATE_KIND.to_string(),
                 task_id: task_id.clone(),
                 context_id: context_id.clone(),
-                artifact: utils::artifact_to_a2a(artifact.clone()),
+                artifact: utils::artifact_to_a2a(artifact),
                 append: None,
                 last_chunk: Some(true),
                 metadata: None,
@@ -1128,11 +1161,9 @@ async fn emit_on_input_message(
 mod tests {
     use super::*;
     use crate::agent::{Agent, RegisteredSkill, SkillHandler, SkillMetadata, SkillSlot};
-    use crate::models::{Content, ContentPart, LlmResponse};
+    use crate::models::{Content, LlmResponse};
     use crate::test_support::FakeLlm;
-    use crate::tools::tool::ToolCall;
     use a2a_types::{Message, MessageRole, MessageSendParams, Part};
-    use async_trait::async_trait;
 
     fn negotiation_response(skill_id: &str, reasoning: &str) -> AgentResult<LlmResponse> {
         let decision = serde_json::json!({

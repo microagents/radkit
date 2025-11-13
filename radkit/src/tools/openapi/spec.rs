@@ -1,23 +1,23 @@
-//! OpenAPI Specification Parser
+//! `OpenAPI` Specification Parser
 //!
-//! This module provides functionality to load, parse, and validate OpenAPI 3.x specifications.
+//! This module provides functionality to load, parse, and validate `OpenAPI` 3.x specifications.
 //! It supports loading from files (JSON/YAML) and URLs with strict format detection.
 
 use openapiv3::OpenAPI;
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Parsed OpenAPI specification with extracted metadata
+/// Parsed `OpenAPI` specification with extracted metadata
 #[derive(Debug)]
 pub struct OpenApiSpec {
-    /// The parsed OpenAPI specification
+    /// The parsed `OpenAPI` specification
     spec: OpenAPI,
     /// Base URL extracted from servers section
     base_url: String,
 }
 
 impl OpenApiSpec {
-    /// Load OpenAPI spec from file with STRICT format detection
+    /// Load `OpenAPI` spec from file with STRICT format detection
     ///
     /// File extension MUST match content:
     /// - `.json` → JSON content (fails if YAML)
@@ -25,7 +25,7 @@ impl OpenApiSpec {
     /// - No extension or unknown → Error
     ///
     /// # Arguments
-    /// * `path` - Path to the OpenAPI spec file
+    /// * `path` - Path to the `OpenAPI` spec file
     ///
     /// # Example
     /// ```no_run
@@ -33,6 +33,10 @@ impl OpenApiSpec {
     ///
     /// let spec = OpenApiSpec::from_file("specs/petstore.yaml").unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read, parsed, or validated.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path)
@@ -48,16 +52,14 @@ impl OpenApiSpec {
                     e
                 )
             })?,
-            Some("yaml") | Some("yml") => {
-                serde_yaml::from_str::<OpenAPI>(&content).map_err(|e| {
-                    format!(
-                        "Failed to parse '{}' as YAML (extension is .yaml/.yml): {}\n\
+            Some("yaml" | "yml") => serde_yaml::from_str::<OpenAPI>(&content).map_err(|e| {
+                format!(
+                    "Failed to parse '{}' as YAML (extension is .yaml/.yml): {}\n\
                         Hint: If the file contains JSON, rename it to .json",
-                        path.display(),
-                        e
-                    )
-                })?
-            }
+                    path.display(),
+                    e
+                )
+            })?,
             Some(ext) => {
                 return Err(format!(
                     "Unsupported file extension '.{}' for '{}'.\n\
@@ -79,8 +81,7 @@ impl OpenApiSpec {
         let base_url = spec
             .servers
             .first()
-            .map(|s| s.url.clone())
-            .unwrap_or_else(|| "http://localhost".to_string());
+            .map_or_else(|| "http://localhost".to_string(), |s| s.url.clone());
 
         // Validate spec
         Self::validate_spec(&spec)?;
@@ -88,10 +89,10 @@ impl OpenApiSpec {
         Ok(Self { spec, base_url })
     }
 
-    /// Load OpenAPI spec from URL with Content-Type detection
+    /// Load `OpenAPI` spec from URL with Content-Type detection
     ///
     /// # Arguments
-    /// * `url` - URL to fetch the OpenAPI spec from
+    /// * `url` - URL to fetch the `OpenAPI` spec from
     ///
     /// # Example
     /// ```no_run
@@ -103,40 +104,44 @@ impl OpenApiSpec {
     ///     .unwrap();
     /// # });
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be fetched, the response cannot be parsed, or validation fails.
     pub async fn from_url(url: &str) -> Result<Self, String> {
         let response = reqwest::get(url)
             .await
-            .map_err(|e| format!("Failed to fetch spec from '{}': {}", url, e))?;
+            .map_err(|e| format!("Failed to fetch spec from '{url}': {e}"))?;
 
         // Check Content-Type header (clone to avoid borrow issue)
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_default();
 
         let content = response
             .text()
             .await
-            .map_err(|e| format!("Failed to read response from '{}': {}", url, e))?;
+            .map_err(|e| format!("Failed to read response from '{url}': {e}"))?;
 
         // Use Content-Type to determine format
-        let spec = if content_type.contains("json") || url.ends_with(".json") {
+        let spec = if content_type.contains("json") || Self::url_has_extension(url, "json") {
             serde_json::from_str::<OpenAPI>(&content)
-                .map_err(|e| format!("Failed to parse JSON from '{}': {}", url, e))?
-        } else if content_type.contains("yaml") || url.ends_with(".yaml") || url.ends_with(".yml") {
+                .map_err(|e| format!("Failed to parse JSON from '{url}': {e}"))?
+        } else if content_type.contains("yaml")
+            || Self::url_has_extension(url, "yaml")
+            || Self::url_has_extension(url, "yml")
+        {
             serde_yaml::from_str::<OpenAPI>(&content)
-                .map_err(|e| format!("Failed to parse YAML from '{}': {}", url, e))?
+                .map_err(|e| format!("Failed to parse YAML from '{url}': {e}"))?
         } else {
             // Try JSON first, then YAML
             serde_json::from_str::<OpenAPI>(&content)
                 .or_else(|_| serde_yaml::from_str::<OpenAPI>(&content))
                 .map_err(|e| {
-                    format!(
-                        "Failed to parse spec from '{}' (tried both JSON and YAML): {}",
-                        url, e
-                    )
+                    format!("Failed to parse spec from '{url}' (tried both JSON and YAML): {e}")
                 })?
         };
 
@@ -144,8 +149,7 @@ impl OpenApiSpec {
         let base_url = spec
             .servers
             .first()
-            .map(|s| s.url.clone())
-            .unwrap_or_else(|| url.to_string());
+            .map_or_else(|| url.to_string(), |s| s.url.clone());
 
         // Validate spec
         Self::validate_spec(&spec)?;
@@ -153,21 +157,33 @@ impl OpenApiSpec {
         Ok(Self { spec, base_url })
     }
 
-    /// Load OpenAPI spec from string (auto-detect format)
+    /// Load `OpenAPI` spec from string (auto-detect format)
     ///
     /// # Arguments
-    /// * `content` - OpenAPI spec content as string
+    /// * `content` - `OpenAPI` spec content as string
     /// * `base_url` - Base URL to use for API calls
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the content cannot be parsed as JSON or YAML, or if validation fails.
     pub fn from_str(content: &str, base_url: String) -> Result<Self, String> {
         // Try JSON first (more common), then YAML
         let spec = serde_json::from_str::<OpenAPI>(content)
             .or_else(|_| serde_yaml::from_str::<OpenAPI>(content))
-            .map_err(|e| format!("Failed to parse OpenAPI spec string: {}", e))?;
+            .map_err(|e| format!("Failed to parse OpenAPI spec string: {e}"))?;
 
         // Validate spec
         Self::validate_spec(&spec)?;
 
         Ok(Self { spec, base_url })
+    }
+
+    fn url_has_extension(target: &str, expected: &str) -> bool {
+        let trimmed = target.split(['?', '#']).next().unwrap_or(target);
+        Path::new(trimmed)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
     }
 
     /// PRAGMATIC VALIDATION: Fail only on critical issues
@@ -255,12 +271,15 @@ impl OpenApiSpec {
     }
 
     /// Get the base URL for API calls
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // `String` -> `&str` deref is not const-stable yet.
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
-    /// Get access to the underlying OpenAPI spec
-    pub fn spec(&self) -> &OpenAPI {
+    /// Get access to the underlying `OpenAPI` spec
+    #[must_use]
+    pub const fn spec(&self) -> &OpenAPI {
         &self.spec
     }
 }

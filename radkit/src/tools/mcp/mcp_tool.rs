@@ -121,10 +121,7 @@ impl MCPTool {
             // Timeout cancellations are retryable, others are not
             ServiceError::Cancelled { reason } => reason
                 .as_ref()
-                .map_or(false, |r| r.to_lowercase().contains("timeout")),
-
-            // Protocol and other errors are not retryable
-            ServiceError::McpError(_) | ServiceError::UnexpectedResponse => false,
+                .is_some_and(|r| r.to_lowercase().contains("timeout")),
 
             // Conservative default - don't retry unknown errors
             _ => false,
