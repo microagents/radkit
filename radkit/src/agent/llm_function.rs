@@ -185,7 +185,7 @@ where
         let content = response.into_content();
 
         // Extract the structured output from the text response
-        let value = extract_structured_output::<T>(content.clone())?;
+        let value = extract_structured_output::<T>(&content)?;
 
         Ok(InvocationOutcome {
             value,

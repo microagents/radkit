@@ -101,6 +101,7 @@ impl SimpleToolset {
     }
 
     /// Builder-style helper to add a tool while consuming the toolset.
+    #[must_use]
     pub fn with_tool<U>(mut self, tool: U) -> Self
     where
         U: BaseTool + 'static,
@@ -110,6 +111,7 @@ impl SimpleToolset {
     }
 
     /// Builder-style helper to add multiple tools while consuming the toolset.
+    #[must_use]
     pub fn with_tools<I, U>(mut self, tools: I) -> Self
     where
         I: IntoIterator<Item = U>,
@@ -129,7 +131,7 @@ impl SimpleToolset {
 )]
 impl BaseToolset for SimpleToolset {
     async fn get_tools(&self) -> Vec<&dyn BaseTool> {
-        self.tools.iter().map(|b| b.as_ref()).collect()
+        self.tools.iter().map(std::convert::AsRef::as_ref).collect()
     }
 
     async fn close(&self) {

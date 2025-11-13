@@ -126,6 +126,7 @@ impl AnthropicLlm {
     /// Sets a custom base URL for the API endpoint.
     ///
     /// Useful for testing or when using a proxy/gateway.
+    #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
@@ -174,108 +175,7 @@ impl AnthropicLlm {
         let (system_prompt, events) = thread.into_parts();
 
         // Build messages array from events
-        let mut messages = Vec::new();
-
-        for event in events {
-            let role_str = match event.role() {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::Tool => "user", // Tool responses go as user messages in Anthropic
-                Role::System => {
-                    // System messages are not supported in messages array
-                    continue;
-                }
-            };
-
-            let content = event.into_content();
-
-            // Determine if content can be represented as simple text
-            if content.is_text_only() && !content.is_text_empty() {
-                let text = content.joined_texts().unwrap_or_default();
-                messages.push(json!({
-                    "role": role_str,
-                    "content": text
-                }));
-            } else {
-                // Multi-part content
-                let mut content_parts = Vec::new();
-
-                for part in content {
-                    match part {
-                        ContentPart::Text(text) => {
-                            content_parts.push(json!({
-                                "type": "text",
-                                "text": text
-                            }));
-                        }
-                        ContentPart::Data(data) => {
-                            let source_data = match &data.source {
-                                crate::models::DataSource::Base64(b64) => b64.clone(),
-                                crate::models::DataSource::Uri(_) => {
-                                    return Err(AgentError::NotImplemented {
-                                        feature: "Anthropic provider does not support image URIs. Please provide image data as base64.".to_string(),
-                                    });
-                                }
-                            };
-
-                            // Determine if it's an image or document based on content type
-                            let is_image = data.content_type.starts_with("image/");
-
-                            if is_image {
-                                content_parts.push(json!({
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": data.content_type,
-                                        "data": source_data
-                                    }
-                                }));
-                            } else {
-                                content_parts.push(json!({
-                                    "type": "document",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": data.content_type,
-                                        "data": source_data
-                                    }
-                                }));
-                            }
-                        }
-                        ContentPart::ToolCall(tool_call) => {
-                            content_parts.push(json!({
-                                "type": "tool_use",
-                                "id": tool_call.id(),
-                                "name": tool_call.name(),
-                                "input": tool_call.arguments()
-                            }));
-                        }
-                        ContentPart::ToolResponse(tool_response) => {
-                            let result = tool_response.result();
-                            let content_value = if result.is_success() {
-                                result.data().clone()
-                            } else {
-                                json!({
-                                    "error": result.error_message().unwrap_or("Unknown error")
-                                })
-                            };
-
-                            content_parts.push(json!({
-                                "type": "tool_result",
-                                "tool_use_id": tool_response.tool_call_id(),
-                                "content": content_value.to_string()
-                            }));
-                        }
-                    }
-                }
-
-                if !content_parts.is_empty() {
-                    messages.push(json!({
-                        "role": role_str,
-                        "content": content_parts
-                    }));
-                }
-            }
-        }
+        let messages = Self::build_messages_from_events(events)?;
 
         // Build the base payload
         let max_tokens = self.max_tokens.unwrap_or_else(|| self.default_max_tokens());
@@ -297,6 +197,127 @@ impl AnthropicLlm {
         }
 
         // Add tools if provided
+        Self::add_tools_to_payload(&mut payload, toolset).await;
+
+        Ok(payload)
+    }
+
+    /// Converts thread events into Anthropic-formatted message array.
+    fn build_messages_from_events(events: Vec<crate::models::Event>) -> AgentResult<Vec<Value>> {
+        let mut messages = Vec::new();
+
+        for event in events {
+            let role_str = match event.role() {
+                Role::Assistant => "assistant",
+                Role::User | Role::Tool => "user", // Tool responses go as user messages in Anthropic
+                Role::System => {
+                    // System messages are not supported in messages array
+                    continue;
+                }
+            };
+
+            let content = event.into_content();
+
+            // Determine if content can be represented as simple text
+            if content.is_text_only() && !content.is_text_empty() {
+                let text = content.joined_texts().unwrap_or_default();
+                messages.push(json!({
+                    "role": role_str,
+                    "content": text
+                }));
+            } else {
+                // Multi-part content
+                let content_parts = Self::convert_content_parts_to_json(content)?;
+
+                if !content_parts.is_empty() {
+                    messages.push(json!({
+                        "role": role_str,
+                        "content": content_parts
+                    }));
+                }
+            }
+        }
+
+        Ok(messages)
+    }
+
+    /// Converts content parts to Anthropic JSON format.
+    fn convert_content_parts_to_json(content: Content) -> AgentResult<Vec<Value>> {
+        let mut content_parts = Vec::new();
+
+        for part in content {
+            match part {
+                ContentPart::Text(text) => {
+                    content_parts.push(json!({
+                        "type": "text",
+                        "text": text
+                    }));
+                }
+                ContentPart::Data(data) => {
+                    let source_data = match &data.source {
+                        crate::models::DataSource::Base64(b64) => b64.clone(),
+                        crate::models::DataSource::Uri(_) => {
+                            return Err(AgentError::NotImplemented {
+                                feature: "Anthropic provider does not support image URIs. Please provide image data as base64.".to_string(),
+                            });
+                        }
+                    };
+
+                    // Determine if it's an image or document based on content type
+                    let is_image = data.content_type.starts_with("image/");
+
+                    if is_image {
+                        content_parts.push(json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": data.content_type,
+                                "data": source_data
+                            }
+                        }));
+                    } else {
+                        content_parts.push(json!({
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": data.content_type,
+                                "data": source_data
+                            }
+                        }));
+                    }
+                }
+                ContentPart::ToolCall(tool_call) => {
+                    content_parts.push(json!({
+                        "type": "tool_use",
+                        "id": tool_call.id(),
+                        "name": tool_call.name(),
+                        "input": tool_call.arguments()
+                    }));
+                }
+                ContentPart::ToolResponse(tool_response) => {
+                    let result = tool_response.result();
+                    let content_value = if result.is_success() {
+                        result.data().clone()
+                    } else {
+                        json!({
+                            "error": result.error_message().unwrap_or("Unknown error")
+                        })
+                    };
+
+                    content_parts.push(json!({
+                        "type": "tool_result",
+                        "tool_use_id": tool_response.tool_call_id(),
+                        "content": content_value.to_string()
+                    }));
+                }
+            }
+        }
+
+        Ok(content_parts)
+    }
+
+    /// Adds tool configuration to the payload if tools are available.
+    async fn add_tools_to_payload(payload: &mut Value, toolset: Option<Arc<dyn BaseToolset>>) {
         if let Some(toolset) = toolset {
             let tools_list = toolset.get_tools().await;
             if !tools_list.is_empty() {
@@ -315,12 +336,10 @@ impl AnthropicLlm {
                 payload["tools"] = json!(tools);
             }
         }
-
-        Ok(payload)
     }
 
     /// Parses Anthropic API response into Content.
-    fn parse_response(&self, response_body: &Value) -> AgentResult<Content> {
+    fn parse_response(response_body: &Value) -> AgentResult<Content> {
         let mut content = Content::default();
 
         // Extract content array from response
@@ -380,32 +399,35 @@ impl AnthropicLlm {
     ///
     /// Anthropic returns usage with separate fields for `input_tokens`, cache tokens,
     /// and `output_tokens`. We normalize this by summing all input-related tokens.
-    fn parse_usage(&self, response_body: &Value) -> TokenUsage {
-        let usage_obj = match response_body.get("usage") {
-            Some(obj) => obj,
-            None => return TokenUsage::empty(),
+    fn parse_usage(response_body: &Value) -> TokenUsage {
+        let Some(usage_obj) = response_body.get("usage") else {
+            return TokenUsage::empty();
         };
 
         // Extract individual token counts
         let input_tokens = usage_obj
             .get("input_tokens")
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as u32;
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
 
         let cache_creation_tokens = usage_obj
             .get("cache_creation_input_tokens")
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as u32;
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
 
         let cache_read_tokens = usage_obj
             .get("cache_read_input_tokens")
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as u32;
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
 
         let output_tokens = usage_obj
             .get("output_tokens")
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as u32;
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
 
         // Compute total input tokens (including cache operations)
         let total_input_tokens = input_tokens + cache_creation_tokens + cache_read_tokens;
@@ -501,7 +523,7 @@ mod tests {
 
     #[test]
     fn parse_response_extracts_content() {
-        let llm = AnthropicLlm::new("model", "api-key");
+        let _llm = AnthropicLlm::new("model", "api-key");
         let body = json!({
             "content": [
                 { "type": "text", "text": "Hello" },
@@ -520,13 +542,13 @@ mod tests {
             }
         });
 
-        let content = llm.parse_response(&body).expect("content");
+        let content = AnthropicLlm::parse_response(&body).expect("content");
         assert_eq!(content.first_text(), Some("Hello"));
         let calls = content.tool_calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name(), "lookup");
 
-        let usage = llm.parse_usage(&body);
+        let usage = AnthropicLlm::parse_usage(&body);
         assert_eq!(usage.input_tokens(), 10); // 5 + 2 + 3
         assert_eq!(usage.output_tokens(), 4);
         assert_eq!(usage.total_tokens(), 14);
@@ -534,11 +556,9 @@ mod tests {
 
     #[test]
     fn parse_response_missing_content_errors() {
-        let llm = AnthropicLlm::new("model", "api-key");
+        let _llm = AnthropicLlm::new("model", "api-key");
         let body = json!({});
-        let err = llm
-            .parse_response(&body)
-            .expect_err("missing content should fail");
+        let err = AnthropicLlm::parse_response(&body).expect_err("missing content should fail");
         match err {
             AgentError::LlmProvider { provider, .. } => assert_eq!(provider, "Anthropic"),
             other => panic!("unexpected error: {other:?}"),
@@ -636,8 +656,8 @@ impl BaseLlm for AnthropicLlm {
         }
 
         // Parse content and usage
-        let content = self.parse_response(&response_body)?;
-        let usage = self.parse_usage(&response_body);
+        let content = Self::parse_response(&response_body)?;
+        let usage = Self::parse_usage(&response_body);
 
         Ok(LlmResponse::new(content, usage))
     }

@@ -1,33 +1,32 @@
-//! OpenAPI Toolset - Dynamic tool generation from OpenAPI specifications
+//! `OpenAPI` Toolset - Dynamic tool generation from `OpenAPI` specifications
 //!
-//! This module implements the BaseToolset trait for OpenAPI specifications,
+//! This module implements the `BaseToolset` trait for `OpenAPI` specifications,
 //! generating one tool per API operation.
 
 use crate::tools::openapi::{OpenApiOperationTool, OpenApiSpec};
 use crate::tools::{BaseTool, BaseToolset};
-use async_trait::async_trait;
 use std::path::Path;
 use std::sync::Arc;
 
-/// OpenAPI Toolset that generates tools from OpenAPI specifications
+/// `OpenAPI` Toolset that generates tools from `OpenAPI` specifications
 ///
-/// Dynamically generates one BaseTool per API operation.
+/// Dynamically generates one `BaseTool` per API operation.
 pub struct OpenApiToolSet {
     /// Toolset name (for identification)
     name: String,
     /// Path or URL to the spec file
     spec_path: String,
     /// Generated tools (one per operation)
-    /// Each tool internally holds Arc references to spec and http_client for efficient sharing
+    /// Each tool internally holds Arc references to spec and `http_client` for efficient sharing
     tools: Vec<Box<dyn BaseTool>>,
 }
 
 impl OpenApiToolSet {
-    /// Create OpenAPI toolset from file
+    /// Create `OpenAPI` toolset from file
     ///
     /// # Arguments
-    /// * `name` - Name for this toolset (e.g., "petstore_api") - **MUST be first parameter** (matches MCPToolset::new pattern)
-    /// * `path` - Path to OpenAPI spec file (.json, .yaml, or .yml)
+    /// * `name` - Name for this toolset (e.g., "`petstore_api`") - **MUST be first parameter** (matches `MCPToolset::new` pattern)
+    /// * `path` - Path to `OpenAPI` spec file (.json, .yaml, or .yml)
     /// * `auth` - Optional authentication configuration
     ///
     /// # Pattern Note
@@ -53,6 +52,11 @@ impl OpenApiToolSet {
     /// ).await.unwrap();
     /// # });
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read, parsed, or if the toolset cannot be created.
+    #[allow(clippy::unused_async)] // Kept async for API consistency with from_url
     pub async fn from_file(
         name: String,
         path: impl AsRef<Path>,
@@ -60,22 +64,26 @@ impl OpenApiToolSet {
     ) -> Result<Self, String> {
         let spec_path = path.as_ref().to_string_lossy().to_string();
         let spec = OpenApiSpec::from_file(path)?;
-        Self::from_spec(name, spec_path, spec, auth)
+        Self::from_spec(name, spec_path, spec, auth.as_ref())
     }
 
-    /// Create OpenAPI toolset from URL
+    /// Create `OpenAPI` toolset from URL
     ///
     /// # Arguments
     /// * `name` - Name for this toolset
-    /// * `url` - URL to fetch the OpenAPI spec from
+    /// * `url` - URL to fetch the `OpenAPI` spec from
     /// * `auth` - Optional authentication configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be fetched, parsed, or if the toolset cannot be created.
     pub async fn from_url(
         name: String,
         url: &str,
         auth: Option<AuthConfig>,
     ) -> Result<Self, String> {
         let spec = OpenApiSpec::from_url(url).await?;
-        Self::from_spec(name, url.to_string(), spec, auth)
+        Self::from_spec(name, url.to_string(), spec, auth.as_ref())
     }
 
     /// Internal: Create toolset from parsed spec
@@ -83,10 +91,10 @@ impl OpenApiToolSet {
         name: String,
         spec_path: String,
         spec: OpenApiSpec,
-        auth: Option<AuthConfig>,
+        auth: Option<&AuthConfig>,
     ) -> Result<Self, String> {
         let spec = Arc::new(spec);
-        let http_client = Arc::new(Self::create_http_client(&auth)?);
+        let http_client = Arc::new(Self::create_http_client(auth)?);
 
         // Generate tools for each operation
         let mut tools: Vec<Box<dyn BaseTool>> = Vec::new();
@@ -114,7 +122,7 @@ impl OpenApiToolSet {
                     .summary
                     .clone()
                     .or_else(|| operation.description.clone())
-                    .unwrap_or_else(|| format!("{} {}", method, path));
+                    .unwrap_or_else(|| format!("{method} {path}"));
 
                 let tool = Box::new(OpenApiOperationTool::new(
                     operation_id,
@@ -123,7 +131,7 @@ impl OpenApiToolSet {
                     path.clone(),
                     spec.clone(),
                     http_client.clone(),
-                    auth.clone(),
+                    auth.cloned(),
                 ));
 
                 tools.push(tool);
@@ -164,7 +172,7 @@ impl OpenApiToolSet {
     }
 
     /// Create HTTP client with optional authentication
-    fn create_http_client(auth: &Option<AuthConfig>) -> Result<reqwest::Client, String> {
+    fn create_http_client(auth: Option<&AuthConfig>) -> Result<reqwest::Client, String> {
         let mut builder = reqwest::Client::builder();
 
         // Timeout is only supported on native targets
@@ -174,33 +182,33 @@ impl OpenApiToolSet {
         }
 
         // Configure default headers based on auth
-        if let Some(auth) = auth {
-            if let AuthConfig::ApiKey {
-                location: HeaderOrQuery::Header,
-                name,
-                value,
-            } = auth
-            {
-                let mut headers = reqwest::header::HeaderMap::new();
-                headers.insert(
-                    reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                        .map_err(|e| format!("Invalid header name: {}", e))?,
-                    reqwest::header::HeaderValue::from_str(value)
-                        .map_err(|e| format!("Invalid header value: {}", e))?,
-                );
-                builder = builder.default_headers(headers);
-            }
+        if let Some(AuthConfig::ApiKey {
+            location: HeaderOrQuery::Header,
+            name,
+            value,
+        }) = auth
+        {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(|e| format!("Invalid header name: {e}"))?,
+                reqwest::header::HeaderValue::from_str(value)
+                    .map_err(|e| format!("Invalid header value: {e}"))?,
+            );
+            builder = builder.default_headers(headers);
         }
 
         builder.build().map_err(|e| e.to_string())
     }
 
     /// Get the toolset name
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Get the spec path or URL
+    #[must_use]
     pub fn spec_path(&self) -> &str {
         &self.spec_path
     }
@@ -237,7 +245,7 @@ pub enum HeaderOrQuery {
 )]
 impl BaseToolset for OpenApiToolSet {
     async fn get_tools(&self) -> Vec<&dyn BaseTool> {
-        self.tools.iter().map(|b| b.as_ref()).collect()
+        self.tools.iter().map(std::convert::AsRef::as_ref).collect()
     }
 
     async fn close(&self) {

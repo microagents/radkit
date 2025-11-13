@@ -29,7 +29,7 @@ impl MCPToolFilter {
     }
 }
 
-/// MCPToolset that lazily discovers tools and manages connections
+/// `MCPToolset` that lazily discovers tools and manages connections
 pub struct MCPToolset {
     session_manager: Arc<MCPSessionManager>,
     tool_filter: Option<MCPToolFilter>,
@@ -38,7 +38,8 @@ pub struct MCPToolset {
 }
 
 impl MCPToolset {
-    /// Create a new MCPToolset with the given connection parameters
+    /// Create a new `MCPToolset` with the given connection parameters
+    #[must_use]
     pub fn new(connection_params: MCPConnectionParams) -> Self {
         Self {
             session_manager: Arc::new(MCPSessionManager::new(connection_params)),
@@ -48,12 +49,17 @@ impl MCPToolset {
     }
 
     /// Add a tool filter to limit which tools are exposed
+    #[must_use]
     pub fn with_filter(mut self, filter: MCPToolFilter) -> Self {
         self.tool_filter = Some(filter);
         self
     }
 
     /// Test the connection to the MCP server
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection test fails or tools cannot be listed.
     pub async fn test_connection(&self) -> AgentResult<()> {
         info!("Testing MCP connection");
         let session = self.session_manager.create_session(None).await?;
@@ -142,7 +148,7 @@ impl BaseToolset for MCPToolset {
             .await;
 
         // Return references to cached tools
-        tools.iter().map(|b| b.as_ref()).collect()
+        tools.iter().map(std::convert::AsRef::as_ref).collect()
     }
 
     async fn close(&self) {
@@ -155,7 +161,7 @@ impl std::fmt::Debug for MCPToolset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MCPToolset")
             .field("tool_filter", &self.tool_filter)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

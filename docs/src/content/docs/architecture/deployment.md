@@ -27,10 +27,9 @@ Once the `.wasm` module is uploaded, the cloud platform takes over:
 
 1.  **Instantiation**: The platform loads the `.wasm` module into a high-performance, secure WASM runtime (like Wasmtime).
 
-2.  **Discovery via Entrypoint**: The runtime calls a single, known function in the module to retrieve the `AgentDefinition`s you have defined. The `#[entrypoint]` macro you use in your code designates this function.
+2.  **Discovery via Configuration Function**: The runtime calls a known function in the module to retrieve the `AgentDefinition`s you have defined. This is typically the `configure_agents()` function.
 
     ```rust
-    #[entrypoint]
     pub fn configure_agents() -> Vec<AgentDefinition> {
         // ... return agent definitions
     }

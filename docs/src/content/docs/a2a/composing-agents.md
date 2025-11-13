@@ -12,27 +12,27 @@ An agent is more than just a single skill; it's a collection of skills unified u
 You compose an agent using the `Agent::builder()`. You give the agent an ID and name, and then you add your skills to it.
 
 ```rust
+use radkit::errors::AgentResult;
 use radkit::prelude::*;
 
 // Assume ProfileExtractorSkill and ReportGeneratorSkill are defined as in previous guides
 # pub struct ProfileExtractorSkill;
 # #[async_trait]
 # impl SkillHandler for ProfileExtractorSkill {
-#     async fn on_request(&self, _: &mut TaskContext, _: &Context, _: &dyn Runtime, _: Content) -> Result<OnRequestResult> {
+#     async fn on_request(&self, _: &mut TaskContext, _: &Context, _: &dyn Runtime, _: Content) -> AgentResult<OnRequestResult> {
 #         unimplemented!()
 #     }
 # }
 # pub struct ReportGeneratorSkill;
 # #[async_trait]
 # impl SkillHandler for ReportGeneratorSkill {
-#     async fn on_request(&self, _: &mut TaskContext, _: &Context, _: &dyn Runtime, _: Content) -> Result<OnRequestResult> {
+#     async fn on_request(&self, _: &mut TaskContext, _: &Context, _: &dyn Runtime, _: Content) -> AgentResult<OnRequestResult> {
 #         unimplemented!()
 #     }
 # }
 
 
-// This function is the main entrypoint for defining your agents.
-#[entrypoint]
+// This function defines your agents.
 pub fn configure_agents() -> Vec<AgentDefinition> {
     let my_agent = Agent::builder()
         .with_id("my-hr-agent-v1")
@@ -58,7 +58,7 @@ To enable the server, you must enable the `runtime` feature for Radkit in your `
 
 ```toml
 [dependencies]
-radkit = { version = "0.1.0", features = ["runtime"] }
+radkit = { version = "0.0.2", features = ["runtime"] }
 # ... other dependencies
 ```
 
@@ -66,20 +66,25 @@ Then, you can add a `main` function to run the server.
 
 ```rust
 # use radkit::prelude::*;
+# use radkit::models::providers::AnthropicLlm;
 # pub fn configure_agents() -> Vec<AgentDefinition> { vec![] }
 // This main function will only be compiled for native targets, not for WASM.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 #[tokio::main]
-async fn main() {
-    // 1. Create a default runtime environment
-    let runtime = DefaultRuntime::new();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Create an LLM instance
+    let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
 
-    // 2. Add the agents defined in your entrypoint function
+    // 2. Create a default runtime environment with the LLM
+    let runtime = DefaultRuntime::new(llm);
+
+    // 3. Add the agents and start the server
     runtime
-        .with_agents(configure_agents())
-        .serve("127.0.0.1:8080") // 3. Start the server
-        .await
-        .expect("Failed to start server");
+        .agents(configure_agents())
+        .serve("127.0.0.1:8080")
+        .await?;
+
+    Ok(())
 }
 ```
 
@@ -91,8 +96,6 @@ cargo run
 
 Your A2A agent is now running at `http://127.0.0.1:8080`! You can interact with it using any A2A-compliant client.
 
-## The `#[entrypoint]` Macro
+### Optional Dev UI
 
-The `#[entrypoint]` macro designates a function as the main configuration point for your agent project. When you deploy your agent to a cloud environment, the platform will call this function to discover the agents defined in your project.
-
-This separation between agent definition (`configure_agents`) and execution (`main`) is key to Radkit's portability. The same agent definition can be run locally with `DefaultRuntime` or deployed to a high-performance WASM cloud environment without changing your agent's code.
+Turn on the `dev-ui` feature for an interactive, browser-based playground that sits on top of the runtime:

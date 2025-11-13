@@ -25,11 +25,10 @@ Let's build a shopping cart tool. The `add_to_cart` tool will be called multiple
 ```rust
 use radkit::agent::LlmWorker;
 use radkit::models::providers::AnthropicLlm;
-use radkit::tools::{FunctionTool, ToolResult, BaseTool};
+use radkit::tools::{tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 
 // The final output we want
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -39,52 +38,52 @@ struct ShoppingCart {
     estimated_total: f64,
 }
 
+// Define tool arguments
+#[derive(Deserialize, JsonSchema)]
+struct AddToCartArgs {
+    /// Item name to add
+    item: String,
+    /// Price of the item
+    price: f64,
+}
+
 // The tool that adds items to the cart
-let add_item_tool = Arc::new(FunctionTool::new(
-    "add_to_cart",
-    "Add an item to the shopping cart",
-    |args, ctx| {
-        Box::pin(async move {
-            let item = args.get("item").and_then(|v| v.as_str()).unwrap_or("");
-            let price = args.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0);
+#[tool(description = "Add an item to the shopping cart")]
+async fn add_to_cart(args: AddToCartArgs, ctx: ToolContext) -> ToolResult {
+    // 1. Get current state from the context
+    let mut items: Vec<String> = ctx
+        .state()
+        .get_state("items")
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
 
-            // 1. Get current state from the context
-            let mut items: Vec<String> = ctx
-                .state()
-                .get_state("items")
-                .and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or_default();
+    let total_price: f64 = ctx
+        .state()
+        .get_state("total_price")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
 
-            let total_price: f64 = ctx
-                .state()
-                .get_state("total_price")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
+    // 2. Update the state
+    items.push(args.item.clone());
+    let new_total = total_price + args.price;
 
-            // 2. Update the state
-            items.push(item.to_string());
-            let new_total = total_price + price;
+    // 3. Set the new state back into the context
+    ctx.state().set_state("items", json!(items));
+    ctx.state().set_state("total_price", json!(new_total));
 
-            // 3. Set the new state back into the context
-            ctx.state().set_state("items", json!(items));
-            ctx.state().set_state("total_price", json!(new_total));
+    // 4. Return the result of this specific action
+    ToolResult::success(json!({
+        "item_added": args.item,
+        "cart_size": items.len(),
+        "current_total": new_total
+    }))
+}
 
-            // 4. Return the result of this specific action
-            ToolResult::success(json!({
-                "item_added": item,
-                "cart_size": items.len(),
-                "current_total": new_total
-            }))
-        })
-    },
-)) as Arc<dyn BaseTool>;
-
-
-let llm = AnthropicLlm::from_env("claude-3-sonnet-20240229")?;
+let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
 
 let worker = LlmWorker::<ShoppingCart>::builder(llm)
     .with_system_instructions("You are a shopping assistant. First, add all items to the cart, then provide the final cart summary.")
-    .with_tool(add_item_tool)
+    .with_tool(add_to_cart)
     .build();
 
 // The worker will call the tool multiple times to fulfill the request

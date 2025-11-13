@@ -1,8 +1,8 @@
-//! OpenAPI Tool Integration for Radkit
+//! `OpenAPI` Tool Integration for Radkit
 //!
-//! This module provides OpenAPI 3.x specification support for Radkit agents,
+//! This module provides `OpenAPI` 3.x specification support for Radkit agents,
 //! enabling them to interact with REST APIs by dynamically generating tools
-//! from OpenAPI specifications.
+//! from `OpenAPI` specifications.
 //!
 //! # Example
 //! ```no_run

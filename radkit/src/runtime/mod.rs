@@ -177,7 +177,7 @@ impl DefaultRuntime {
     /// # Arguments
     ///
     /// * `url` - The base URL (e.g., "<http://localhost:3000>" for dev,
-    ///           "<https://api.example.com>" for production)
+    ///   "<https://api.example.com>" for production)
     ///
     /// # Examples
     ///
@@ -192,6 +192,7 @@ impl DefaultRuntime {
     ///     .base_url("https://api.example.com")
     ///     .serve("0.0.0.0:8080").await?;
     /// ```
+    #[must_use]
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = Some(url.into());
         self
@@ -200,6 +201,10 @@ impl DefaultRuntime {
     /// Starts the local development server at the given address.
     ///
     /// This is an async method that runs until the server is stopped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server cannot bind to the address or fails during operation.
     #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub async fn serve(mut self, address: impl AsRef<str>) -> AgentResult<()> {
         // Initialize tracing subscriber for logging

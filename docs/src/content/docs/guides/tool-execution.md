@@ -20,11 +20,10 @@ Let's build a simple weather agent that uses a `get_weather` tool.
 ```rust
 use radkit::agent::LlmWorker;
 use radkit::models::providers::AnthropicLlm;
-use radkit::tools::{FunctionTool, ToolResult};
+use radkit::tools::{tool, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 
 // 1. Define the final output structure
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -35,48 +34,37 @@ struct WeatherReport {
     forecast: String,
 }
 
+// 2. Define tool arguments
+#[derive(Deserialize, JsonSchema)]
+struct GetWeatherArgs {
+    /// The city and state, e.g., San Francisco, CA
+    location: String,
+}
+
+// 3. Define the tool using the #[tool] macro
+#[tool(description = "Get current weather for a location")]
+async fn get_weather(args: GetWeatherArgs) -> ToolResult {
+    // In a real app, you would call a weather API here
+    let weather_data = json!({
+        "temperature": 72.5,
+        "condition": "Sunny",
+        "humidity": 65,
+        "location": args.location,
+    });
+
+    ToolResult::success(weather_data)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 2. Define the tool
-    let weather_tool = Arc::new(FunctionTool::new(
-        "get_weather",
-        "Get current weather for a location",
-        |args, _ctx| {
-            Box::pin(async move {
-                let location = args
-                    .get("location")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown");
-
-                // In a real app, you would call a weather API here
-                let weather_data = json!({
-                    "temperature": 72.5,
-                    "condition": "Sunny",
-                    "humidity": 65,
-                });
-
-                ToolResult::success(weather_data)
-            })
-        },
-    ).with_parameters_schema(json!({
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "The city and state, e.g., San Francisco, CA"
-            }
-        },
-        "required": ["location"]
-    })));
-
-    // 3. Create the worker with the tool
-    let llm = AnthropicLlm::from_env("claude-3-sonnet-20240229")?;
+    // 4. Create the worker with the tool
+    let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
     let worker = LlmWorker::<WeatherReport>::builder(llm)
         .with_system_instructions("You are a friendly weather assistant.")
-        .with_tool(weather_tool)
+        .with_tool(get_weather)  // Pass the tool directly
         .build();
 
-    // 4. Run the worker
+    // 5. Run the worker
     let report = worker.run("What's the weather in San Francisco?").await?;
 
     println!("📍 Location: {}", report.location);
@@ -97,11 +85,10 @@ Let's create a travel agent that can get weather, search for hotels, and calcula
 ```rust
 use radkit::agent::LlmWorker;
 use radkit::models::providers::AnthropicLlm;
-use radkit::tools::{BaseTool, FunctionTool, ToolResult};
+use radkit::tools::{tool, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct TravelPlan {
@@ -111,32 +98,50 @@ struct TravelPlan {
     estimated_cost: f64,
 }
 
-// Define the tools (simplified for brevity)
-let weather_tool = Arc::new(FunctionTool::new(
-    "get_weather", "Get weather forecast", |_, _| {
-        Box::pin(async { ToolResult::success(json!({"forecast": "Sunny and 75°F"})) })
-    },
-)) as Arc<dyn BaseTool>;
+// Define tool arguments
+#[derive(Deserialize, JsonSchema)]
+struct WeatherArgs {
+    location: String,
+}
 
-let hotel_tool = Arc::new(FunctionTool::new(
-    "search_hotels", "Search for hotels", |_, _| {
-        Box::pin(async { ToolResult::success(json!({"hotel": "The Grand Hotel"})) })
-    },
-)) as Arc<dyn BaseTool>;
+#[derive(Deserialize, JsonSchema)]
+struct HotelArgs {
+    location: String,
+}
 
-let cost_tool = Arc::new(FunctionTool::new(
-    "calculate_cost", "Calculate trip cost", |_, _| {
-        Box::pin(async { ToolResult::success(json!({"cost": 1250.0})) })
-    },
-)) as Arc<dyn BaseTool>;
+#[derive(Deserialize, JsonSchema)]
+struct CostArgs {
+    nights: i64,
+}
 
+// Define the tools using the #[tool] macro
+#[tool(description = "Get weather forecast")]
+async fn get_weather(args: WeatherArgs) -> ToolResult {
+    ToolResult::success(json!({
+        "forecast": format!("Sunny and 75°F in {}", args.location)
+    }))
+}
 
-let llm = AnthropicLlm::from_env("claude-3-sonnet-20240229")?;
+#[tool(description = "Search for hotels")]
+async fn search_hotels(args: HotelArgs) -> ToolResult {
+    ToolResult::success(json!({
+        "hotel": "The Grand Hotel",
+        "location": args.location
+    }))
+}
+
+#[tool(description = "Calculate trip cost")]
+async fn calculate_cost(args: CostArgs) -> ToolResult {
+    let cost = args.nights as f64 * 150.0 + 500.0;  // Hotel + flight estimate
+    ToolResult::success(json!({"cost": cost}))
+}
+
+let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
 
 // Build the worker with multiple tools
 let worker = LlmWorker::<TravelPlan>::builder(llm)
     .with_system_instructions("You are a helpful travel planning assistant.")
-    .with_tools(vec![weather_tool, hotel_tool, cost_tool])
+    .with_tools(vec![get_weather, search_hotels, calculate_cost])
     .build();
 
 // Run the worker

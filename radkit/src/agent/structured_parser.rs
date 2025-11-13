@@ -18,6 +18,10 @@ use crate::models::Content;
 ///
 /// This creates a prompt that tells the LLM to respond with JSON matching
 /// the schema. The schema is included inline to guide the LLM's output.
+///
+/// # Errors
+///
+/// Returns an error if the schema cannot be serialized to JSON.
 pub fn build_structured_output_instructions<T>() -> AgentResult<String>
 where
     T: JsonSchema + MaybeSend + MaybeSync + 'static,
@@ -89,7 +93,7 @@ Example response format:
 /// - No text content is found
 /// - Parsing fails even with tryparse's error correction
 /// - Deserialization into type T fails
-pub fn extract_structured_output<T>(content: Content) -> AgentResult<T>
+pub fn extract_structured_output<T>(content: &Content) -> AgentResult<T>
 where
     T: DeserializeOwned + JsonSchema + MaybeSend + MaybeSync + 'static,
 {
@@ -117,7 +121,11 @@ where
 ///
 /// Useful for debugging or when you want to preserve the LLM's explanation
 /// alongside the structured data.
-pub fn extract_structured_output_with_text<T>(content: Content) -> AgentResult<(T, String)>
+///
+/// # Errors
+///
+/// Returns an error if no text content is found or if parsing fails.
+pub fn extract_structured_output_with_text<T>(content: &Content) -> AgentResult<(T, String)>
 where
     T: DeserializeOwned + JsonSchema + MaybeSend + MaybeSync + 'static,
 {
@@ -143,6 +151,10 @@ where
 /// Helper to generate just the schema as a JSON value.
 ///
 /// Useful if you want to build custom prompts or inspect the schema.
+///
+/// # Errors
+///
+/// Returns an error if the schema cannot be generated or converted to a JSON value.
 pub fn get_schema_for_type<T>() -> AgentResult<Value>
 where
     T: JsonSchema + MaybeSend + MaybeSync + 'static,
@@ -176,7 +188,8 @@ mod tests {
     #[test]
     fn extract_from_clean_json() {
         let content = Content::from_text(r#"{"value": 42}"#);
-        let result = extract_structured_output::<Sample>(content).expect("should parse clean JSON");
+        let result =
+            extract_structured_output::<Sample>(&content).expect("should parse clean JSON");
 
         assert_eq!(result, Sample { value: 42 });
     }
@@ -191,7 +204,7 @@ mod tests {
 }
 ```"#,
         );
-        let result = extract_structured_output::<Sample>(content)
+        let result = extract_structured_output::<Sample>(&content)
             .expect("should parse markdown-wrapped JSON");
 
         assert_eq!(result, Sample { value: 123 });
@@ -205,7 +218,8 @@ mod tests {
   value: "789",
 }"#,
         );
-        let result = extract_structured_output::<Sample>(content).expect("should parse messy JSON");
+        let result =
+            extract_structured_output::<Sample>(&content).expect("should parse messy JSON");
 
         assert_eq!(result, Sample { value: 789 });
     }
@@ -215,7 +229,7 @@ mod tests {
         let original = "The answer is:\n```json\n{\"value\": 42}\n```";
         let content = Content::from_text(original);
 
-        let (result, text) = extract_structured_output_with_text::<Sample>(content)
+        let (result, text) = extract_structured_output_with_text::<Sample>(&content)
             .expect("should parse and preserve text");
 
         assert_eq!(result, Sample { value: 42 });
@@ -226,7 +240,7 @@ mod tests {
     fn extract_without_text_fails() {
         let content = Content::from_parts(vec![]);
         let error =
-            extract_structured_output::<Sample>(content).expect_err("should fail without text");
+            extract_structured_output::<Sample>(&content).expect_err("should fail without text");
 
         match error {
             AgentError::Validation { field, .. } => assert_eq!(field, "structured_output"),

@@ -14,6 +14,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use uuid::Uuid;
 
 /// Tracks remote agent context across calls
@@ -84,6 +85,7 @@ impl std::fmt::Debug for A2AAgentTool {
         f.debug_struct("A2AAgentTool")
             .field("agent_names", &self.agent_cards.keys().collect::<Vec<_>>())
             .field("agent_cards", &self.agent_cards)
+            .field("agent_headers", &self.agent_headers)
             .finish()
     }
 }
@@ -120,6 +122,10 @@ impl A2AAgentTool {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any agent card is invalid or if no agents are configured.
     pub fn new(agents: Vec<(AgentCard, Option<HashMap<String, String>>)>) -> Result<Self, String> {
         let mut cards = HashMap::new();
         let mut headers = HashMap::new();
@@ -155,12 +161,16 @@ impl A2AAgentTool {
 
         let headers = self.agent_headers.get(agent_name).and_then(|h| h.as_ref());
 
-        match headers {
-            Some(headers) => A2AClient::from_card_with_headers(card.clone(), headers.clone())
-                .map_err(|e| format!("Failed to create A2A client for {agent_name}: {e}")),
-            None => A2AClient::from_card(card.clone())
-                .map_err(|e| format!("Failed to create A2A client for {agent_name}: {e}")),
-        }
+        headers.map_or_else(
+            || {
+                A2AClient::from_card(card.clone())
+                    .map_err(|e| format!("Failed to create A2A client for {agent_name}: {e}"))
+            },
+            |headers| {
+                A2AClient::from_card_with_headers(card.clone(), headers.clone())
+                    .map_err(|e| format!("Failed to create A2A client for {agent_name}: {e}"))
+            },
+        )
     }
 
     /// Get session state key for storing remote context
@@ -173,13 +183,13 @@ impl A2AAgentTool {
         &self,
         agent_name: &str,
         context: &ToolContext<'_>,
-    ) -> Result<RemoteContextInfo, String> {
+    ) -> RemoteContextInfo {
         let state_key = Self::context_state_key(agent_name);
 
         // Try to get existing remote context from session state
         if let Some(existing) = context.state().get_state(&state_key) {
             if let Ok(info) = serde_json::from_value::<RemoteContextInfo>(existing) {
-                return Ok(info);
+                return info;
             }
         }
 
@@ -190,12 +200,11 @@ impl A2AAgentTool {
             .map(|card| card.url.clone())
             .unwrap_or_default();
 
-        Ok(RemoteContextInfo::new(endpoint))
+        RemoteContextInfo::new(endpoint)
     }
 
     /// Store remote context info in session state
     fn store_remote_context(
-        &self,
         agent_name: &str,
         info: &RemoteContextInfo,
         context: &ToolContext<'_>,
@@ -208,7 +217,6 @@ impl A2AAgentTool {
 
     /// Build A2A message with proper context
     fn build_a2a_message(
-        &self,
         message_text: &str,
         remote_context: &RemoteContextInfo,
         continue_conversation: bool,
@@ -235,7 +243,7 @@ impl A2AAgentTool {
     }
 
     /// Extract human-readable response from A2A response
-    fn extract_response_content(&self, response: &SendMessageResponse) -> String {
+    fn extract_response_content(response: &SendMessageResponse) -> String {
         match response {
             SendMessageResponse::Success(success) => match &success.result {
                 SendMessageResult::Task(task) => {
@@ -355,57 +363,67 @@ impl A2AAgentTool {
         remote_context.message_count += 1;
 
         // Store updated context
-        if let Err(e) = self.store_remote_context(agent_name, remote_context, context) {
+        if let Err(e) = Self::store_remote_context(agent_name, remote_context, context) {
             return ToolResult::error(format!("Failed to store remote context: {e}"));
         }
 
-        // Build response based on terminal state and priority
-        let response_text = match terminal_state {
-            Some(TaskState::Completed) => {
-                // Priority for Completed: artifacts first, then messages
+        let response_text = Self::summarize_stream_response(
+            agent_name,
+            terminal_state,
+            status_message,
+            &accumulated_messages,
+            &accumulated_artifacts,
+        );
+
+        ToolResult::success(json!(response_text))
+    }
+
+    fn summarize_stream_response(
+        agent_name: &str,
+        terminal_state: Option<TaskState>,
+        status_message: Option<String>,
+        accumulated_messages: &[String],
+        accumulated_artifacts: &[a2a_client::types::Artifact],
+    ) -> String {
+        match (terminal_state, status_message) {
+            (Some(TaskState::Completed), message) => {
                 if !accumulated_artifacts.is_empty() {
-                    // Send only artifacts
-                    self.format_artifacts(&accumulated_artifacts)
-                } else if !accumulated_messages.is_empty() {
-                    accumulated_messages.join("\n")
-                } else if let Some(msg) = status_message {
-                    msg
-                } else {
-                    format!("Task completed by {agent_name}")
-                }
-            }
-            Some(
-                TaskState::Failed
-                | TaskState::Rejected
-                | TaskState::InputRequired
-                | TaskState::Canceled,
-            ) => {
-                // Priority for error states: status message first, then accumulated messages
-                if let Some(msg) = status_message {
-                    msg
+                    Self::format_artifacts(accumulated_artifacts)
                 } else if !accumulated_messages.is_empty() {
                     accumulated_messages.join("\n")
                 } else {
-                    format!("Task ended with state: {:?}", terminal_state.unwrap())
+                    message.unwrap_or_else(|| format!("Task completed by {agent_name}"))
                 }
             }
+            (
+                Some(
+                    state @ (TaskState::Failed
+                    | TaskState::Rejected
+                    | TaskState::InputRequired
+                    | TaskState::Canceled),
+                ),
+                message,
+            ) => message.unwrap_or_else(|| {
+                if accumulated_messages.is_empty() {
+                    format!("Task ended with state: {state:?}")
+                } else {
+                    accumulated_messages.join("\n")
+                }
+            }),
             _ => {
-                // No terminal state detected (last_chunk or stream ended)
                 if !accumulated_artifacts.is_empty() {
-                    self.format_artifacts(&accumulated_artifacts)
+                    Self::format_artifacts(accumulated_artifacts)
                 } else if !accumulated_messages.is_empty() {
                     accumulated_messages.join("\n")
                 } else {
                     format!("Task submitted to {agent_name}")
                 }
             }
-        };
-
-        ToolResult::success(json!(response_text))
+        }
     }
 
     /// Format artifacts for display
-    fn format_artifacts(&self, artifacts: &[a2a_client::types::Artifact]) -> String {
+    fn format_artifacts(artifacts: &[a2a_client::types::Artifact]) -> String {
         if artifacts.is_empty() {
             return String::from("No artifacts");
         }
@@ -421,15 +439,11 @@ impl A2AAgentTool {
                     .iter()
                     .filter_map(|part| match part {
                         Part::Text { text, .. } => Some(text.clone()),
-                        Part::Data { data, .. } => {
-                            // Convert JSON value to string
-                            if let Some(s) = data.as_str() {
-                                Some(s.to_string())
-                            } else {
-                                Some(data.to_string())
-                            }
-                        }
-                        _ => None,
+                        Part::Data { data, .. } => Some(
+                            data.as_str()
+                                .map_or_else(|| data.to_string(), std::string::ToString::to_string),
+                        ),
+                        Part::File { .. } => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -465,12 +479,12 @@ impl A2AAgentTool {
         remote_context.update_from_response(&response);
 
         // Store updated context
-        if let Err(e) = self.store_remote_context(agent_name, remote_context, context) {
+        if let Err(e) = Self::store_remote_context(agent_name, remote_context, context) {
             return ToolResult::error(format!("Failed to store remote context: {e}"));
         }
 
         // Extract and return response
-        let response_text = self.extract_response_content(&response);
+        let response_text = Self::extract_response_content(&response);
         ToolResult::success(json!(response_text))
     }
 }
@@ -498,7 +512,7 @@ impl BaseTool for A2AAgentTool {
             "Call a remote agent to delegate a task or ask a question. Available agents:\n"
                 .to_string();
         for (name, card) in &self.agent_cards {
-            desc.push_str(&format!("- {}: {}\n", name, card.description));
+            let _ = writeln!(desc, "- {}: {}", name, card.description);
         }
 
         FunctionDeclaration::new(
@@ -533,14 +547,12 @@ impl BaseTool for A2AAgentTool {
         context: &ToolContext<'_>,
     ) -> ToolResult {
         // 1. Extract arguments
-        let agent_name = match args.get("agent_name").and_then(|v| v.as_str()) {
-            Some(name) => name,
-            None => return ToolResult::error("agent_name is required".to_string()),
+        let Some(agent_name) = args.get("agent_name").and_then(|v| v.as_str()) else {
+            return ToolResult::error("agent_name is required".to_string());
         };
 
-        let message_text = match args.get("message").and_then(|v| v.as_str()) {
-            Some(msg) => msg,
-            None => return ToolResult::error("message is required".to_string()),
+        let Some(message_text) = args.get("message").and_then(|v| v.as_str()) else {
+            return ToolResult::error("message is required".to_string());
         };
 
         let continue_conversation = args
@@ -565,13 +577,10 @@ impl BaseTool for A2AAgentTool {
         };
 
         // 3. Get or create remote context
-        let mut remote_context = match self.get_or_create_remote_context(agent_name, context) {
-            Ok(ctx) => ctx,
-            Err(e) => return ToolResult::error(format!("Failed to get context: {e}")),
-        };
+        let mut remote_context = self.get_or_create_remote_context(agent_name, context);
 
         // 4. Build A2A message
-        let message = self.build_a2a_message(message_text, &remote_context, continue_conversation);
+        let message = Self::build_a2a_message(message_text, &remote_context, continue_conversation);
 
         let params = MessageSendParams {
             message,
@@ -607,44 +616,6 @@ fn normalize_agent_name(name: &str) -> String {
         .collect()
 }
 
-/// Builder for `A2AAgentTool`
-pub struct A2AAgentToolBuilder {
-    agents: Vec<(AgentCard, Option<HashMap<String, String>>)>,
-}
-
-impl A2AAgentToolBuilder {
-    /// Create a new builder
-    pub const fn new() -> Self {
-        Self { agents: Vec::new() }
-    }
-
-    /// Add a remote agent card with optional headers
-    pub fn add_agent(mut self, card: AgentCard, headers: Option<HashMap<String, String>>) -> Self {
-        self.agents.push((card, headers));
-        self
-    }
-
-    /// Add multiple remote agent cards with optional headers
-    pub fn with_agents(
-        mut self,
-        agents: Vec<(AgentCard, Option<HashMap<String, String>>)>,
-    ) -> Self {
-        self.agents.extend(agents);
-        self
-    }
-
-    /// Build the `A2AAgentTool`
-    pub fn build(self) -> Result<A2AAgentTool, String> {
-        A2AAgentTool::new(self.agents)
-    }
-}
-
-impl Default for A2AAgentToolBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,18 +624,5 @@ mod tests {
     fn normalize_agent_name_replaces_separators() {
         assert_eq!(normalize_agent_name("Weather Agent"), "weather_agent");
         assert_eq!(normalize_agent_name("Agent-42"), "agent_42");
-    }
-
-    #[test]
-    fn builder_creates_tool_with_agent_card() {
-        let mut card = AgentCard::new("Test Agent", "Description", "1.0.0", "https://example.com");
-        card.capabilities.streaming = Some(false);
-
-        let tool = A2AAgentToolBuilder::new()
-            .add_agent(card, None)
-            .build()
-            .expect("tool");
-
-        assert!(tool.agent_cards.contains_key("test_agent"));
     }
 }

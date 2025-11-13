@@ -72,18 +72,21 @@ impl Thread {
     }
 
     /// Sets or replaces the system prompt.
+    #[must_use]
     pub fn with_system(mut self, system: impl Into<String>) -> Self {
         self.system = Some(system.into());
         self
     }
 
     /// Adds a single event to the thread.
+    #[must_use]
     pub fn add_event(mut self, event: impl Into<Event>) -> Self {
         self.events.push(event.into());
         self
     }
 
     /// Adds multiple events to the thread.
+    #[must_use]
     pub fn add_events<I>(mut self, events: I) -> Self
     where
         I: IntoIterator,
@@ -123,7 +126,8 @@ impl Thread {
         let mut prompt = String::new();
 
         if let Some(system) = &self.system {
-            prompt.push_str(&format!("<system>\n{system}\n</system>\n\n"));
+            use std::fmt::Write;
+            let _ = write!(prompt, "<system>\n{system}\n</system>\n\n");
         }
 
         let event_prompts: Vec<String> = self

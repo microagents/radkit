@@ -52,7 +52,7 @@ mod native {
         }
 
         /// Creates a namespaced key from the auth context and the original key.
-        fn get_namespaced_key(&self, auth_ctx: &AuthContext, key: &str) -> String {
+        fn get_namespaced_key(auth_ctx: &AuthContext, key: &str) -> String {
             format!("{}:{}:{}", auth_ctx.app_name, auth_ctx.user_name, key)
         }
     }
@@ -65,7 +65,7 @@ mod native {
             key: &str,
             value: Value,
         ) -> AgentResult<()> {
-            let namespaced_key = self.get_namespaced_key(auth_ctx, key);
+            let namespaced_key = Self::get_namespaced_key(auth_ctx, key);
             self.store.insert(namespaced_key, value);
             Ok(())
         }
@@ -75,7 +75,7 @@ mod native {
             auth_ctx: &AuthContext,
             key: &str,
         ) -> AgentResult<Option<Value>> {
-            let namespaced_key = self.get_namespaced_key(auth_ctx, key);
+            let namespaced_key = Self::get_namespaced_key(auth_ctx, key);
             Ok(self.store.get(&namespaced_key).map(|v| v.value().clone()))
         }
     }
@@ -111,7 +111,7 @@ mod wasm {
         }
 
         /// Creates a namespaced key from the auth context and the original key.
-        fn get_namespaced_key(&self, auth_ctx: &AuthContext, key: &str) -> String {
+        fn get_namespaced_key(auth_ctx: &AuthContext, key: &str) -> String {
             format!("{}:{}:{}", auth_ctx.app_name, auth_ctx.user_name, key)
         }
     }
@@ -124,7 +124,7 @@ mod wasm {
             key: &str,
             value: Value,
         ) -> AgentResult<()> {
-            let namespaced_key = self.get_namespaced_key(auth_ctx, key);
+            let namespaced_key = Self::get_namespaced_key(auth_ctx, key);
             self.store.borrow_mut().insert(namespaced_key, value);
             Ok(())
         }
@@ -134,7 +134,7 @@ mod wasm {
             auth_ctx: &AuthContext,
             key: &str,
         ) -> AgentResult<Option<Value>> {
-            let namespaced_key = self.get_namespaced_key(auth_ctx, key);
+            let namespaced_key = Self::get_namespaced_key(auth_ctx, key);
             Ok(self.store.borrow().get(&namespaced_key).cloned())
         }
     }

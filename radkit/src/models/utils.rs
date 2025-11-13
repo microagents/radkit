@@ -86,7 +86,7 @@ pub fn create_a2a_message(
 /// let artifact = Artifact::from_json("result.json", &data)?;
 /// let a2a_artifact = utils::artifact_to_a2a(artifact);
 /// ```
-pub fn artifact_to_a2a(artifact: Artifact) -> a2a_types::Artifact {
+pub fn artifact_to_a2a(artifact: &Artifact) -> a2a_types::Artifact {
     // Convert Content to A2A Parts
     let parts: Vec<a2a_types::Part> = artifact
         .content()
@@ -111,8 +111,8 @@ pub fn artifact_to_a2a(artifact: Artifact) -> a2a_types::Artifact {
 /// # Arguments
 ///
 /// * `artifacts` - Vector of internal artifacts to convert
-pub fn artifacts_to_a2a(artifacts: Vec<Artifact>) -> Vec<a2a_types::Artifact> {
-    artifacts.into_iter().map(artifact_to_a2a).collect()
+pub fn artifacts_to_a2a(artifacts: &[Artifact]) -> Vec<a2a_types::Artifact> {
+    artifacts.iter().map(artifact_to_a2a).collect()
 }
 
 #[cfg(test)]
@@ -135,12 +135,12 @@ mod tests {
     #[test]
     fn artifact_conversion_preserves_name_and_parts() {
         let artifact = Artifact::from_text("notes.txt", "example");
-        let converted = artifact_to_a2a(artifact.clone());
+        let converted = artifact_to_a2a(&artifact);
         assert_eq!(converted.artifact_id, "notes.txt");
         assert_eq!(converted.name.as_deref(), Some("notes.txt"));
         assert_eq!(converted.parts.len(), artifact.content().parts().len());
 
-        let multiple = artifacts_to_a2a(vec![artifact.clone(), artifact]);
+        let multiple = artifacts_to_a2a(&[artifact.clone(), artifact]);
         assert_eq!(multiple.len(), 2);
     }
 }

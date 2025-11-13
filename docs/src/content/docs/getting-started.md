@@ -11,15 +11,15 @@ First, you need to add `radkit` and a few other essential crates to your `Cargo.
 
 ```toml
 [dependencies]
-radkit = "0.1.0"
-tokio = { version = "1", features = ["full"] }
+radkit = "0.0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "process", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "0.8"
 ```
 
 -   **radkit**: The main library.
--   **tokio**: For the asynchronous runtime.
+-   **tokio**: For the asynchronous runtime (the listed features match what Radkit needs for native builds).
 -   **serde**: For serializing and deserializing data.
 -   **serde_json**: For working with JSON.
 -   **schemars**: For generating JSON schemas from your Rust types.

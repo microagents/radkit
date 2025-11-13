@@ -80,9 +80,10 @@ async fn on_input_received(
     runtime: &dyn Runtime,
     content: Content, // This is the user's answer
 ) -> Result<OnInputResult> {
-    // 1. Find out what we were waiting for by getting the slot.
+    // 1. Find out what we were waiting for by loading the slot.
     let slot: ProfileSlot = task_context
-        .get_input_slot()?        .ok_or_else(|| anyhow!("Input received without a slot"))?;
+        .load_slot()?
+        .ok_or_else(|| anyhow!("Input received without a slot"))?;
 
     // 2. Load the saved state.
     let mut profile: UserProfile = task_context

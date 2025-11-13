@@ -121,6 +121,7 @@ impl GrokLlm {
     }
 
     /// Sets a custom base URL for the API endpoint.
+    #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
@@ -161,121 +162,7 @@ impl GrokLlm {
             }));
         }
 
-        for event in events {
-            let role = event.role().clone();
-            let role_str = match &role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::Tool => "tool",
-                Role::System => "system",
-            };
-
-            let content = event.into_content();
-
-            match role {
-                Role::System | Role::User => {
-                    if content.is_text_only() && !content.is_text_empty() {
-                        let text = content.joined_texts().unwrap_or_default();
-                        messages.push(json!({
-                            "role": role_str,
-                            "content": text
-                        }));
-                    } else {
-                        let mut content_parts = Vec::new();
-
-                        for part in content {
-                            match part {
-                                ContentPart::Text(text) => {
-                                    content_parts.push(json!({
-                                        "type": "text",
-                                        "text": text
-                                    }));
-                                }
-                                ContentPart::Data(data) => {
-                                    if data.content_type.starts_with("image/") {
-                                        let image_url = match data.source {
-                                            crate::models::DataSource::Base64(b64) => {
-                                                format!("data:{};base64,{}", data.content_type, b64)
-                                            }
-                                            crate::models::DataSource::Uri(uri) => uri,
-                                        };
-                                        content_parts.push(json!({
-                                            "type": "image_url",
-                                            "image_url": {
-                                                "url": image_url
-                                            }
-                                        }));
-                                    }
-                                }
-                                ContentPart::ToolCall(_) => {}
-                                ContentPart::ToolResponse(_) => {}
-                            }
-                        }
-
-                        if !content_parts.is_empty() {
-                            messages.push(json!({
-                                "role": role_str,
-                                "content": content_parts
-                            }));
-                        }
-                    }
-                }
-                Role::Assistant => {
-                    let mut texts = Vec::new();
-                    let mut tool_calls = Vec::new();
-
-                    for part in content {
-                        match part {
-                            ContentPart::Text(text) => texts.push(text),
-                            ContentPart::ToolCall(tool_call) => {
-                                tool_calls.push(json!({
-                                    "type": "function",
-                                    "id": tool_call.id(),
-                                    "function": {
-                                        "name": tool_call.name(),
-                                        "arguments": tool_call.arguments().to_string()
-                                    }
-                                }));
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    let content_text = texts.join("\n\n");
-                    let mut message = json!({
-                        "role": "assistant",
-                        "content": content_text
-                    });
-
-                    if !tool_calls.is_empty() {
-                        message["tool_calls"] = json!(tool_calls);
-                    }
-
-                    messages.push(message);
-                }
-                Role::Tool => {
-                    for part in content {
-                        if let ContentPart::ToolResponse(tool_response) = part {
-                            let result = tool_response.result();
-                            let content_value = if result.is_success() {
-                                result.data().to_string()
-                            } else {
-                                json!({
-                                    "error": result.error_message().unwrap_or("Unknown error")
-                                })
-                                .to_string()
-                            };
-
-                            messages.push(json!({
-                                "role": "tool",
-                                "content": content_value,
-                                "tool_call_id": tool_response.tool_call_id()
-                            }));
-                        }
-                    }
-                }
-            }
-        }
+        Self::build_messages_from_events(events, &mut messages);
 
         // Build the base payload
         let mut payload = json!({
@@ -293,6 +180,146 @@ impl GrokLlm {
         }
 
         // Add tools if provided
+        Self::add_tools_to_payload(&mut payload, toolset).await;
+
+        Ok(payload)
+    }
+
+    /// Builds OpenAI-formatted messages from thread events.
+    fn build_messages_from_events(events: Vec<crate::models::Event>, messages: &mut Vec<Value>) {
+        for event in events {
+            let role = *event.role();
+            let role_str = match &role {
+                Role::User => "user",
+                Role::Assistant => "assistant",
+                Role::Tool => "tool",
+                Role::System => "system",
+            };
+
+            let content = event.into_content();
+
+            match role {
+                Role::System | Role::User => {
+                    Self::process_user_or_system_message(role_str, content, messages);
+                }
+                Role::Assistant => {
+                    Self::process_assistant_message(content, messages);
+                }
+                Role::Tool => {
+                    Self::process_tool_message(content, messages);
+                }
+            }
+        }
+    }
+
+    /// Processes user or system messages.
+    fn process_user_or_system_message(role_str: &str, content: Content, messages: &mut Vec<Value>) {
+        if content.is_text_only() && !content.is_text_empty() {
+            let text = content.joined_texts().unwrap_or_default();
+            messages.push(json!({
+                "role": role_str,
+                "content": text
+            }));
+        } else {
+            let mut content_parts = Vec::new();
+
+            for part in content {
+                match part {
+                    ContentPart::Text(text) => {
+                        content_parts.push(json!({
+                            "type": "text",
+                            "text": text
+                        }));
+                    }
+                    ContentPart::Data(data) => {
+                        if data.content_type.starts_with("image/") {
+                            let image_url = match data.source {
+                                crate::models::DataSource::Base64(b64) => {
+                                    format!("data:{};base64,{}", data.content_type, b64)
+                                }
+                                crate::models::DataSource::Uri(uri) => uri,
+                            };
+                            content_parts.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": image_url
+                                }
+                            }));
+                        }
+                    }
+                    ContentPart::ToolCall(_) | ContentPart::ToolResponse(_) => {}
+                }
+            }
+
+            if !content_parts.is_empty() {
+                messages.push(json!({
+                    "role": role_str,
+                    "content": content_parts
+                }));
+            }
+        }
+    }
+
+    /// Processes assistant messages with optional tool calls.
+    fn process_assistant_message(content: Content, messages: &mut Vec<Value>) {
+        let mut texts = Vec::new();
+        let mut tool_calls = Vec::new();
+
+        for part in content {
+            match part {
+                ContentPart::Text(text) => texts.push(text),
+                ContentPart::ToolCall(tool_call) => {
+                    tool_calls.push(json!({
+                        "type": "function",
+                        "id": tool_call.id(),
+                        "function": {
+                            "name": tool_call.name(),
+                            "arguments": tool_call.arguments().to_string()
+                        }
+                    }));
+                }
+                _ => {}
+            }
+        }
+
+        let content_text = texts.join("\n\n");
+        let mut message = json!({
+            "role": "assistant",
+            "content": content_text
+        });
+
+        if !tool_calls.is_empty() {
+            message["tool_calls"] = json!(tool_calls);
+        }
+
+        messages.push(message);
+    }
+
+    /// Processes tool response messages.
+    fn process_tool_message(content: Content, messages: &mut Vec<Value>) {
+        for part in content {
+            if let ContentPart::ToolResponse(tool_response) = part {
+                let result = tool_response.result();
+                let content_value = if result.is_success() {
+                    result.data().to_string()
+                } else {
+                    json!({
+                        "error": result.error_message().unwrap_or("Unknown error")
+                    })
+                    .to_string()
+                };
+
+                messages.push(json!({
+                    "role": "tool",
+                    "content": content_value,
+                    "tool_call_id": tool_response.tool_call_id()
+                }));
+            }
+        }
+    }
+
+    /// Adds tool configuration to the payload if tools are available.
+    async fn add_tools_to_payload(payload: &mut Value, toolset: Option<Arc<dyn BaseToolset>>) {
         if let Some(toolset) = toolset {
             let tools_list = toolset.get_tools().await;
             if !tools_list.is_empty() {
@@ -315,12 +342,10 @@ impl GrokLlm {
                 payload["tools"] = json!(tools);
             }
         }
-
-        Ok(payload)
     }
 
     /// Parses Grok API response into Content (`OpenAI` format).
-    fn parse_response(&self, response_body: &Value) -> AgentResult<Content> {
+    fn parse_response(response_body: &Value) -> AgentResult<Content> {
         let mut content = Content::default();
 
         let first_choice = response_body
@@ -389,28 +414,27 @@ impl GrokLlm {
     /// **Important**: Grok has a bug where `reasoning_tokens` in `completion_tokens_details`
     /// is NOT included in the main `completion_tokens`. This function corrects for this bug
     /// by adding `reasoning_tokens` to `completion_tokens` when present.
-    fn parse_usage(&self, response_body: &Value) -> TokenUsage {
-        let usage_obj = match response_body.get("usage") {
-            Some(obj) => obj,
-            None => return TokenUsage::empty(),
+    fn parse_usage(response_body: &Value) -> TokenUsage {
+        let Some(usage_obj) = response_body.get("usage") else {
+            return TokenUsage::empty();
         };
 
         let prompt_tokens = usage_obj
             .get("prompt_tokens")
             .and_then(serde_json::Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
 
         let mut completion_tokens = usage_obj
             .get("completion_tokens")
             .and_then(serde_json::Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
 
         // Check for reasoning_tokens in completion_tokens_details
         let reasoning_tokens = usage_obj
             .get("completion_tokens_details")
             .and_then(|details| details.get("reasoning_tokens"))
             .and_then(serde_json::Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
 
         // Fix Grok's bug: reasoning_tokens are NOT included in completion_tokens
         // We must add them manually for accurate token counting
@@ -421,7 +445,7 @@ impl GrokLlm {
         let total_tokens = usage_obj
             .get("total_tokens")
             .and_then(serde_json::Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
 
         TokenUsage::partial(prompt_tokens, completion_tokens, total_tokens)
     }
@@ -513,7 +537,7 @@ mod tests {
 
     #[test]
     fn parse_response_extracts_text_and_tool_calls() {
-        let llm = GrokLlm::new("grok-beta", "api-key");
+        let _llm = GrokLlm::new("grok-beta", "api-key");
         let body = json!({
             "choices": [
                 {
@@ -541,13 +565,13 @@ mod tests {
             }
         });
 
-        let content = llm.parse_response(&body).expect("content");
+        let content = GrokLlm::parse_response(&body).expect("content");
         assert_eq!(content.first_text(), Some("Hello user"));
         let calls = content.tool_calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name(), "lookup");
 
-        let usage = llm.parse_usage(&body);
+        let usage = GrokLlm::parse_usage(&body);
         assert_eq!(usage.input_tokens_opt(), Some(9));
         assert_eq!(usage.output_tokens_opt(), Some(7));
         assert_eq!(usage.total_tokens_opt(), Some(13));
@@ -555,9 +579,9 @@ mod tests {
 
     #[test]
     fn parse_response_missing_choices_errors() {
-        let llm = GrokLlm::new("grok-beta", "api-key");
+        let _llm = GrokLlm::new("grok-beta", "api-key");
         let body = json!({});
-        let err = llm.parse_response(&body).expect_err("expected error");
+        let err = GrokLlm::parse_response(&body).expect_err("expected error");
         match err {
             AgentError::LlmProvider { provider, .. } => assert_eq!(provider, "Grok"),
             other => panic!("unexpected error: {other:?}"),
@@ -645,8 +669,8 @@ impl BaseLlm for GrokLlm {
         let response_body: Value = response.json().await?;
 
         // Parse content and usage
-        let content = self.parse_response(&response_body)?;
-        let usage = self.parse_usage(&response_body);
+        let content = Self::parse_response(&response_body)?;
+        let usage = Self::parse_usage(&response_body);
 
         Ok(LlmResponse::new(content, usage))
     }

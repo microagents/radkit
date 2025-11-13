@@ -40,7 +40,7 @@ const DEFAULT_MAX_TOOL_ITERATIONS: usize = 20;
 /// # Type Parameters
 ///
 /// * `T` - The type to deserialize the LLM response into. Must implement `DeserializeOwned`.
-///        Use `Thread` if you want the raw conversation thread back without deserialization.
+///   Use `Thread` if you want the raw conversation thread back without deserialization.
 ///
 /// # Examples
 ///
@@ -277,11 +277,11 @@ where
         result
     }
 
-    async fn run_tool_loop<'a>(
+    async fn run_tool_loop(
         &self,
         mut thread: Thread,
         toolset: Option<Arc<dyn BaseToolset>>,
-        tool_cache: &HashMap<String, &'a dyn BaseTool>,
+        tool_cache: &HashMap<String, &dyn BaseTool>,
         tool_context: &ToolContext<'_>,
         max_iterations: usize,
     ) -> AgentResult<WorkerOutcome<T>> {
@@ -316,27 +316,27 @@ where
             // If there are no tool calls, try to parse the content as final structured output
             if tool_calls.is_empty() {
                 // Try to extract structured output from text
-                if let Ok(value) = extract_structured_output::<T>(content.clone()) {
+                if let Ok(value) = extract_structured_output::<T>(&content) {
                     // Successfully parsed - add assistant content and return
                     thread = thread.add_event(Event::assistant(content));
                     return Ok(WorkerOutcome { value, thread });
-                } else {
-                    // Parsing failed - this might be intermediate reasoning text
-                    // Add it to the thread and continue (LLM might need another turn)
-                    thread = thread.add_event(Event::assistant(content));
-                    continue;
                 }
+                // Parsing failed - this might be intermediate reasoning text
+                // Add it to the thread and continue (LLM might need another turn)
+                thread = thread.add_event(Event::assistant(content));
+                continue;
             }
 
             // We have tool calls - add assistant content and execute each tool
             thread = thread.add_event(Event::assistant(content));
 
             for call in tool_calls {
-                let tool = *tool_cache
-                    .get(call.name())
-                    .ok_or_else(|| AgentError::ToolNotFound {
-                        tool_name: call.name().to_string(),
-                    })?;
+                let tool =
+                    *tool_cache
+                        .get(call.name())
+                        .ok_or_else(|| AgentError::ToolNotFound {
+                            tool_name: call.name().to_string(),
+                        })?;
 
                 let args = value_to_arguments(call.name(), call.arguments())?;
 
@@ -357,9 +357,9 @@ struct WorkerOutcome<T> {
 ///
 /// The returned references have the same lifetime as the toolset's internal storage.
 /// Callers must ensure the toolset remains alive while using the map.
-async fn load_tool_map<'a>(
-    toolset: &'a Arc<dyn BaseToolset>,
-) -> AgentResult<HashMap<String, &'a dyn BaseTool>> {
+async fn load_tool_map(
+    toolset: &Arc<dyn BaseToolset>,
+) -> AgentResult<HashMap<String, &dyn BaseTool>> {
     let tools = toolset.get_tools().await;
     let mut map = HashMap::with_capacity(tools.len());
 
@@ -463,6 +463,7 @@ where
     /// let builder = LlmWorkerBuilder::new()
     ///     .with_system_instructions("You are a helpful assistant");
     /// ```
+    #[must_use]
     pub fn with_system_instructions(mut self, instructions: impl Into<String>) -> Self {
         self.system_instructions = Some(instructions.into());
         self
@@ -493,6 +494,7 @@ where
     /// let builder = LlmWorker::builder(my_llm)
     ///     .with_tool(get_weather);  // ← Pass the tool struct directly
     /// ```
+    #[must_use]
     pub fn with_tool<U>(mut self, tool: U) -> Self
     where
         U: BaseTool + 'static,
@@ -516,6 +518,7 @@ where
     /// let builder = LlmWorker::builder(my_llm)
     ///     .with_tools(vec![tool1, tool2, tool3]);
     /// ```
+    #[must_use]
     pub fn with_tools<I, U>(mut self, tools: I) -> Self
     where
         I: IntoIterator<Item = U>,
@@ -550,6 +553,7 @@ where
     ///     .with_toolset(toolset1)
     ///     .with_toolset(toolset2);  // Automatically combined
     /// ```
+    #[must_use]
     pub fn with_toolset(mut self, toolset: Arc<dyn BaseToolset>) -> Self {
         self.toolsets.push(toolset);
         self
@@ -577,6 +581,7 @@ where
     /// let builder = LlmWorker::builder(my_llm)
     ///     .with_toolsets(vec![toolset1, toolset2, toolset3]);
     /// ```
+    #[must_use]
     pub fn with_toolsets<I>(mut self, toolsets: I) -> Self
     where
         I: IntoIterator<Item = Arc<dyn BaseToolset>>,
@@ -615,6 +620,11 @@ where
     ///     .with_tool(tool2)         // More individual tools
     ///     .build();
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal toolset vector is non-empty but `next()` returns `None`,
+    /// which should never occur in normal operation given the length checks.
     #[must_use]
     pub fn build(self) -> LlmWorker<T> {
         // Start with all provided toolsets
@@ -694,11 +704,7 @@ mod tests {
         model.push_response(Ok(final_response.expect("final response")));
 
         let results = VecDeque::from([ToolResult::success(json!({"ok": true}))]);
-        let recorder = RecordingTool::new(
-            "recording_tool",
-            "Records usage",
-            results,
-        );
+        let recorder = RecordingTool::new("recording_tool", "Records usage", results);
         let worker = LlmWorker::<Sample>::builder(model)
             .with_tool(recorder.clone())
             .build();
@@ -712,7 +718,11 @@ mod tests {
             thread.events().len() >= 2,
             "thread should capture tool exchange"
         );
-        assert_eq!(recorder.call_count(), 1, "tool should have been called once");
+        assert_eq!(
+            recorder.call_count(),
+            1,
+            "tool should have been called once"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

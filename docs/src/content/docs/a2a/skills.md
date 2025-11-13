@@ -46,6 +46,7 @@ The `SkillHandler` trait defines the logic for your skill. The only required met
 
 ```rust
 use radkit::prelude::*;
+use radkit::errors::AgentResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -70,7 +71,7 @@ impl SkillHandler for ProfileExtractorSkill {
         context: &Context,
         runtime: &dyn Runtime,
         content: Content,
-    ) -> Result<OnRequestResult> {
+    ) -> AgentResult<OnRequestResult> {
         // 1. Get the LLM from the runtime
         let llm = runtime.llm_provider().default_llm()?;
 
