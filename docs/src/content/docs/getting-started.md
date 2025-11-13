@@ -11,7 +11,7 @@ First, you need to add `radkit` and a few other essential crates to your `Cargo.
 
 ```toml
 [dependencies]
-radkit = "0.0.2"
+radkit = "0.0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "process", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

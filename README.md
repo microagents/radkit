@@ -39,11 +39,11 @@ For using core types and helpers like `LlmFunction` and `LlmWorker` without the 
 
 ```toml
 [dependencies]
-radkit = "0.0.2"
+radkit = "0.0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "process", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-schemars = "0.8"
+schemars = "1"
 ```
 
 #### With Agent Server Runtime
@@ -52,11 +52,11 @@ To include the `DefaultRuntime` and enable the full A2A agent server capabilitie
 
 ```toml
 [dependencies]
-radkit = { version = "0.0.2", features = ["runtime"] }
+radkit = { version = "0.0.3", features = ["runtime"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "process", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-schemars = "0.8"
+schemars = "1"
 ```
 
 ## Feature Flags
@@ -1090,25 +1090,3 @@ Contributions welcome!
 MIT
 
 ---
-
-## Development
-
-- Native tests: `cargo test --quiet`
-- Native coverage: `cargo llvm-cov --quiet --workspace`
-- WASI coverage (requires wasmtime):
-  ```bash
-  scripts/coverage.sh
-  ```
-
-### Coverage
-
-```bash
-# native coverage with HTML report
-cargo llvm-cov --quiet --workspace --html
-
-# wasm (wasip1) coverage requires wasmtime; run natively only if you have a wasip1 profiler
-CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir ." \
-  cargo llvm-cov --quiet --workspace --target wasm32-wasip1 --lcov --output-path target/coverage/wasm.lcov
-```
-
-> Note: wasm coverage requires a wasip1-aware toolchain that includes profiler builtins. If your toolchain lacks `profiler_builtins.rlib`, the run will fail; skip this step or install an appropriate toolchain.

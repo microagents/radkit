@@ -4,8 +4,7 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
-	site: 'https://agents-sh.github.io',
-	base: '/radkit',
+	site: 'https://radkit.rs',
 	integrations: [
 		starlight({
 			title: 'Radkit - Rust Agent Development Kit',
