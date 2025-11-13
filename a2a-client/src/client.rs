@@ -294,6 +294,10 @@ impl A2AClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent card cannot be fetched, parsed, or does not contain a valid URL.
     pub async fn from_card_url(base_url: impl AsRef<str>) -> A2AResult<Self> {
         Self::from_card_url_with_client(base_url, Client::new()).await
     }
@@ -325,6 +329,10 @@ impl A2AClient {
     /// # }
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent card cannot be fetched, the response status is not successful, JSON parsing fails, or the card does not contain a valid URL.
     pub async fn from_card_url_with_client(
         base_url: impl AsRef<str>,
         http_client: Client,
@@ -387,6 +395,10 @@ impl A2AClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent card does not contain a valid URL.
     pub fn from_card(agent_card: AgentCard) -> A2AResult<Self> {
         Self::from_card_with_client(agent_card, Client::new())
     }
@@ -421,6 +433,10 @@ impl A2AClient {
     /// # }
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent card does not contain a valid URL.
     pub fn from_card_with_client(agent_card: AgentCard, http_client: Client) -> A2AResult<Self> {
         if agent_card.url.is_empty() {
             return Err(A2AError::InvalidParameter {
@@ -459,6 +475,10 @@ impl A2AClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent card is invalid, headers cannot be parsed, or the HTTP client cannot be built.
     pub fn from_card_with_headers(
         agent_card: AgentCard,
         headers: std::collections::HashMap<String, String>,
@@ -501,6 +521,10 @@ impl A2AClient {
     }
 
     /// Fetch a fresh agent card from the base URL
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the network request fails, the response status is not successful, or JSON parsing fails.
     pub async fn fetch_agent_card(&self, base_url: impl AsRef<str>) -> A2AResult<AgentCard> {
         let base_url = base_url.as_ref().trim_end_matches('/');
         let card_url = format!("{}/{}", base_url, AGENT_CARD_PATH);
@@ -635,6 +659,10 @@ impl A2AClient {
     }
 
     /// Send a message to the remote agent (non-streaming)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the RPC request fails or the remote agent returns an error response.
     pub async fn send_message(&self, params: MessageSendParams) -> A2AResult<SendMessageResponse> {
         match self.post_rpc_request("message/send", params).await? {
             JsonRpcResponse::Success { result, .. } => Ok(result),
@@ -648,6 +676,10 @@ impl A2AClient {
     /// Send a streaming message to the remote agent
     ///
     /// Returns a stream of events (Task, Message, TaskStatusUpdateEvent, TaskArtifactUpdateEvent)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent does not support streaming, the network request fails, or the stream cannot be established.
     pub async fn send_streaming_message(&self, params: MessageSendParams) -> A2AResult<SseStream> {
         // Check if agent supports streaming
         if !self.agent_card.capabilities.streaming.unwrap_or(false) {
@@ -714,6 +746,10 @@ impl A2AClient {
     }
 
     /// Get a specific task from the remote agent
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the RPC request fails or the remote agent returns an error response.
     pub async fn get_task(&self, params: TaskQueryParams) -> A2AResult<Task> {
         match self.post_rpc_request("tasks/get", params).await? {
             JsonRpcResponse::Success { result, .. } => Ok(result),
@@ -725,6 +761,10 @@ impl A2AClient {
     }
 
     /// Cancel a task by its ID
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the RPC request fails or the remote agent returns an error response.
     pub async fn cancel_task(&self, params: TaskIdParams) -> A2AResult<Task> {
         match self.post_rpc_request("tasks/cancel", params).await? {
             JsonRpcResponse::Success { result, .. } => Ok(result),
@@ -738,6 +778,10 @@ impl A2AClient {
     /// Resubscribe to a task's event stream
     ///
     /// This is used if a previous SSE connection for an active task was broken.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent does not support streaming, the network request fails, or the stream cannot be established.
     pub async fn resubscribe_task(&self, params: TaskIdParams) -> A2AResult<SseStream> {
         // Check if agent supports streaming
         if !self.agent_card.capabilities.streaming.unwrap_or(false) {
@@ -803,6 +847,10 @@ impl A2AClient {
     }
 
     /// Set or update the push notification configuration for a given task
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent does not support push notifications, the RPC request fails, or the remote agent returns an error response.
     pub async fn set_task_push_notification_config(
         &self,
         params: TaskPushNotificationConfig,
@@ -833,6 +881,10 @@ impl A2AClient {
     }
 
     /// Get the push notification configuration for a given task
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the RPC request fails or the remote agent returns an error response.
     pub async fn get_task_push_notification_config(
         &self,
         params: TaskIdParams,
@@ -850,6 +902,10 @@ impl A2AClient {
     }
 
     /// List push notification configurations for a given task
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the RPC request fails or the remote agent returns an error response.
     pub async fn list_task_push_notification_config(
         &self,
         params: ListTaskPushNotificationConfigParams,
@@ -867,6 +923,10 @@ impl A2AClient {
     }
 
     /// Delete a push notification configuration for a given task
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the RPC request fails or the remote agent returns an error response.
     pub async fn delete_task_push_notification_config(
         &self,
         params: DeleteTaskPushNotificationConfigParams,
@@ -886,6 +946,10 @@ impl A2AClient {
     /// Call a custom extension method
     ///
     /// This allows calling custom JSON-RPC methods defined by agent extensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the RPC request fails or the remote agent returns an error response.
     pub async fn call_extension_method<TParams, TResponse>(
         &self,
         method: &str,
@@ -907,6 +971,10 @@ impl A2AClient {
     /// List tasks from the remote agent
     ///
     /// Note: This method is not part of the official A2A spec but is commonly implemented.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the RPC request fails or the remote agent returns an error response.
     pub async fn list_tasks(&self, context_id: Option<String>) -> A2AResult<Vec<Task>> {
         #[derive(Serialize)]
         struct ListTasksParams {
