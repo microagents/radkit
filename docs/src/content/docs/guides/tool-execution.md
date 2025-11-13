@@ -154,5 +154,3 @@ println!("💰 Estimated cost: ${:.2}", plan.estimated_cost);
 ```
 
 When you run this, the `LlmWorker` will orchestrate multiple calls to the LLM and your tools to gather all the necessary information before producing the final `TravelPlan`.
-
-For tools that need to maintain state across multiple calls (like a shopping cart), see the **[Stateful Tools](./stateful-tools.md)** guide.

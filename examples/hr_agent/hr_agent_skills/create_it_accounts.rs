@@ -2,10 +2,10 @@
 
 use radkit::agent::{OnRequestResult, SkillHandler};
 use radkit::errors::AgentError;
+use radkit::macros::skill;
 use radkit::models::Content;
 use radkit::runtime::context::{Context, TaskContext};
 use radkit::runtime::Runtime;
-use radkit_macros::skill;
 
 // --- Skill Logic Implementation ---
 

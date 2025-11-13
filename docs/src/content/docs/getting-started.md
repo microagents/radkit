@@ -15,7 +15,7 @@ radkit = "0.0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "process", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-schemars = "0.8"
+schemars = "1"
 ```
 
 -   **radkit**: The main library.

@@ -12,8 +12,11 @@ An agent is more than just a single skill; it's a collection of skills unified u
 You compose an agent using the `Agent::builder()`. You give the agent an ID and name, and then you add your skills to it.
 
 ```rust
+use radkit::agent::{Agent, AgentDefinition, OnRequestResult, SkillHandler};
 use radkit::errors::AgentResult;
-use radkit::prelude::*;
+use radkit::models::Content;
+use radkit::runtime::context::{Context, TaskContext};
+use radkit::runtime::Runtime;
 
 // Assume ProfileExtractorSkill and ReportGeneratorSkill are defined as in previous guides
 # pub struct ProfileExtractorSkill;
@@ -65,8 +68,9 @@ radkit = { version = "0.0.2", features = ["runtime"] }
 Then, you can add a `main` function to run the server.
 
 ```rust
-# use radkit::prelude::*;
+# use radkit::agent::AgentDefinition;
 # use radkit::models::providers::AnthropicLlm;
+# use radkit::runtime::DefaultRuntime;
 # pub fn configure_agents() -> Vec<AgentDefinition> { vec![] }
 // This main function will only be compiled for native targets, not for WASM.
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]

@@ -653,7 +653,12 @@ Agents in radkit are composed of **skills**. Each skill handles a specific capab
 #### Defining a Skill
 
 ```rust
-use radkit::prelude::*;
+use radkit::agent::{Artifact, LlmFunction, OnRequestResult, SkillHandler};
+use radkit::errors::AgentError;
+use radkit::macros::skill;
+use radkit::models::{BaseLlm, Content};
+use radkit::runtime::context::{Context, TaskContext};
+use radkit::runtime::Runtime;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -902,8 +907,9 @@ impl SkillHandler for ReportGeneratorSkill {
 #### Composing an Agent
 
 ```rust
-use radkit::prelude::*;
+use radkit::agent::{Agent, AgentDefinition};
 use radkit::models::providers::AnthropicLlm;
+use radkit::runtime::DefaultRuntime;
 
 pub fn configure_agents() -> Vec<AgentDefinition> {
     let my_agent = Agent::builder()

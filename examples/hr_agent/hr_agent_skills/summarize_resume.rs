@@ -4,12 +4,12 @@ use radkit::agent::{
     Artifact, LlmFunction, LlmWorker, OnInputResult, OnRequestResult, SkillHandler, SkillSlot,
 };
 use radkit::errors::AgentError;
+use radkit::macros::{skill, tool};
 use radkit::models::providers::AnthropicLlm;
 use radkit::models::{BaseLlm, Content};
 use radkit::runtime::context::{Context, TaskContext};
 use radkit::runtime::{MemoryServiceExt, Runtime};
 use radkit::tools::{BaseTool, FunctionTool, ToolResult};
-use radkit_macros::{skill, tool};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

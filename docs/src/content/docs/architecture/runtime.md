@@ -48,11 +48,3 @@ Radkit provides a `DefaultRuntime` for local development, and the architecture a
 ### `DefaultRuntime`
 
 Included with the `runtime` feature flag, `DefaultRuntime` is an out-of-the-box implementation that works on both native and WASM targets. It provides simple, in-memory versions of all the core services, allowing you to get up and running instantly with no configuration.
-
-### Cloud Runtime
-
-When you deploy your agent to a managed cloud platform, it is automatically run against a production-grade, persistent, and scalable implementation of the `Runtime`. This gives you enterprise-grade features like a hosted vector database and a rich observability UI without changing your agent code.
-
-### Custom Runtimes
-
-You can implement the `Runtime` trait yourself to integrate your agent with your own infrastructure. For example, you could create a `CustomRuntime` that uses your company's existing logging system or connects to your own PostgreSQL database. This is the key to deploying agents in specialized environments, as explained in the **[Serverless](./serverless.md)** guide.

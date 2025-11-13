@@ -128,4 +128,4 @@ let (answer2, thread) = qa_fn
 println!("Q2: {}", answer2.response);
 ```
 
-`LlmFunction` is the simplest way to add structured data capabilities to your agent. For more advanced scenarios involving tool use, see the **[Tool Execution](./tool-execution.md)** guide.
+`LlmFunction` is the simplest way to add structured data capabilities to your agent.
