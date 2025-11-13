@@ -16,7 +16,7 @@ You define a skill by creating a struct and implementing the `SkillHandler` trai
 The `#[skill]` macro is how you tell Radkit about your skill's capabilities. This metadata is used to automatically generate the agent's "Agent Card," which other agents use for discovery.
 
 ```rust
-use radkit::prelude::*;
+use radkit::macros::skill;
 
 #[skill(
     // A unique identifier for the skill
@@ -45,8 +45,12 @@ pub struct ProfileExtractorSkill;
 The `SkillHandler` trait defines the logic for your skill. The only required method is `on_request`, which is the entry point for any new task assigned to the skill.
 
 ```rust
-use radkit::prelude::*;
+use radkit::agent::{Artifact, LlmFunction, OnRequestResult, SkillHandler};
 use radkit::errors::AgentResult;
+use radkit::macros::skill;
+use radkit::models::Content;
+use radkit::runtime::context::{Context, TaskContext};
+use radkit::runtime::Runtime;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

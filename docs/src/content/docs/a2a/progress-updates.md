@@ -18,8 +18,11 @@ These are sent using methods on the `TaskContext`.
 To send a status update, call `task_context.send_intermediate_update()`. This will send an A2A `TaskStatusUpdateEvent` with the state `working`.
 
 ```rust
+use radkit::agent::{OnRequestResult, SkillHandler};
 use radkit::errors::AgentResult;
-use radkit::prelude::*;
+use radkit::models::Content;
+use radkit::runtime::context::{Context, TaskContext};
+use radkit::runtime::Runtime;
 
 #[async_trait]
 impl SkillHandler for ReportGeneratorSkill {
@@ -58,8 +61,11 @@ Sometimes, you want to show the user partial results as they are generated. For 
 This sends an A2A `TaskArtifactUpdateEvent`. The artifacts are not considered final until they are included in the `OnRequestResult::Completed` return value.
 
 ```rust
+use radkit::agent::{Artifact, OnRequestResult, SkillHandler};
 use radkit::errors::AgentResult;
-use radkit::prelude::*;
+use radkit::models::Content;
+use radkit::runtime::context::{Context, TaskContext};
+use radkit::runtime::Runtime;
 
 #[async_trait]
 impl SkillHandler for ReportGeneratorSkill {

@@ -483,7 +483,7 @@ where
     ///
     /// ```ignore
     /// use radkit::tools::{ToolResult};
-    /// use radkit_macros::tool;
+    /// use radkit::macros::tool;
     /// use serde_json::json;
     ///
     /// #[tool(description = "Get weather info")]

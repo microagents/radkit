@@ -14,7 +14,10 @@
 //! ## Quick Start
 //!
 //! ```ignore
-//! use radkit::prelude::*;
+//! use radkit::agent::Agent;
+//! use radkit::runtime::DefaultRuntime;
+//! use radkit::tools::{FunctionTool, ToolResult};
+//! use serde_json::json;
 //!
 //! // Create a simple agent
 //! let agent = Agent::builder()
@@ -66,5 +69,11 @@ pub mod tools;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+
+#[cfg(feature = "macros")]
+/// Re-exported procedural macros (e.g., `radkit::macros::skill!`).
+pub mod macros {
+    pub use radkit_macros::*;
+}
 
 pub use crate::compat::{MaybeSend, MaybeSync};

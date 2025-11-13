@@ -4,10 +4,10 @@
 //! in realistic agent scenarios.
 
 use radkit::agent::LlmWorker;
+use radkit::macros::tool;
 use radkit::models::{Content, ContentPart, LlmResponse, Thread, TokenUsage};
 use radkit::test_support::{structured_response, FakeLlm};
 use radkit::tools::{BaseTool, BaseToolset, ToolCall, ToolResult};
-use radkit_macros::tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
