@@ -9,7 +9,7 @@ use radkit::models::{BaseLlm, Content};
 use radkit::runtime::context::{Context, TaskContext};
 use radkit::runtime::{MemoryServiceExt, Runtime};
 use radkit::tools::{BaseTool, FunctionTool, ToolResult};
-use radkit_macros::skill;
+use radkit_macros::{skill, tool};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -57,63 +57,85 @@ fn extract_user_data() -> LlmFunction<UserData> {
     )
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct GetRepoArgs {
+    // GitHub username
+    username: String,
+}
+#[tool(description = "GitHub tool to inspect for public repositories")]
+async fn get_repos(args: GetRepoArgs) -> ToolResult {
+    // Read optional GitHub access token from environment
+    // Token is optional but recommended for higher rate limits (60/hour without vs 5000/hour with)
+    let token = std::env::var("GITHUB_ACCESS_TOKEN").ok();
+
+    // Build the GitHub API URL
+    let url = format!("https://api.github.com/users/{}/repos", args.username);
+
+    // Create HTTP client
+    let client = match reqwest::Client::builder()
+        .user_agent("radkit-hr-agent")
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return ToolResult::error(format!("Failed to create HTTP client: {}", e)),
+    };
+
+    // Build the request
+    let mut request = client.get(&url);
+
+    // Add authorization header if token is available for higher rate limits
+    if let Some(token) = token {
+        request = request.header("Authorization", format!("Bearer {}", token));
+    }
+
+    // Execute the request
+    let response = match request.send().await {
+        Ok(r) => r,
+        Err(e) => return ToolResult::error(format!("Failed to fetch GitHub repos: {}", e)),
+    };
+
+    // Check if the request was successful
+    if !response.status().is_success() {
+        let status = response.status();
+        return ToolResult::error(format!(
+            "GitHub API returned error status {}: {}",
+            status,
+            response.text().await.unwrap_or_default()
+        ));
+    }
+
+    // Parse the JSON response
+    let repos: Vec<serde_json::Value> = match response.json().await {
+        Ok(r) => r,
+        Err(e) => return ToolResult::error(format!("Failed to parse GitHub response: {}", e)),
+    };
+
+    // Transform to our repository format
+    let repos: Vec<GitHubRepository> = repos
+        .iter()
+        .filter_map(|repo| {
+            let name = repo.get("name")?.as_str()?.to_string();
+            let url = repo.get("html_url")?.as_str()?.to_string();
+            Some(GitHubRepository { name, url })
+        })
+        .collect();
+
+    ToolResult::success(json!({
+        "repos": repos,
+        "count": repos.len(),
+    }))
+}
+
 // Defines the callable struct for extracting GitHub repos.
 fn extract_user_github_repos() -> LlmWorker<Vec<GitHubRepository>> {
-    let github_tool = Arc::new(github_api_tool()) as Arc<dyn BaseTool>;
-
     // Create LLM locally for this worker
     let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")
         .expect("Failed to create LLM from environment");
 
     LlmWorker::builder(llm)
         .with_system_instructions("Get the user's public GitHub repositories.")
-        .with_tools(vec![github_tool])
+        .with_tools(vec![get_repos])
         .build()
-}
-
-fn github_api_tool() -> FunctionTool {
-    FunctionTool::new(
-        "github_api",
-        "Fetches public GitHub repositories for the requested username.",
-        |mut args, _context| {
-            let username = args
-                .remove("github_username")
-                .and_then(|value| value.as_str().map(|candidate| candidate.to_string()))
-                .unwrap_or_default();
-
-            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
-            {
-                Box::pin(async move {
-                    let message = format!(
-                        "GitHub API integration not implemented. Requested username: {}",
-                        username
-                    );
-                    ToolResult::error(message)
-                })
-            }
-
-            #[cfg(all(target_os = "wasi", target_env = "p1"))]
-            {
-                Box::pin(async move {
-                    let message = format!(
-                        "GitHub API not available in WASM sandbox. Requested username: {}",
-                        username
-                    );
-                    ToolResult::error(message)
-                })
-            }
-        },
-    )
-    .with_parameters_schema(json!({
-        "type": "object",
-        "properties": {
-            "github_username": {
-                "type": "string",
-                "description": "GitHub handle to inspect for public repositories"
-            }
-        },
-        "required": ["github_username"],
-    }))
 }
 
 // --- Skill Logic Implementation ---
