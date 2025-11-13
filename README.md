@@ -1,6 +1,6 @@
 <div style="text-align: center;">
   <div class="centered-logo-text-group">
-    <img src="docs/docs/assets/logo.svg" alt="RadKit Logo" width="100">
+    <img src="docs/src/assets/logo.svg" alt="RadKit Logo" width="100">
     <h1>Radkit - Rust Agent Development Kit</h1>
   </div>
 </div>
@@ -39,8 +39,8 @@ For using core types and helpers like `LlmFunction` and `LlmWorker` without the 
 
 ```toml
 [dependencies]
-radkit = "0.1.0"
-tokio = { version = "1", features = ["full"] }
+radkit = "0.0.2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "process", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "0.8"
@@ -52,12 +52,19 @@ To include the `DefaultRuntime` and enable the full A2A agent server capabilitie
 
 ```toml
 [dependencies]
-radkit = { version = "0.1.0", features = ["runtime"] }
-tokio = { version = "1", features = ["full"] }
+radkit = { version = "0.0.2", features = ["runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "process", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "0.8"
 ```
+
+## Feature Flags
+
+Radkit ships optional capabilities that you can opt into per target:
+
+- `runtime`: Enables the native `DefaultRuntime`, HTTP server, tracing, and other dependencies required to run A2A-compliant agents locally.
+- `dev-ui`: Builds on top of `runtime` and serves an interactive UI (native-only) where you can trigger tasks, and inspect streaming output.
 
 ## Core Concepts
 
@@ -425,11 +432,10 @@ for (i, instruction) in recipe.instructions.iter().enumerate() {
 ```rust
 use radkit::agent::LlmWorker;
 use radkit::models::providers::AnthropicLlm;
-use radkit::tools::{FunctionTool, ToolResult};
+use radkit::tools::{tool, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct WeatherReport {
@@ -439,45 +445,34 @@ struct WeatherReport {
     forecast: String,
 }
 
+// Define tool arguments
+#[derive(Deserialize, JsonSchema)]
+struct GetWeatherArgs {
+    /// City name or location
+    location: String,
+}
+
+// Define the weather tool using the #[tool] macro
+#[tool(description = "Get current weather for a location")]
+async fn get_weather(args: GetWeatherArgs) -> ToolResult {
+    // In real app, call weather API here
+    let weather_data = json!({
+        "temperature": 72.5,
+        "condition": "Sunny",
+        "humidity": 65,
+        "location": args.location,
+    });
+
+    ToolResult::success(weather_data)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create weather tool
-    let weather_tool = Arc::new(FunctionTool::new(
-        "get_weather",
-        "Get current weather for a location",
-        |args, _ctx| {
-            Box::pin(async move {
-                let location = args
-                    .get("location")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown");
-
-                // In real app, call weather API here
-                let weather_data = json!({
-                    "temperature": 72.5,
-                    "condition": "Sunny",
-                    "humidity": 65,
-                });
-
-                ToolResult::success(weather_data)
-            })
-        },
-    ).with_parameters_schema(json!({
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "City name or location"
-            }
-        },
-        "required": ["location"]
-    })));
-
     // Create worker with tool
     let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
     let worker = LlmWorker::<WeatherReport>::builder(llm)
         .with_system_instructions("You are a weather assistant")
-        .with_tool(weather_tool)
+        .with_tool(get_weather)  // Pass the tool directly
         .build();
 
     // Run - LLM will automatically call the weather tool
@@ -495,8 +490,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Multiple Tools
 
 ```rust
-use radkit::tools::{FunctionTool, BaseTool};
-use std::sync::Arc;
+use radkit::tools::tool;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct TravelPlan {
@@ -506,56 +500,57 @@ struct TravelPlan {
     estimated_cost: f64,
 }
 
-// Weather tool
-let weather_tool = Arc::new(FunctionTool::new(
-    "get_weather",
-    "Get weather forecast",
-    |args, _ctx| {
-        Box::pin(async move {
-            let location = args.get("location").and_then(|v| v.as_str()).unwrap_or("");
-            ToolResult::success(json!({
-                "forecast": format!("Sunny and 75°F in {}", location)
-            }))
-        })
-    },
-)) as Arc<dyn BaseTool>;
+// Define tool argument structs
+#[derive(Deserialize, JsonSchema)]
+struct WeatherArgs {
+    /// Location to get weather for
+    location: String,
+}
 
-// Hotel search tool
-let hotel_tool = Arc::new(FunctionTool::new(
-    "search_hotels",
-    "Search for hotels in a location",
-    |args, _ctx| {
-        Box::pin(async move {
-            let location = args.get("location").and_then(|v| v.as_str()).unwrap_or("");
-            ToolResult::success(json!({
-                "hotels": [{
-                    "name": "Grand Hotel",
-                    "price": 150,
-                    "rating": 4.5
-                }]
-            }))
-        })
-    },
-)) as Arc<dyn BaseTool>;
+#[derive(Deserialize, JsonSchema)]
+struct HotelArgs {
+    /// Location to search hotels in
+    location: String,
+}
 
-// Price calculator tool
-let price_tool = Arc::new(FunctionTool::new(
-    "calculate_trip_cost",
-    "Calculate estimated trip cost",
-    |args, _ctx| {
-        Box::pin(async move {
-            let hotel_price = args.get("hotel_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let nights = args.get("nights").and_then(|v| v.as_i64()).unwrap_or(1);
-            let total = hotel_price * nights as f64 + 500.0; // +flight estimate
-            ToolResult::success(json!({"total": total}))
-        })
-    },
-)) as Arc<dyn BaseTool>;
+#[derive(Deserialize, JsonSchema)]
+struct TripCostArgs {
+    /// Hotel price per night
+    hotel_price: f64,
+    /// Number of nights
+    nights: i64,
+}
+
+// Define tools using the #[tool] macro
+#[tool(description = "Get weather forecast")]
+async fn get_weather(args: WeatherArgs) -> ToolResult {
+    ToolResult::success(json!({
+        "forecast": format!("Sunny and 75°F in {}", args.location)
+    }))
+}
+
+#[tool(description = "Search for hotels in a location")]
+async fn search_hotels(args: HotelArgs) -> ToolResult {
+    ToolResult::success(json!({
+        "hotels": [{
+            "name": "Grand Hotel",
+            "price": 150,
+            "rating": 4.5,
+            "location": args.location
+        }]
+    }))
+}
+
+#[tool(description = "Calculate estimated trip cost")]
+async fn calculate_trip_cost(args: TripCostArgs) -> ToolResult {
+    let total = args.hotel_price * args.nights as f64 + 500.0; // +flight estimate
+    ToolResult::success(json!({"total": total}))
+}
 
 let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
 let worker = LlmWorker::<TravelPlan>::builder(llm)
     .with_system_instructions("You are a travel planning assistant")
-    .with_tools(vec![weather_tool, hotel_tool, price_tool])
+    .with_tools(vec![get_weather, search_hotels, calculate_trip_cost])
     .build();
 
 let plan = worker.run("Plan a 3-day trip to Tokyo").await?;
@@ -571,7 +566,7 @@ println!("💰 Estimated cost: ${:.2}", plan.estimated_cost);
 Tools can maintain state across calls using `ToolContext`.
 
 ```rust
-use radkit::tools::{FunctionTool, DefaultExecutionState, ToolContext};
+use radkit::tools::{tool, ToolContext};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct ShoppingCart {
@@ -580,48 +575,49 @@ struct ShoppingCart {
     estimated_total: f64,
 }
 
-// Add to cart tool
-let add_item_tool = Arc::new(FunctionTool::new(
-    "add_to_cart",
-    "Add an item to the shopping cart",
-    |args, ctx| {
-        Box::pin(async move {
-            let item = args.get("item").and_then(|v| v.as_str()).unwrap_or("");
-            let price = args.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0);
+// Define tool arguments
+#[derive(Deserialize, JsonSchema)]
+struct AddToCartArgs {
+    /// Item name to add
+    item: String,
+    /// Price of the item
+    price: f64,
+}
 
-            // Get current cart
-            let mut items: Vec<String> = ctx
-                .state()
-                .get_state("items")
-                .and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or_default();
+// Add to cart tool with state management
+#[tool(description = "Add an item to the shopping cart")]
+async fn add_to_cart(args: AddToCartArgs, ctx: ToolContext) -> ToolResult {
+    // Get current cart
+    let mut items: Vec<String> = ctx
+        .state()
+        .get_state("items")
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
 
-            let total_price: f64 = ctx
-                .state()
-                .get_state("total_price")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
+    let total_price: f64 = ctx
+        .state()
+        .get_state("total_price")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
 
-            // Add item
-            items.push(item.to_string());
-            let new_total = total_price + price;
+    // Add item
+    items.push(args.item.clone());
+    let new_total = total_price + args.price;
 
-            // Update state
-            ctx.state().set_state("items", json!(items));
-            ctx.state().set_state("total_price", json!(new_total));
+    // Update state
+    ctx.state().set_state("items", json!(items));
+    ctx.state().set_state("total_price", json!(new_total));
 
-            ToolResult::success(json!({
-                "item_added": item,
-                "cart_size": items.len(),
-                "total": new_total
-            }))
-        })
-    },
-)) as Arc<dyn BaseTool>;
+    ToolResult::success(json!({
+        "item_added": args.item,
+        "cart_size": items.len(),
+        "total": new_total
+    }))
+}
 
 let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
 let worker = LlmWorker::<ShoppingCart>::builder(llm)
-    .with_tool(add_item_tool)
+    .with_tool(add_to_cart)
     .build();
 
 // The worker can call add_to_cart multiple times, maintaining state
@@ -637,7 +633,7 @@ println!("💵 Total: ${:.2}", cart.estimated_total);
 
 ---
 
-## A2A Agents (Work In Progress)
+## A2A Agents
 
 Radkit provides first-class support for building [Agent-to-Agent (A2A) protocol](https://a2a-protocol.org) compliant agents. The framework ensures that if your code compiles, it's automatically A2A compliant.
 
@@ -685,7 +681,11 @@ struct UserProfile {
 pub struct ProfileExtractorSkill;
 
 // Implement the SkillHandler trait
-#[async_trait]
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
 impl SkillHandler for ProfileExtractorSkill {
     async fn on_request(
         &self,
@@ -693,7 +693,7 @@ impl SkillHandler for ProfileExtractorSkill {
         context: &Context,
         runtime: &dyn Runtime,
         content: Content,
-    ) -> Result<OnRequestResult> {
+    ) -> Result<OnRequestResult, AgentError> {
         // Get LLM from runtime
         let llm = runtime.llm_provider().default_llm()?;
 
@@ -701,8 +701,7 @@ impl SkillHandler for ProfileExtractorSkill {
         task_context.send_intermediate_update("Analyzing text...").await?;
 
         // Use LLM function for extraction
-        let profile = extract_profile_data()
-            .with_llm(llm)
+        let profile = extract_profile_data(llm)
             .run(content.first_text().unwrap())
             .await?;
 
@@ -717,8 +716,9 @@ impl SkillHandler for ProfileExtractorSkill {
     }
 }
 
-fn extract_profile_data() -> LlmFunction<UserProfile> {
+fn extract_profile_data(llm: impl BaseLlm + 'static) -> LlmFunction<UserProfile> {
     LlmFunction::new_with_system_instructions(
+        llm,
         "Extract name, email, and role from the provided text."
     )
 }
@@ -739,7 +739,11 @@ enum ProfileSlot {
     Department,
 }
 
-#[async_trait]
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
 impl SkillHandler for ProfileExtractorSkill {
     async fn on_request(
         &self,
@@ -747,10 +751,9 @@ impl SkillHandler for ProfileExtractorSkill {
         context: &Context,
         runtime: &dyn Runtime,
         content: Content,
-    ) -> Result<OnRequestResult> {
+    ) -> Result<OnRequestResult, AgentError> {
         let llm = runtime.llm_provider().default_llm()?;
-        let profile = extract_profile_data()
-            .with_llm(llm)
+        let profile = extract_profile_data(llm)
             .run(content.first_text().unwrap())
             .await?;
 
@@ -789,9 +792,9 @@ impl SkillHandler for ProfileExtractorSkill {
         context: &Context,
         runtime: &dyn Runtime,
         content: Content,
-    ) -> Result<OnInputResult> {
+    ) -> Result<OnInputResult, AgentError> {
         // Get the slot to know which input we're continuing from
-        let slot: ProfileSlot = task_context.get_input_slot()?.unwrap();
+        let slot: ProfileSlot = task_context.load_slot()?.unwrap();
 
         // Load saved state
         let mut profile: UserProfile = task_context
@@ -842,7 +845,11 @@ impl SkillHandler for ProfileExtractorSkill {
 For long-running operations, send progress updates and partial results:
 
 ```rust
-#[async_trait]
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
 impl SkillHandler for ReportGeneratorSkill {
     async fn on_request(
         &self,
@@ -850,14 +857,13 @@ impl SkillHandler for ReportGeneratorSkill {
         context: &Context,
         runtime: &dyn Runtime,
         content: Content,
-    ) -> Result<OnRequestResult> {
+    ) -> Result<OnRequestResult, AgentError> {
         let llm = runtime.llm_provider().default_llm()?;
 
         // Send intermediate status (A2A TaskStatusUpdateEvent with state=working)
         task_context.send_intermediate_update("Analyzing data...").await?;
 
-        let analysis = analyze_data()
-            .with_llm(llm.clone())
+        let analysis = analyze_data(llm.clone())
             .run(content.first_text().unwrap())
             .await?;
 
@@ -868,8 +874,7 @@ impl SkillHandler for ReportGeneratorSkill {
         // Another update
         task_context.send_intermediate_update("Generating visualizations...").await?;
 
-        let charts = generate_charts()
-            .with_llm(llm.clone())
+        let charts = generate_charts(llm.clone())
             .run(&analysis)
             .await?;
 
@@ -880,8 +885,7 @@ impl SkillHandler for ReportGeneratorSkill {
         // Final compilation
         task_context.send_intermediate_update("Compiling final report...").await?;
 
-        let report = compile_report()
-            .with_llm(llm)
+        let report = compile_report(llm)
             .run(&analysis, &charts)
             .await?;
 
@@ -901,7 +905,6 @@ impl SkillHandler for ReportGeneratorSkill {
 use radkit::prelude::*;
 use radkit::models::providers::AnthropicLlm;
 
-#[entrypoint]
 pub fn configure_agents() -> Vec<AgentDefinition> {
     let my_agent = Agent::builder()
         .with_id("my-agent-v1")
@@ -917,19 +920,18 @@ pub fn configure_agents() -> Vec<AgentDefinition> {
 }
 
 // Local development
-#[cfg(not(target_arch = "wasm32"))]
-fn main() {
-    radkit::runtime::block_on(async {
-        let llm = AnthropicLlm::from_env("claude-sonnet-4")
-            .expect("ANTHROPIC_API_KEY must be set for local runtime");
-        let runtime = DefaultRuntime::new(llm);
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
+    let runtime = DefaultRuntime::new(llm);
 
-        runtime
-            .with_agents(configure_agents())
-            .serve("127.0.0.1:8080")
-            .await
-            .expect("Failed to start server");
-    });
+    runtime
+        .agents(configure_agents())
+        .serve("127.0.0.1:8080")
+        .await?;
+
+    Ok(())
 }
 ```
 
@@ -1006,6 +1008,57 @@ Ok(OnRequestResult::Completed {
 ```
 
 **Guarantee:** The type system prevents protocol violations at compile time.
+
+#### How These Guarantees Work
+
+Radkit enforces A2A compliance through several type-level mechanisms:
+
+**1. Unrepresentable Invalid States**
+
+The `OnRequestResult` and `OnInputResult` enums only expose valid A2A states as variants. There's no way to construct an invalid state because the type system doesn't allow it:
+
+```rust
+// ✅ This compiles - valid A2A state
+Ok(OnRequestResult::Completed { message: None, artifacts: vec![] })
+
+// ❌ This doesn't compile - InvalidState doesn't exist
+Ok(OnRequestResult::InvalidState { ... })  // Compilation error!
+```
+
+**2. Restricted Method APIs**
+
+Methods like `task_context.send_intermediate_update()` are internally hardcoded to use `TaskState::Working` with `final=false`. The API doesn't expose parameters that would allow setting invalid combinations:
+
+```rust
+// Implementation detail (in radkit internals):
+pub async fn send_intermediate_update(&mut self, message: impl Into<Content>) -> Result<()> {
+    // Always sends TaskState::Working with final=false
+    // No way for developers to override this behavior
+}
+```
+
+**3. Separation of Concerns via Return Types**
+
+Intermediate updates go through `task_context` methods, while final states are only set via return values from `on_request()` and `on_input_received()`. This architectural separation, enforced by Rust's type system, makes it impossible to accidentally mark an intermediate update as final or send a terminal state mid-execution:
+
+```rust
+// During execution: Only intermediate methods available
+task_context.send_intermediate_update("Working...").await?;  // Always non-final
+
+// At completion: Only way to set final state is via return
+Ok(OnRequestResult::Completed { ... })  // Compiler ensures this ends execution
+```
+
+**4. Compile-Time WASM Compatibility**
+
+The library uses conditional compilation and the `compat` module to ensure WASM portability while maintaining the same API surface. The `?Send` trait bound is conditionally applied based on target:
+
+```rust
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait(?Send))]
+#[cfg_attr(not(all(target_os = "wasi", target_env = "p1")), async_trait)]
+```
+
+This means WASM compatibility is verified at compile time - if your agent compiles for native targets, it will compile for WASM without code changes.
 
 ### Example: Complete A2A Agent
 

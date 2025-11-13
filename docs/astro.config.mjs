@@ -4,7 +4,7 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
-	site: 'https://microagents.github.io',
+	site: 'https://agents-sh.github.io',
 	base: '/radkit',
 	integrations: [
 		starlight({
@@ -60,8 +60,6 @@ export default defineConfig({
 					items: [
 						{ label: 'Overview', slug: 'architecture' },
 						{ label: 'Runtime', slug: 'architecture/runtime' },
-						{ label: 'Deployment (WASM)', slug: 'architecture/deployment' },
-						{ label: 'Serverless', slug: 'architecture/serverless' },
 					],
 				},
 			],

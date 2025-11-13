@@ -18,6 +18,7 @@ These are sent using methods on the `TaskContext`.
 To send a status update, call `task_context.send_intermediate_update()`. This will send an A2A `TaskStatusUpdateEvent` with the state `working`.
 
 ```rust
+use radkit::errors::AgentResult;
 use radkit::prelude::*;
 
 #[async_trait]
@@ -28,7 +29,7 @@ impl SkillHandler for ReportGeneratorSkill {
         context: &Context,
         runtime: &dyn Runtime,
         content: Content,
-    ) -> Result<OnRequestResult> {
+    ) -> AgentResult<OnRequestResult> {
         let llm = runtime.llm_provider().default_llm()?;
 
         // --- Send a status update ---
@@ -57,6 +58,7 @@ Sometimes, you want to show the user partial results as they are generated. For 
 This sends an A2A `TaskArtifactUpdateEvent`. The artifacts are not considered final until they are included in the `OnRequestResult::Completed` return value.
 
 ```rust
+use radkit::errors::AgentResult;
 use radkit::prelude::*;
 
 #[async_trait]
@@ -67,27 +69,27 @@ impl SkillHandler for ReportGeneratorSkill {
         context: &Context,
         runtime: &dyn Runtime,
         content: Content,
-    ) -> Result<OnRequestResult> {
+    ) -> AgentResult<OnRequestResult> {
         let llm = runtime.llm_provider().default_llm()?;
 
         task_context.send_intermediate_update("Analyzing data...").await?;
-        
+
         // Step 1: Analyze data and send it as a partial artifact
-        let analysis = analyze_data().with_llm(llm.clone()).run(content).await?;
+        let analysis = analyze_data(llm.clone()).run(content).await?;
         let analysis_artifact = Artifact::from_json("analysis.json", &analysis)?;
         task_context.send_partial_artifact(analysis_artifact).await?;
 
         task_context.send_intermediate_update("Generating visualizations...").await?;
 
         // Step 2: Generate charts and send them as another partial artifact
-        let charts = generate_charts().with_llm(llm.clone()).run(&analysis).await?;
+        let charts = generate_charts(llm.clone()).run(&analysis).await?;
         let charts_artifact = Artifact::from_json("charts.json", &charts)?;
         task_context.send_partial_artifact(charts_artifact).await?;
 
         task_context.send_intermediate_update("Compiling final report...").await?;
 
         // Step 3: Compile the final report
-        let final_report = compile_report().with_llm(llm).run(&analysis, &charts).await?;
+        let final_report = compile_report(llm).run(&analysis, &charts).await?;
         let final_artifact = Artifact::from_json("final_report.json", &final_report)?;
 
         // The final artifact is returned in the 'Completed' result
