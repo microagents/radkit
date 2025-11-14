@@ -230,6 +230,21 @@ let llm = OpenAILlm::from_env("gpt-4o-mini")?
 let response = llm.generate("What is machine learning?", None).await?;
 ```
 
+### OpenRouter
+
+OpenRouter exposes an OpenAI-compatible endpoint that can route calls to hosted Anthropic, Google, Cohere, and other marketplace models behind a single API key.
+
+```rust
+use radkit::models::providers::OpenRouterLlm;
+
+// From environment variable (OPENROUTER_API_KEY)
+let llm = OpenRouterLlm::from_env("anthropic/claude-3.5-sonnet")?
+    .with_site_url("https://example.com") // optional attribution headers
+    .with_app_name("My Radkit Agent");
+
+let response = llm.generate("Summarize the latest release notes", None).await?;
+```
+
 ### Google Gemini
 
 ```rust

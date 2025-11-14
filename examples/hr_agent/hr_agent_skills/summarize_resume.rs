@@ -5,7 +5,7 @@ use radkit::agent::{
 };
 use radkit::errors::AgentError;
 use radkit::macros::{skill, tool};
-use radkit::models::providers::AnthropicLlm;
+use radkit::models::providers::OpenRouterLlm;
 use radkit::models::{BaseLlm, Content};
 use radkit::runtime::context::{Context, TaskContext};
 use radkit::runtime::{MemoryServiceExt, Runtime};
@@ -48,7 +48,7 @@ pub enum ResumeInputSlot {
 // Defines the callable struct for extracting user data.
 fn extract_user_data() -> LlmFunction<UserData> {
     // Create LLM locally for this function
-    let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")
+    let llm = OpenRouterLlm::from_env("anthropic/claude-3.5-sonnet")
         .expect("Failed to create LLM from environment");
 
     LlmFunction::new_with_system_instructions(
@@ -129,7 +129,7 @@ async fn get_repos(args: GetRepoArgs) -> ToolResult {
 // Defines the callable struct for extracting GitHub repos.
 fn extract_user_github_repos() -> LlmWorker<Vec<GitHubRepository>> {
     // Create LLM locally for this worker
-    let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")
+    let llm = OpenRouterLlm::from_env("anthropic/claude-3.5-sonnet")
         .expect("Failed to create LLM from environment");
 
     LlmWorker::builder(llm)

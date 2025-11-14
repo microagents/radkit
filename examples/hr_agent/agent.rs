@@ -1,5 +1,5 @@
 use radkit::agent::{Agent, AgentDefinition};
-use radkit::models::providers::AnthropicLlm;
+use radkit::models::providers::OpenRouterLlm;
 use radkit::runtime::DefaultRuntime;
 
 // --- Skill Implementations ---
@@ -33,7 +33,7 @@ pub fn configure_agents() -> Vec<AgentDefinition> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // DefaultRuntime requires an LLM instance
-    let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
+    let llm = OpenRouterLlm::from_env("anthropic/claude-3.5-sonnet")?;
     let runtime = DefaultRuntime::new(llm);
 
     // The `serve` method on the local runtime takes the agent definitions

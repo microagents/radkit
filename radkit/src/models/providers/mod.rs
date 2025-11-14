@@ -10,11 +10,12 @@
 //! - [`GeminiLlm`]: Gemini models via Google AI API
 //! - [`GrokLlm`]: Grok models via XAI API (OpenAI-compatible)
 //! - [`DeepSeekLlm`]: `DeepSeek` models via `DeepSeek` API (OpenAI-compatible)
+//! - [`OpenRouterLlm`]: `OpenRouter` marketplace models via OpenAI-compatible API
 //!
 //! # Examples
 //!
 //! ```ignore
-//! use radkit::models::providers::{AnthropicLlm, OpenAILlm, GeminiLlm};
+//! use radkit::models::providers::{AnthropicLlm, OpenAILlm, GeminiLlm, OpenRouterLlm};
 //! use radkit::models::{BaseLlm, Thread};
 //!
 //! // Anthropic
@@ -22,6 +23,9 @@
 //!
 //! // OpenAI
 //! let llm = OpenAILlm::from_env("gpt-4o")?;
+//!
+//! // OpenRouter
+//! let llm = OpenRouterLlm::from_env("anthropic/claude-3.5-sonnet")?;
 //!
 //! // Gemini
 //! let llm = GeminiLlm::from_env("gemini-2.0-flash-exp")?;
@@ -35,9 +39,11 @@ mod deepseek_llm;
 mod gemini_llm;
 mod grok_llm;
 mod openai_llm;
+mod openrouter_llm;
 
 pub use anthropic_llm::AnthropicLlm;
 pub use deepseek_llm::DeepSeekLlm;
 pub use gemini_llm::GeminiLlm;
 pub use grok_llm::GrokLlm;
 pub use openai_llm::OpenAILlm;
+pub use openrouter_llm::OpenRouterLlm;
