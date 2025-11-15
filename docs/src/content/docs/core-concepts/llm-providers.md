@@ -1,6 +1,6 @@
 ---
 title: LLM Providers
-description: Working with multiple LLM providers including Anthropic, OpenAI, Gemini, Grok, and DeepSeek.
+description: Working with multiple LLM providers including Anthropic, OpenAI, OpenRouter, Gemini, Grok, and DeepSeek.
 ---
 
 
@@ -17,6 +17,7 @@ All providers follow a similar pattern:
 It is best practice to load API keys from environment variables rather than hardcoding them in your source code.
 -   Anthropic: `ANTHROPIC_API_KEY`
 -   OpenAI: `OPENAI_API_KEY`
+-   OpenRouter: `OPENROUTER_API_KEY`
 -   Gemini: `GEMINI_API_KEY`
 -   Grok: `XAI_API_KEY`
 -   DeepSeek: `DEEPSEEK_API_KEY`
@@ -58,6 +59,22 @@ let llm = OpenAILlm::from_env("gpt-4o-mini")?
     .with_temperature(0.5);
 
 let response = llm.generate("What is machine learning?", None).await?;
+```
+
+## OpenRouter
+
+OpenRouter is an OpenAI-compatible gateway that lets you route requests to many hosted models (Anthropic, Google, Cohere, etc.) via a single API surface.
+
+```rust
+use radkit::models::providers::OpenRouterLlm;
+use radkit::models::BaseLlm;
+
+// From environment variable (OPENROUTER_API_KEY)
+let llm = OpenRouterLlm::from_env("anthropic/claude-3.5-sonnet")?
+    .with_site_url("https://example.com")
+    .with_app_name("My Radkit Agent");
+
+let response = llm.generate("Summarize the latest release notes", None).await?;
 ```
 
 ## Google Gemini

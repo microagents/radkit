@@ -4,13 +4,13 @@ use super::summarize_resume::UserData;
 use radkit::agent::{Artifact, LlmFunction, OnRequestResult, SkillHandler};
 use radkit::errors::AgentError;
 use radkit::macros::skill;
-use radkit::models::providers::AnthropicLlm;
+use radkit::models::providers::OpenRouterLlm;
 use radkit::models::Content;
 use radkit::runtime::context::{Context, TaskContext};
 use radkit::runtime::{MemoryServiceExt, Runtime};
 
 fn generate_onboarding_tasks() -> LlmFunction<Vec<String>> {
-    let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")
+    let llm = OpenRouterLlm::from_env("anthropic/claude-3.5-sonnet")
         .expect("Failed to create LLM from environment");
 
     LlmFunction::new_with_system_instructions(
