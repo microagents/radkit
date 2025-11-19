@@ -7,12 +7,12 @@
 use std::any::type_name;
 
 use schemars::{schema_for, JsonSchema};
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::compat::{MaybeSend, MaybeSync};
 use crate::errors::{AgentError, AgentResult};
 use crate::models::Content;
+use crate::models::LLMOutputTrait;
 
 /// Generates system instructions that include the JSON schema for type T.
 ///
@@ -66,18 +66,17 @@ Example response format:
 
 /// Extracts and deserializes structured output from LLM response content.
 ///
-/// This function uses tryparse to handle messy LLM outputs including:
+/// This function uses tryparse with fuzzy matching to handle messy LLM outputs including:
+/// - Fuzzy field name matching (`user_name` matches userName, UserName, user-name, etc.)
+/// - Fuzzy enum matching (`InProgress` matches "in_progress", "inprogress", etc.)
 /// - Markdown code blocks
 /// - Trailing commas
 /// - Unquoted keys
-/// - Type mismatches (e.g., string numbers)
+/// - Type mismatches (e.g., string numbers → integers/floats)
 /// - Mixed text and JSON
-/// - Fuzzy field name matching (`user_name` matches userName, user-name, etc.)
-/// - Fuzzy enum matching (`InProgress` matches "`in_progress`", "inprogress", etc.)
+/// - Smart JSON fixing (handles broken JSON, comments, etc.)
 ///
-/// For types that derive `serde::Deserialize`, this provides basic parsing with
-/// automatic type coercion (e.g., "42" -> 42). Tryparse will use its standard
-/// deserialization strategy which handles most common cases.
+/// Types must derive `LLMOutput` instead of standard `Deserialize` to enable fuzzy matching.
 ///
 /// # Arguments
 ///
@@ -95,7 +94,7 @@ Example response format:
 /// - Deserialization into type T fails
 pub fn extract_structured_output<T>(content: &Content) -> AgentResult<T>
 where
-    T: DeserializeOwned + JsonSchema + MaybeSend + MaybeSync + 'static,
+    T: LLMOutputTrait + JsonSchema + MaybeSend + MaybeSync + 'static,
 {
     // Get all text from the content
     let text = content
@@ -105,9 +104,9 @@ where
             reason: "LLM response did not include any text content".to_string(),
         })?;
 
-    // Use tryparse with standard serde deserialization
-    // This handles markdown, broken JSON, and basic type coercion
-    tryparse::parse::<T>(&text).map_err(|err| AgentError::Serialization {
+    // Use tryparse with LLM-specific fuzzy matching
+    // This handles markdown extraction, broken JSON, type coercion, AND fuzzy field/enum matching
+    tryparse::parse_llm::<T>(&text).map_err(|err| AgentError::Serialization {
         format: "json".to_string(),
         reason: format!(
             "Failed to parse LLM output as {}: {}",
@@ -127,7 +126,7 @@ where
 /// Returns an error if no text content is found or if parsing fails.
 pub fn extract_structured_output_with_text<T>(content: &Content) -> AgentResult<(T, String)>
 where
-    T: DeserializeOwned + JsonSchema + MaybeSend + MaybeSync + 'static,
+    T: LLMOutputTrait + JsonSchema + MaybeSend + MaybeSync + 'static,
 {
     let text = content
         .joined_texts()
@@ -136,7 +135,7 @@ where
             reason: "LLM response did not include any text content".to_string(),
         })?;
 
-    let value = tryparse::parse::<T>(&text).map_err(|err| AgentError::Serialization {
+    let value = tryparse::parse_llm::<T>(&text).map_err(|err| AgentError::Serialization {
         format: "json".to_string(),
         reason: format!(
             "Failed to parse LLM output as {}: {}",
@@ -166,10 +165,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::macros::LLMOutput;
     use crate::models::Content;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, PartialEq, Deserialize, JsonSchema)]
+    #[derive(Debug, PartialEq, Deserialize, LLMOutput, Serialize, JsonSchema)]
     struct Sample {
         value: i32,
     }

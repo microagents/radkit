@@ -15,6 +15,7 @@ pub use default::DefaultNegotiator;
 use crate::agent::AgentDefinition;
 use crate::compat::{MaybeSend, MaybeSync};
 use crate::errors::AgentResult;
+use crate::macros::LLMOutput;
 use crate::models::Content;
 use crate::runtime::context::AuthContext;
 use a2a_types::Message;
@@ -27,7 +28,7 @@ use serde::{Deserialize, Serialize};
 /// - Start a task with a specific skill
 /// - Ask clarifying questions
 /// - Reject the request as out of scope
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, LLMOutput, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NegotiationDecision {
     /// The user's intent is clear and matches an available skill.

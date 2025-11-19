@@ -13,6 +13,7 @@
 #![cfg(all(feature = "mcp", feature = "test-support"))]
 
 use radkit::agent::LlmWorker;
+use radkit::macros::LLMOutput;
 use radkit::models::{Content, ContentPart, LlmResponse, TokenUsage};
 use radkit::test_support::FakeLlm;
 use radkit::tools::{
@@ -25,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Weather report structure for typed agent response
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, LLMOutput, JsonSchema)]
 struct WeatherReport {
     location: String,
     temperature: f64,
@@ -208,7 +209,7 @@ async fn test_mcp_agent_multi_turn_conversation() {
     );
 
     // Turn 3: Final comparison response
-    #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+    #[derive(Debug, Serialize, Deserialize, LLMOutput, JsonSchema)]
     struct Comparison {
         city1: String,
         city2: String,

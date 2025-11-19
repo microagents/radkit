@@ -13,6 +13,7 @@
 #![cfg(all(feature = "openapi", feature = "test-support"))]
 
 use radkit::agent::LlmWorker;
+use radkit::macros::LLMOutput;
 use radkit::models::{Content, ContentPart, LlmResponse, TokenUsage};
 use radkit::test_support::FakeLlm;
 use radkit::tools::{BaseToolset, DefaultExecutionState, OpenApiToolSet, ToolCall, ToolContext};
@@ -22,7 +23,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 /// Pet search result structure
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, LLMOutput, JsonSchema)]
 struct PetSearchResult {
     total_found: usize,
     pet_names: Vec<String>,
@@ -30,7 +31,7 @@ struct PetSearchResult {
 }
 
 /// Single pet details
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, LLMOutput, JsonSchema)]
 struct PetDetails {
     id: i64,
     name: String,
@@ -277,7 +278,7 @@ async fn test_openapi_agent_multi_tool_orchestration() {
     );
 
     // Turn 3: Final response combining both results
-    #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+    #[derive(Debug, Serialize, Deserialize, LLMOutput, JsonSchema)]
     struct CombinedResult {
         total_available: usize,
         first_pet_name: String,

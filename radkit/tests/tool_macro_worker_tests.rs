@@ -5,7 +5,7 @@
 //! in real-world usage.
 
 use radkit::agent::LlmWorker;
-use radkit::macros::tool;
+use radkit::macros::{tool, LLMOutput};
 use radkit::models::{Content, ContentPart, LlmResponse, Thread, TokenUsage};
 use radkit::test_support::{structured_response, FakeLlm};
 use radkit::tools::{BaseTool, ToolCall, ToolContext, ToolResult};
@@ -17,14 +17,14 @@ use serde_json::json;
 // Test 1: Basic weather tool using macro
 // ============================================================================
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct WeatherReport {
     location: String,
     temperature: f64,
     condition: String,
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct GetWeatherArgs {
     location: String,
 }
@@ -82,13 +82,13 @@ async fn test_llm_worker_with_macro_tool() {
 // Test 2: Multiple tools with macro
 // ============================================================================
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct CalculationResult {
     result: f64,
     steps: Vec<String>,
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct MathArgs {
     a: f64,
     b: f64,
@@ -161,13 +161,13 @@ async fn test_llm_worker_multiple_macro_tools() {
 // Test 3: Tool with ToolContext using macro
 // ============================================================================
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct StateResult {
     saved: bool,
     value: String,
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct SaveStateArgs {
     key: String,
     value: String,
@@ -188,7 +188,7 @@ async fn get_state(args: GetStateArgs, ctx: &ToolContext<'_>) -> ToolResult {
     }
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct GetStateArgs {
     key: String,
 }
@@ -246,7 +246,7 @@ async fn test_llm_worker_with_context_aware_tools() {
 // Test 4: Function name becomes tool name
 // ============================================================================
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct ApiArgs {
     endpoint: String,
 }
@@ -274,7 +274,7 @@ fn default_limit() -> usize {
     10
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct SearchArgs {
     query: String,
     #[serde(default = "default_limit")]
@@ -290,7 +290,7 @@ async fn search(args: SearchArgs) -> ToolResult {
     }))
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct SearchResult {
     query: String,
     count: usize,
@@ -347,7 +347,7 @@ async fn test_macro_tool_with_optional_params() {
 // Test 6: Complex nested structures
 // ============================================================================
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Clone, Deserialize, LLMOutput, JsonSchema)]
 struct Address {
     #[allow(dead_code)] // Required for JSON deserialization but not accessed in test assertions
     street: String,
@@ -355,7 +355,7 @@ struct Address {
     country: String,
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct CreateUserArgs {
     name: String,
     age: u32,
@@ -373,7 +373,7 @@ async fn create_user(args: CreateUserArgs) -> ToolResult {
     }))
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct UserCreated {
     user_id: String,
     success: bool,

@@ -14,11 +14,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use schemars::JsonSchema;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::structured_parser::{build_structured_output_instructions, extract_structured_output};
 use crate::errors::{AgentError, AgentResult};
+use crate::models::LLMOutputTrait;
 use crate::models::{BaseLlm, ContentPart, Event, Thread};
 use crate::tools::{
     BaseTool, BaseToolset, CombinedToolset, DefaultExecutionState, SimpleToolset, ToolContext,
@@ -47,7 +47,7 @@ const DEFAULT_MAX_TOOL_ITERATIONS: usize = 20;
 /// ```ignore
 /// use serde::Deserialize;
 ///
-/// #[derive(Deserialize)]
+/// #[derive(Deserialize, JsonSchema)]
 /// struct MyResponse {
 ///     answer: String,
 ///     confidence: f64,
@@ -71,7 +71,7 @@ pub struct LlmWorker<T> {
 
 impl<T> LlmWorker<T>
 where
-    T: DeserializeOwned + JsonSchema + MaybeSend + MaybeSync + 'static,
+    T: LLMOutputTrait + JsonSchema + MaybeSend + MaybeSync + 'static,
 {
     /// Creates a new builder for constructing an `LlmWorker<T>`.
     ///
@@ -422,7 +422,7 @@ pub struct LlmWorkerBuilder<T> {
 
 impl<T> LlmWorkerBuilder<T>
 where
-    T: DeserializeOwned + JsonSchema + MaybeSend + MaybeSync + 'static,
+    T: LLMOutputTrait + JsonSchema + MaybeSend + MaybeSync + 'static,
 {
     /// Creates a new builder with the required model.
     ///
@@ -665,15 +665,16 @@ where
 mod tests {
     use super::*;
     use crate::errors::{AgentError, AgentResult};
+    use crate::macros::LLMOutput;
     use crate::models::{Content, ContentPart, LlmResponse};
     use crate::test_support::{FakeLlm, RecordingTool};
     use crate::tools::tool::ToolCall;
     use crate::tools::ToolResult;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::collections::VecDeque;
 
-    #[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+    #[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema, PartialEq)]
     struct Sample {
         value: i32,
     }
