@@ -4,27 +4,26 @@ use radkit::agent::{
     Artifact, LlmFunction, LlmWorker, OnInputResult, OnRequestResult, SkillHandler, SkillSlot,
 };
 use radkit::errors::AgentError;
-use radkit::macros::{skill, tool};
+use radkit::macros::{skill, tool, LLMOutput};
 use radkit::models::providers::OpenRouterLlm;
-use radkit::models::{BaseLlm, Content};
+use radkit::models::Content;
 use radkit::runtime::context::{Context, TaskContext};
 use radkit::runtime::{MemoryServiceExt, Runtime};
-use radkit::tools::{BaseTool, FunctionTool, ToolResult};
+use radkit::tools::ToolResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 
 // --- Data Structures, Enums, and Callable Helpers for this Skill ---
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[derive(Serialize, Deserialize, LLMOutput, JsonSchema, Debug, Clone)]
 pub struct UserData {
     pub name: String,
     pub email: String,
     pub github_username: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[derive(Serialize, Deserialize, LLMOutput, JsonSchema, Debug, Clone)]
 pub struct GitHubRepository {
     pub name: String,
     pub url: String,

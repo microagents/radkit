@@ -1149,6 +1149,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tryparse",
+ "tryparse-derive",
  "ts-rs",
  "url",
  "uuid",
@@ -2064,15 +2065,14 @@ dependencies = [
 
 [[package]]
 name = "tryparse"
-version = "0.3.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4444074da9af84a637bd4de755fa473ca3d58f7a4b8aa519f7a2770764e8c2af"
+checksum = "848c36d72c4546e871523f41a5dca787bded085d649460a09afdf58459dfe14a"
 dependencies = [
  "once_cell",
  "regex",
  "serde",
  "serde_json",
- "serde_yaml",
  "thiserror 1.0.69",
  "tryparse-derive",
  "unicode-normalization",
@@ -2080,9 +2080,9 @@ dependencies = [
 
 [[package]]
 name = "tryparse-derive"
-version = "0.3.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01ec8e998c5ce150aa5461d6cc7760354750f43e6fb800e8e5b2d61e34ae0415"
+checksum = "7b5aa206c063e04a0412bc92a6b9972b2d4876ec030d51a199288de2e135fc6e"
 dependencies = [
  "proc-macro2",
  "quote",

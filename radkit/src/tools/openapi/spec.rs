@@ -96,13 +96,13 @@ impl OpenApiSpec {
     ///
     /// # Example
     /// ```no_run
-    /// # tokio_test::block_on(async {
     /// use radkit::tools::openapi::OpenApiSpec;
     ///
+    /// # async fn example() -> Result<(), String> {
     /// let spec = OpenApiSpec::from_url("https://petstore3.swagger.io/api/v3/openapi.json")
-    ///     .await
-    ///     .unwrap();
-    /// # });
+    ///     .await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors

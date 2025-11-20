@@ -4,6 +4,7 @@
 //! within actual skill implementations, demonstrating realistic usage patterns.
 
 use radkit::agent::{LlmFunction, LlmWorker};
+use radkit::macros::LLMOutput;
 use radkit::models::{Content, ContentPart, Event, LlmResponse, Thread, TokenUsage};
 use radkit::test_support::{structured_response, FakeLlm, RecordingTool};
 use radkit::tools::{BaseTool, FunctionTool, ToolCall, ToolContext, ToolResult};
@@ -16,7 +17,7 @@ use std::collections::{HashMap, VecDeque};
 // Test 1: LlmFunction basic usage in skill-like scenario
 // ============================================================================
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct SentimentAnalysis {
     sentiment: String,
     confidence: f64,
@@ -61,7 +62,7 @@ async fn test_llm_function_with_system_instructions() {
 // Test 2: LlmFunction with multi-turn conversation
 // ============================================================================
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct Translation {
     translated_text: String,
     source_language: String,
@@ -109,7 +110,7 @@ async fn test_llm_function_multi_turn_conversation() {
 // Test 3: LlmWorker with a single tool
 // ============================================================================
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct WeatherReport {
     location: String,
     temperature: f64,
@@ -179,7 +180,7 @@ async fn test_llm_worker_with_tool() {
 // Test 4: LlmWorker with multiple tools and iterations
 // ============================================================================
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct CalculationResult {
     result: f64,
     steps: Vec<String>,
@@ -266,7 +267,7 @@ async fn test_llm_worker_multiple_tool_calls() {
 // Test 5: LlmWorker with RecordingTool to verify tool execution
 // ============================================================================
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct SearchResult {
     query: String,
     found: bool,
@@ -353,7 +354,7 @@ async fn test_llm_worker_respects_max_iterations() {
         },
     );
 
-    #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    #[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
     struct SimpleResponse {
         done: bool,
     }

@@ -38,7 +38,7 @@ impl OpenApiToolSet {
     /// ```no_run
     /// use radkit::tools::openapi::{OpenApiToolSet, AuthConfig, HeaderOrQuery};
     ///
-    /// # tokio_test::block_on(async {
+    /// # async fn example() -> Result<(), String> {
     /// let auth = AuthConfig::ApiKey {
     ///     location: HeaderOrQuery::Header,
     ///     name: "X-API-Key".to_string(),
@@ -49,8 +49,9 @@ impl OpenApiToolSet {
     ///     "petstore_api".to_string(),
     ///     "specs/petstore.yaml",
     ///     Some(auth)
-    /// ).await.unwrap();
-    /// # });
+    /// ).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors

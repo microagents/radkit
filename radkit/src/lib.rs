@@ -74,6 +74,78 @@ pub mod test_support;
 /// Re-exported procedural macros (e.g., `radkit::macros::skill!`).
 pub mod macros {
     pub use radkit_macros::*;
+
+    /// Derive macro for fuzzy deserialization of LLM outputs.
+    ///
+    /// This macro provides robust parsing for LLM-generated JSON with:
+    /// - Fuzzy field matching: `user_name` matches `userName`, `UserName`, `user-name`, etc.
+    /// - Fuzzy enum matching: Case-insensitive variant matching with edit-distance scoring
+    /// - Type coercion: String numbers to integers, singles to arrays, etc.
+    /// - Transformation tracking: Records all modifications for debugging
+    ///
+    /// Supports `#[llm(union)]` attribute on enums for score-based variant selection.
+    ///
+    /// # Important Requirements
+    ///
+    /// ## Must Derive Both `Deserialize` and `LLMOutput`
+    ///
+    /// The `LLMOutput` derive macro requires `serde::Deserialize` to be derived as well:
+    ///
+    /// ```ignore
+    /// use radkit::macros::LLMOutput;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize, LLMOutput)]  // Both required!
+    /// struct MyOutput {
+    ///     field: String,
+    /// }
+    /// ```
+    ///
+    /// ## Supported Types
+    ///
+    /// All standard integer and float types are supported with fuzzy parsing:
+    ///
+    /// ```ignore
+    /// #[derive(Deserialize, LLMOutput)]
+    /// struct Output {
+    ///     count: i32,   // ✅ All integer types
+    ///     size: usize,  // ✅ usize/isize
+    ///     score: f64,   // ✅ f32/f64
+    /// }
+    /// ```
+    ///
+    /// ## Trait vs Macro Import
+    ///
+    /// This module provides the **derive macro**. For trait bounds, import from `models`:
+    ///
+    /// ```ignore
+    /// // Derive macro (for #[derive(...)])
+    /// use radkit::macros::LLMOutput;
+    ///
+    /// // Trait (for bounds like T: LLMOutputTrait)
+    /// use radkit::models::LLMOutputTrait;
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use radkit::macros::LLMOutput;
+    /// use schemars::JsonSchema;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize, LLMOutput, JsonSchema)]
+    /// struct UserData {
+    ///     name: String,
+    ///     github_username: String,  // Matches githubUsername, GitHub-Username, etc.
+    ///     age: u32,                 // All integer types supported
+    /// }
+    ///
+    /// // Parse with fuzzy matching
+    /// let data: UserData = tryparse::parse_llm(llm_response)?;
+    /// ```
+    ///
+    /// Implements the `radkit::models::LLMOutputTrait` trait (alias for `tryparse::deserializer::LlmDeserialize`).
+    pub use tryparse_derive::LlmDeserialize as LLMOutput;
 }
 
 pub use crate::compat::{MaybeSend, MaybeSync};

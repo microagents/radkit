@@ -37,10 +37,10 @@
 use std::sync::Arc;
 
 use schemars::JsonSchema;
-use serde::de::DeserializeOwned;
 
 use super::structured_parser::{build_structured_output_instructions, extract_structured_output};
 use crate::errors::AgentResult;
+use crate::models::LLMOutputTrait;
 use crate::models::{BaseLlm, Content, Event, Thread};
 use crate::{compat::MaybeSend, compat::MaybeSync};
 
@@ -52,7 +52,7 @@ pub struct LlmFunction<T> {
 
 impl<T> LlmFunction<T>
 where
-    T: DeserializeOwned + JsonSchema + MaybeSend + MaybeSync + 'static,
+    T: LLMOutputTrait + JsonSchema + MaybeSend + MaybeSync + 'static,
 {
     /// Creates a new `LlmFunction` with a given `LlmClient`.
     pub fn new(model: impl BaseLlm + 'static) -> Self {
@@ -202,11 +202,12 @@ struct InvocationOutcome<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::macros::LLMOutput;
     use crate::models::{LlmResponse, TokenUsage};
     use crate::test_support::FakeLlm;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, PartialEq, Deserialize, JsonSchema)]
+    #[derive(Debug, PartialEq, Deserialize, LLMOutput, Serialize, JsonSchema)]
     struct Sample {
         value: i32,
     }

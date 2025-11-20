@@ -4,10 +4,10 @@
 //! in realistic agent scenarios.
 
 use radkit::agent::LlmWorker;
-use radkit::macros::tool;
+use radkit::macros::{tool, LLMOutput};
 use radkit::models::{Content, ContentPart, LlmResponse, Thread, TokenUsage};
 use radkit::test_support::{structured_response, FakeLlm};
-use radkit::tools::{BaseTool, BaseToolset, ToolCall, ToolResult};
+use radkit::tools::{BaseTool, BaseToolset, ToolCall, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,14 +16,14 @@ use serde_json::json;
 // E2E Test 1: Customer Service Agent with macro tools
 // ============================================================================
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct CustomerInfo {
     customer_id: String,
     name: String,
     email: String,
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct GetCustomerArgs {
     customer_id: String,
 }
@@ -38,7 +38,7 @@ async fn get_customer(args: GetCustomerArgs) -> ToolResult {
     }))
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct UpdateEmailArgs {
     customer_id: String,
     new_email: String,
@@ -57,7 +57,7 @@ async fn update_email(args: UpdateEmailArgs, ctx: &ToolContext<'_>) -> ToolResul
     }))
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct ServiceResult {
     action: String,
     customer_name: String,
@@ -127,7 +127,7 @@ async fn test_customer_service_agent_with_macro_tools() {
 // E2E Test 2: Data Analysis Agent with multiple tools
 // ============================================================================
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct LoadDataArgs {
     dataset_name: String,
 }
@@ -142,7 +142,7 @@ async fn load_dataset(args: LoadDataArgs) -> ToolResult {
     }))
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct FilterDataArgs {
     dataset: String,
     condition: String,
@@ -157,7 +157,7 @@ async fn filter_data(args: FilterDataArgs) -> ToolResult {
     }))
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct AggregateArgs {
     #[allow(dead_code)] // Required for JSON deserialization but not used in mock implementation
     dataset: String,
@@ -172,7 +172,7 @@ async fn aggregate(args: AggregateArgs) -> ToolResult {
     }))
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct AnalysisResult {
     dataset: String,
     filtered_count: usize,
@@ -256,7 +256,7 @@ async fn test_data_analysis_workflow() {
 // E2E Test 3: Agent with Runtime and macro tools
 // ============================================================================
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct SendNotificationArgs {
     recipient: String,
     message: String,
@@ -280,7 +280,7 @@ async fn send_notification(args: SendNotificationArgs, ctx: &ToolContext<'_>) ->
     }))
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct LogEventArgs {
     event: String,
     level: String,
@@ -300,7 +300,7 @@ async fn log_event(args: LogEventArgs, ctx: &ToolContext<'_>) -> ToolResult {
     ToolResult::success(json!({"logged": true}))
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct NotificationResult {
     notifications_sent: usize,
     logs_created: usize,
@@ -421,7 +421,7 @@ async fn test_agent_with_macro_toolset() {
 // E2E Test 5: Real-world scenario - Order Processing Agent
 // ============================================================================
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct ValidateOrderArgs {
     order_id: String,
 }
@@ -436,7 +436,7 @@ async fn validate_order(args: ValidateOrderArgs) -> ToolResult {
     }))
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct ChargePaymentArgs {
     #[allow(dead_code)] // Required for JSON deserialization but not used in mock implementation
     order_id: String,
@@ -452,7 +452,7 @@ async fn charge_payment(args: ChargePaymentArgs) -> ToolResult {
     }))
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, LLMOutput, JsonSchema)]
 struct ShipOrderArgs {
     order_id: String,
 }
@@ -468,7 +468,7 @@ async fn ship_order(args: ShipOrderArgs, ctx: &ToolContext<'_>) -> ToolResult {
     }))
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, LLMOutput, Serialize, JsonSchema)]
 struct OrderProcessingResult {
     order_id: String,
     status: String,

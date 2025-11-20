@@ -7,8 +7,9 @@
 //! # Example
 //! ```no_run
 //! use radkit::tools::openapi::{OpenApiToolSet, AuthConfig, HeaderOrQuery};
+//! use radkit::tools::BaseToolset;
 //!
-//! # tokio_test::block_on(async {
+//! # async fn example() -> Result<(), String> {
 //! // Configure authentication
 //! let auth = AuthConfig::ApiKey {
 //!     location: HeaderOrQuery::Header,
@@ -21,11 +22,12 @@
 //!     "petstore_api".to_string(),
 //!     "specs/petstore.yaml",
 //!     Some(auth)
-//! ).await.unwrap();
+//! ).await?;
 //!
 //! // Tools are now available for use with agents
 //! let tools = toolset.get_tools().await;
-//! # });
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod operation_tool;
