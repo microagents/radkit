@@ -5,7 +5,7 @@
 
 use radkit::agent::Agent;
 use radkit::runtime::context::AuthContext;
-use radkit::runtime::task_manager::InMemoryTaskManager;
+use radkit::runtime::task_manager::{DefaultTaskManager, InMemoryTaskStore};
 use radkit::runtime::{AgentRuntime, ListTasksFilter, LogLevel, MemoryServiceExt, Runtime};
 use radkit::test_support::FakeLlm;
 
@@ -18,7 +18,7 @@ fn test_agent() -> radkit::agent::AgentDefinition {
 
 fn runtime_with_manager(llm: FakeLlm) -> Runtime {
     Runtime::builder(test_agent(), llm)
-        .with_task_manager(InMemoryTaskManager::new())
+        .with_task_store(InMemoryTaskStore::new())
         .build()
 }
 

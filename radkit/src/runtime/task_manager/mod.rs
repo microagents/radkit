@@ -15,9 +15,12 @@
 //! All operations are namespaced by [`AuthContext`](crate::runtime::context::AuthContext),
 //! ensuring data isolation between different users and applications.
 
+mod default;
 pub mod in_memory;
 
-pub use in_memory::InMemoryTaskManager;
+pub use default::DefaultTaskManager;
+pub use in_memory::InMemoryTaskStore;
+pub type InMemoryTaskManager = DefaultTaskManager;
 
 use crate::compat::{MaybeSend, MaybeSync};
 use crate::errors::AgentResult;
@@ -61,6 +64,87 @@ pub struct ListTasksFilter<'a> {
 pub struct PaginatedResult<T> {
     pub items: Vec<T>,
     pub next_page_token: Option<String>,
+}
+
+pub(crate) const NEGOTIATION_PREFIX: &str = "_negotiation:";
+
+/// Persistence interface for task data.
+///
+/// Higher-level task orchestration code delegates all storage operations through
+/// this trait so callers can swap in database-backed stores without re-implementing
+/// business logic.
+#[cfg_attr(all(target_os = "wasi", target_env = "p1"), async_trait::async_trait(?Send))]
+#[cfg_attr(
+    not(all(target_os = "wasi", target_env = "p1")),
+    async_trait::async_trait
+)]
+pub trait TaskStore: MaybeSend + MaybeSync {
+    /// Retrieves a single task by its ID, scoped to the `AuthContext`.
+    async fn get_task(&self, auth_ctx: &AuthContext, task_id: &str) -> AgentResult<Option<Task>>;
+
+    /// Lists tasks for the given user/app.
+    async fn list_tasks(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<Task>>;
+
+    /// Stores or updates a task's state. This is an upsert operation.
+    async fn save_task(&self, auth_ctx: &AuthContext, task: &Task) -> AgentResult<()>;
+
+    /// Appends an event to a task's history keyed by `task_key`.
+    async fn append_event(
+        &self,
+        auth_ctx: &AuthContext,
+        task_key: &str,
+        event: &TaskEvent,
+    ) -> AgentResult<()>;
+
+    /// Retrieves all events for a specific task key, ordered chronologically.
+    async fn get_events(
+        &self,
+        auth_ctx: &AuthContext,
+        task_key: &str,
+    ) -> AgentResult<Vec<TaskEvent>>;
+
+    /// Lists all task/event keys that contain events for the auth context.
+    async fn list_event_task_keys(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>>;
+
+    /// Lists all task IDs for the given user/app.
+    async fn list_task_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>>;
+
+    /// Lists all known context IDs for the current auth context.
+    async fn list_context_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>>;
+
+    /// Saves the task context state for multi-turn conversations.
+    async fn save_task_context(
+        &self,
+        auth_ctx: &AuthContext,
+        task_id: &str,
+        context: &crate::runtime::context::TaskContext,
+    ) -> AgentResult<()>;
+
+    /// Loads the task context state for a given task.
+    ///
+    /// Returns `None` if no context has been saved yet.
+    async fn load_task_context(
+        &self,
+        auth_ctx: &AuthContext,
+        task_id: &str,
+    ) -> AgentResult<Option<crate::runtime::context::TaskContext>>;
+
+    /// Associates a skill ID with a task for continuation purposes.
+    async fn set_task_skill(
+        &self,
+        auth_ctx: &AuthContext,
+        task_id: &str,
+        skill_id: &str,
+    ) -> AgentResult<()>;
+
+    /// Retrieves the skill ID associated with a task.
+    ///
+    /// Returns `None` if no skill has been associated with this task.
+    async fn get_task_skill(
+        &self,
+        auth_ctx: &AuthContext,
+        task_id: &str,
+    ) -> AgentResult<Option<String>>;
 }
 
 // ============================================================================

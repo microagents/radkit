@@ -24,7 +24,9 @@ mod banner;
 pub use auth::AuthService;
 pub use logging::{LogLevel, LoggingService};
 pub use memory::{MemoryService, MemoryServiceExt};
-pub use task_manager::{ListTasksFilter, PaginatedResult, Task, TaskEvent, TaskManager};
+pub use task_manager::{
+    DefaultTaskManager, ListTasksFilter, PaginatedResult, Task, TaskEvent, TaskManager, TaskStore,
+};
 
 // Re-export default implementations for convenience
 #[cfg(feature = "runtime")]
@@ -36,7 +38,7 @@ pub use logging::ConsoleLoggingService;
 #[cfg(feature = "runtime")]
 pub use memory::InMemoryMemoryService;
 #[cfg(feature = "runtime")]
-pub use task_manager::InMemoryTaskManager;
+pub use task_manager::{InMemoryTaskManager, InMemoryTaskStore};
 
 #[cfg(feature = "runtime")]
 use crate::agent::AgentDefinition;
@@ -111,7 +113,7 @@ pub struct Runtime {
 pub struct RuntimeBuilder {
     agent: AgentDefinition,
     auth_service: Arc<dyn AuthService>,
-    task_manager: Arc<dyn TaskManager>,
+    task_store: Arc<dyn TaskStore>,
     memory_service: Arc<dyn MemoryService>,
     logging_service: Arc<dyn LoggingService>,
     base_llm: Arc<dyn BaseLlm>,
@@ -300,7 +302,7 @@ impl RuntimeBuilder {
         Self {
             agent,
             auth_service: Arc::new(StaticAuthService::default()),
-            task_manager: Arc::new(InMemoryTaskManager::new()),
+            task_store: Arc::new(InMemoryTaskStore::new()),
             memory_service: Arc::new(InMemoryMemoryService::new()),
             logging_service: Arc::new(ConsoleLoggingService),
             base_llm,
@@ -329,10 +331,10 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Overrides the task manager implementation (persistence layer).
+    /// Overrides the task store implementation (persistence layer).
     #[must_use]
-    pub fn with_task_manager(mut self, manager: impl TaskManager + 'static) -> Self {
-        self.task_manager = Arc::new(manager);
+    pub fn with_task_store(mut self, store: impl TaskStore + 'static) -> Self {
+        self.task_store = Arc::new(store);
         self
     }
 
@@ -347,9 +349,10 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn build(self) -> Runtime {
         let negotiator = Arc::new(DefaultNegotiator::new(self.base_llm.clone()));
+        let task_manager = Arc::new(DefaultTaskManager::with_store(self.task_store));
         Runtime {
             auth_service: self.auth_service,
-            task_manager: self.task_manager,
+            task_manager,
             memory_service: self.memory_service,
             logging_service: self.logging_service,
             base_llm: self.base_llm,

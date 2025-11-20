@@ -425,14 +425,14 @@ mod tests {
     #[tokio::test]
     async fn task_context_streaming_methods() {
         use crate::runtime::core::event_bus::TaskEventBus;
-        use crate::runtime::task_manager::{InMemoryTaskManager, TaskManager};
+        use crate::runtime::task_manager::{DefaultTaskManager, InMemoryTaskStore, TaskManager};
         use std::sync::Arc;
 
         let auth = AuthContext {
             app_name: "app".into(),
             user_name: "user".into(),
         };
-        let task_manager = Arc::new(InMemoryTaskManager::new());
+        let task_manager = Arc::new(DefaultTaskManager::new(InMemoryTaskStore::new()));
         let event_bus = Arc::new(TaskEventBus::new());
 
         let mut ctx = TaskContext::for_task(
