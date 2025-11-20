@@ -15,7 +15,7 @@
 //!
 //! ```ignore
 //! use radkit::agent::Agent;
-//! use radkit::runtime::DefaultRuntime;
+//! use radkit::runtime::RuntimeHandle;
 //! use radkit::tools::{FunctionTool, ToolResult};
 //! use serde_json::json;
 //!
@@ -35,7 +35,8 @@
 //! );
 //!
 //! // Create a runtime
-//! let runtime = DefaultRuntime::new();
+//! # let llm = radkit::test_support::FakeLlm::with_responses("demo", std::iter::empty());
+//! let runtime = RuntimeHandle::builder(agent, llm).build();
 //! ```
 //!
 //! ## Feature Flags

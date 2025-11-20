@@ -35,19 +35,16 @@ use radkit::runtime::Runtime;
 # }
 
 
-// This function defines your agents.
-pub fn configure_agents() -> Vec<AgentDefinition> {
-    let my_agent = Agent::builder()
+// This function defines your agent.
+pub fn configure_agent() -> AgentDefinition {
+    Agent::builder()
         .with_id("my-hr-agent-v1")
         .with_name("HR Assistant Agent")
         .with_description("An intelligent agent for handling HR tasks like resume processing and report generation.")
         // Add the skills to the agent
         .with_skill(ProfileExtractorSkill)
         .with_skill(ReportGeneratorSkill)
-        .build();
-
-    // You can define and return multiple agents from the same project
-    vec![my_agent]
+        .build()
 }
 ```
 
@@ -55,7 +52,7 @@ The `Agent::builder()` creates a serializable `AgentDefinition`. This definition
 
 ## Running the Agent Locally
 
-To test your agent, you can run it locally. The `DefaultRuntime` provides a simple, A2A-compliant web server for this purpose.
+To test your agent, you can run it locally. The runtime provides a simple, A2A-compliant web server for this purpose.
 
 To enable the server, you must enable the `runtime` feature for Radkit in your `Cargo.toml`:
 
@@ -70,8 +67,8 @@ Then, you can add a `main` function to run the server.
 ```rust
 # use radkit::agent::AgentDefinition;
 # use radkit::models::providers::AnthropicLlm;
-# use radkit::runtime::DefaultRuntime;
-# pub fn configure_agents() -> Vec<AgentDefinition> { vec![] }
+# use radkit::runtime::Runtime;
+# pub fn configure_agent() -> AgentDefinition { unimplemented!() }
 // This main function will only be compiled for native targets, not for WASM.
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 #[tokio::main]
@@ -79,12 +76,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create an LLM instance
     let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
 
-    // 2. Create a default runtime environment with the LLM
-    let runtime = DefaultRuntime::new(llm);
-
-    // 3. Add the agents and start the server
-    runtime
-        .agents(configure_agents())
+    // 2. Create a runtime environment with the agent + LLM
+    Runtime::builder(configure_agent(), llm)
+        .build()
         .serve("127.0.0.1:8080")
         .await?;
 

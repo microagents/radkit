@@ -11,7 +11,6 @@
 //! # Modules
 //!
 //! - [`executor`] - Task execution logic (native + runtime feature only)
-//! - [`wasm`] - WASM runtime utilities
 //! - [`negotiator`] - Message negotiation and routing
 //! - [`status_mapper`] - A2A protocol status conversion utilities
 //! - [`error_mapper`] - Maps internal errors to protocol-friendly payloads
@@ -23,7 +22,6 @@ pub mod event_bus;
 pub mod executor;
 pub mod negotiator;
 pub mod status_mapper;
-pub mod wasm;
 
 // Re-export commonly used types
 pub use event_bus::{TaskEventBus, TaskEventReceiver};

@@ -5,7 +5,7 @@ use radkit::errors::AgentError;
 use radkit::macros::skill;
 use radkit::models::Content;
 use radkit::runtime::context::{Context, TaskContext};
-use radkit::runtime::Runtime;
+use radkit::runtime::AgentRuntime;
 
 // --- Skill Logic Implementation ---
 
@@ -33,7 +33,7 @@ impl SkillHandler for CreateItAccountsSkill {
         &self,
         task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         // Extract role and name from content

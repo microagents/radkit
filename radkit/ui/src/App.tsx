@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Outlet, useLocation } from "react-router";
+import { Outlet } from "react-router";
 import Navigation from "./components/Navigation";
 
 export default function App() {
-  const location = useLocation();
-  const isAgentDetailRoute = location.pathname.startsWith("/agents/");
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") {
       return "light";
@@ -33,10 +31,7 @@ export default function App() {
     }
   }, [theme]);
 
-  const sharedPadding = "px-4 sm:px-6 lg:px-8 py-8 flex flex-col";
-  const agentDetailMain = `${sharedPadding} flex-1 min-h-0 w-full overflow-hidden`;
-  const defaultMain = `${sharedPadding} flex-1 w-full max-w-7xl mx-auto`;
-  const mainClasses = isAgentDetailRoute ? agentDetailMain : defaultMain;
+  const mainClasses = "px-4 sm:px-6 lg:px-8 py-8 flex flex-col flex-1 min-h-0 w-full overflow-hidden";
 
   return (
     <div className="min-h-screen h-screen bg-gray-50 dark:bg-zinc-950 flex flex-col">

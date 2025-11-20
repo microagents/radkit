@@ -1,19 +1,33 @@
 //! Integration tests for runtime services.
 //!
 //! These tests verify that the runtime services (TaskManager, MemoryService, LoggingService,
-//! AuthService) work correctly together within a DefaultRuntime.
+//! AuthService) work correctly together within a runtime handle.
 
+use radkit::agent::Agent;
 use radkit::runtime::context::AuthContext;
-use radkit::runtime::{DefaultRuntime, ListTasksFilter, LogLevel, MemoryServiceExt, Runtime};
+use radkit::runtime::task_manager::InMemoryTaskManager;
+use radkit::runtime::{AgentRuntime, ListTasksFilter, LogLevel, MemoryServiceExt, Runtime};
 use radkit::test_support::FakeLlm;
+
+fn test_agent() -> radkit::agent::AgentDefinition {
+    Agent::builder()
+        .with_id("test-agent")
+        .with_name("Test Agent")
+        .build()
+}
+
+fn runtime_with_manager(llm: FakeLlm) -> Runtime {
+    Runtime::builder(test_agent(), llm)
+        .with_task_manager(InMemoryTaskManager::new())
+        .build()
+}
 
 #[tokio::test]
 async fn test_auth_service_provides_context() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
+    let runtime = Runtime::builder(test_agent(), llm).build();
 
-    let auth = runtime.auth();
-    let auth_context = auth.get_auth_context();
+    let auth_context = runtime.auth().get_auth_context();
 
     assert_eq!(auth_context.app_name, "default-app");
     assert_eq!(auth_context.user_name, "default-user");
@@ -22,11 +36,10 @@ async fn test_auth_service_provides_context() {
 #[tokio::test]
 async fn test_task_manager_save_and_get() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
-
-    let auth = runtime.auth();
-    let auth_context = auth.get_auth_context();
+    let runtime = runtime_with_manager(llm);
     let task_manager = runtime.task_manager();
+
+    let auth_context = runtime.auth().get_auth_context();
 
     use a2a_types::{TaskState, TaskStatus};
     use radkit::runtime::task_manager::Task;
@@ -62,8 +75,7 @@ async fn test_task_manager_save_and_get() {
 #[tokio::test]
 async fn test_task_manager_auth_scoping() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
-
+    let runtime = runtime_with_manager(llm).into_shared();
     let task_manager = runtime.task_manager();
 
     // Create two different auth contexts
@@ -146,11 +158,9 @@ async fn test_task_manager_auth_scoping() {
 #[tokio::test]
 async fn test_task_manager_list_tasks() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
-
-    let auth = runtime.auth();
-    let auth_context = auth.get_auth_context();
+    let runtime = runtime_with_manager(llm).into_shared();
     let task_manager = runtime.task_manager();
+    let auth_context = runtime.auth().get_auth_context();
 
     use a2a_types::{TaskState, TaskStatus};
     use radkit::runtime::task_manager::Task;
@@ -187,7 +197,7 @@ async fn test_task_manager_list_tasks() {
 #[tokio::test]
 async fn test_memory_service_save_and_load() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
+    let runtime = Runtime::builder(test_agent(), llm).build();
 
     let auth = runtime.auth();
     let auth_context = auth.get_auth_context();
@@ -215,7 +225,7 @@ async fn test_memory_service_save_and_load() {
 #[tokio::test]
 async fn test_memory_service_auth_scoping() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
+    let runtime = Runtime::builder(test_agent(), llm).build();
 
     let memory = runtime.memory();
 
@@ -264,7 +274,7 @@ async fn test_memory_service_auth_scoping() {
 #[tokio::test]
 async fn test_logging_service() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
+    let runtime = Runtime::builder(test_agent(), llm).build();
 
     let logging = runtime.logging();
 
@@ -279,7 +289,8 @@ async fn test_logging_service() {
 async fn test_runtime_services_together() {
     // Test that all services can be used together in a workflow
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
+    let runtime = runtime_with_manager(llm).into_shared();
+    let task_manager = runtime.task_manager();
 
     let auth = runtime.auth();
     let auth_context = auth.get_auth_context();
@@ -310,8 +321,7 @@ async fn test_runtime_services_together() {
         artifacts: vec![],
     };
 
-    runtime
-        .task_manager()
+    task_manager
         .save_task(&auth_context, &task)
         .await
         .expect("save task");
@@ -327,8 +337,7 @@ async fn test_runtime_services_together() {
     assert_eq!(retrieved_state["step"], 1);
 
     // Retrieve task
-    let retrieved_task = runtime
-        .task_manager()
+    let retrieved_task = task_manager
         .get_task(&auth_context, "workflow-task-1")
         .await
         .expect("get task")

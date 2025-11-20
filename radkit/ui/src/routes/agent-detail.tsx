@@ -5,7 +5,7 @@ import type {
   TaskStatusUpdateEvent,
   TaskArtifactUpdateEvent,
 } from "@a2a-js/sdk";
-import { Link, useLoaderData } from "react-router";
+import { useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import {
   getAgentDetail,
@@ -19,9 +19,8 @@ import {
 } from "../api/client";
 import ArtifactPreview from "../components/ArtifactPreview";
 
-export async function loader({ params }: LoaderFunctionArgs) {
-  const agentId = params.agentId!;
-  const detail = await getAgentDetail(agentId);
+export async function loader(_args: LoaderFunctionArgs) {
+  const detail = await getAgentDetail();
   return { detail };
 }
 
@@ -75,12 +74,12 @@ export default function AgentDetail() {
 
   const refreshContexts = useCallback(async () => {
     try {
-      const contexts = await listContexts(detail.id, detail.version);
+      const contexts = await listContexts();
       setAvailableContexts(contexts);
     } catch (err) {
       console.error(err);
     }
-  }, [detail.id, detail.version]);
+  }, []);
 
   const ensureContextListed = useCallback((ctxId: string) => {
     if (!ctxId) return;
@@ -219,13 +218,13 @@ export default function AgentDetail() {
   // Load tasks when context changes
   useEffect(() => {
     if (contextId) {
-      listContextTasks(detail.id, detail.version, contextId)
+      listContextTasks(contextId)
         .then(setTasks)
         .catch(console.error);
     } else {
       setTasks([]);
     }
-  }, [contextId, detail.id, detail.version]);
+  }, [contextId]);
 
   // Determine what user is replying to
   const activeInteraction = useMemo(() => {
@@ -289,7 +288,7 @@ export default function AgentDetail() {
     ]);
 
     try {
-      const stream = sendMessageStream(detail.id, {
+      const stream = sendMessageStream({
         messageText: userMessage,
         contextId: contextId ?? undefined,
         taskId: activeTaskId ?? undefined,
@@ -315,19 +314,16 @@ export default function AgentDetail() {
       // Reload tasks after message
       const contextToRefresh = contextIdRef.current;
       if (contextToRefresh) {
-        listContextTasks(detail.id, detail.version, contextToRefresh)
-          .then(setTasks)
-          .catch(console.error);
+        listContextTasks(contextToRefresh).then(setTasks).catch(console.error);
       }
       refreshContexts();
     }
   };
 
-  const handleInspectTask = useCallback(
-    async (taskId: string) => {
-      setInspecting(true);
-      try {
-        const history = await getTaskHistory(detail.id, detail.version, taskId);
+  const handleInspectTask = useCallback(async (taskId: string) => {
+    setInspecting(true);
+    try {
+      const history = await getTaskHistory(taskId);
       const entries = history.events
         .map(({ result }) => convertEventToEntry(result))
         .filter(
@@ -335,19 +331,17 @@ export default function AgentDetail() {
             Boolean(entry)
         ) as ConsoleEntry[];
       setInspectedTask({
-          taskId,
-          entries,
-          task: history.task,
-        });
-      } catch (err) {
-        console.error(err);
-        setError(err instanceof Error ? err.message : "Failed to load task");
-      } finally {
-        setInspecting(false);
-      }
-    },
-    [detail.id, detail.version]
-  );
+        taskId,
+        entries,
+        task: history.task,
+      });
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Failed to load task");
+    } finally {
+      setInspecting(false);
+    }
+  }, []);
 
   const handleNewContext = () => {
     setContextId(null);
@@ -370,7 +364,7 @@ export default function AgentDetail() {
 
   const loadTaskHistoryIntoTimeline = useCallback(
     async (taskId: string) => {
-      const history = await getTaskHistory(detail.id, detail.version, taskId);
+      const history = await getTaskHistory(taskId);
       const entries = history.events
         .map(({ result }) => convertEventToEntry(result))
         .filter(Boolean) as ConsoleEntry[];
@@ -384,7 +378,7 @@ export default function AgentDetail() {
       }
       return history;
     },
-    [detail.id, detail.version, ensureContextListed]
+    [ensureContextListed]
   );
 
   const handleSubscribeTask = useCallback(
@@ -403,7 +397,7 @@ export default function AgentDetail() {
           contextForRefresh = history.task.contextId;
         }
 
-        const stream = resubscribeTaskStream(detail.id, { id: taskId });
+        const stream = resubscribeTaskStream({ id: taskId });
         const iterator = stream[Symbol.asyncIterator]();
         streamCancelRef.current = () => {
           iterator.return?.();
@@ -427,16 +421,12 @@ export default function AgentDetail() {
         refreshContexts();
         const targetContext = contextForRefresh ?? contextIdRef.current;
         if (targetContext) {
-          listContextTasks(detail.id, detail.version, targetContext)
-            .then(setTasks)
-            .catch(console.error);
+          listContextTasks(targetContext).then(setTasks).catch(console.error);
         }
       }
     },
     [
       cancelActiveStream,
-      detail.id,
-      detail.version,
       loadTaskHistoryIntoTimeline,
       processStreamEvent,
       refreshContexts,
@@ -488,12 +478,6 @@ export default function AgentDetail() {
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <Link
-                to="/"
-                className="text-slate-400 hover:text-slate-600 transition-colors dark:text-zinc-500 dark:hover:text-zinc-300"
-              >
-                ←
-              </Link>
               <h1 className="text-2xl font-bold text-slate-900 dark:text-zinc-100">{detail.name}</h1>
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-200">
                 v{detail.version}

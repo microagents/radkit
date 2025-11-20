@@ -67,8 +67,8 @@ Example response format:
 /// Extracts and deserializes structured output from LLM response content.
 ///
 /// This function uses tryparse with fuzzy matching to handle messy LLM outputs including:
-/// - Fuzzy field name matching (`user_name` matches userName, UserName, user-name, etc.)
-/// - Fuzzy enum matching (`InProgress` matches "in_progress", "inprogress", etc.)
+/// - Fuzzy field name matching (`user_name` matches `userName`, `UserName`, `user-name`, etc.)
+/// - Fuzzy enum matching (`InProgress` matches `"in_progress"`, `"inprogress"`, etc.)
 /// - Markdown code blocks
 /// - Trailing commas
 /// - Unquoted keys
