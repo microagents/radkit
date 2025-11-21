@@ -42,7 +42,7 @@ use crate::compat::{MaybeSend, MaybeSync};
 use crate::errors::AgentError;
 use crate::models::Content;
 use crate::runtime::context::{Context, TaskContext};
-use crate::runtime::Runtime;
+use crate::runtime::AgentRuntime;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -396,7 +396,7 @@ pub trait SkillHandler: MaybeSend + MaybeSync {
         &self,
         task_context: &mut TaskContext,
         context: &Context,
-        runtime: &dyn Runtime,
+        runtime: &dyn AgentRuntime,
         content: Content,
     ) -> Result<OnRequestResult, AgentError>;
 
@@ -421,7 +421,7 @@ pub trait SkillHandler: MaybeSend + MaybeSync {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnInputResult, AgentError> {
         Ok(OnInputResult::Failed {

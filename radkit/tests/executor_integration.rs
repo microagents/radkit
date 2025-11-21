@@ -16,12 +16,11 @@ mod tests {
         SkillSlot,
     };
     use radkit::errors::AgentError;
-    use radkit::models::{Content, ContentPart, LlmResponse, TokenUsage};
+    use radkit::models::{Content, LlmResponse, TokenUsage};
     use radkit::runtime::context::{Context, TaskContext};
-    use radkit::runtime::core::executor::RequestExecutor;
-    use radkit::runtime::{DefaultRuntime, Runtime};
+    use radkit::runtime::core::executor::{ExecutorRuntime, RequestExecutor};
+    use radkit::runtime::{AgentRuntime, Runtime};
     use radkit::test_support::FakeLlm;
-    use radkit::tools::ToolCall;
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
     use uuid::Uuid;
@@ -86,7 +85,7 @@ mod tests {
             &self,
             _task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             _content: Content,
         ) -> Result<OnRequestResult, AgentError> {
             Ok(OnRequestResult::Completed {
@@ -99,7 +98,7 @@ mod tests {
             &self,
             _task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             _input: Content,
         ) -> Result<OnInputResult, AgentError> {
             unreachable!("immediate skill should not receive input")
@@ -117,10 +116,11 @@ mod tests {
         // Provide structured output response for skill negotiation
         let llm = FakeLlm::with_responses("fake-llm", [negotiation_response("immediate")]);
 
-        let agent = Agent::builder().with_skill(ImmediateSkill).build();
-
-        let runtime = Arc::new(DefaultRuntime::new(llm));
-        let executor = RequestExecutor::new(runtime.clone(), &agent);
+        let runtime = Runtime::builder(Agent::builder().with_skill(ImmediateSkill).build(), llm)
+            .build()
+            .into_shared();
+        let executor_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(executor_runtime);
 
         let params = MessageSendParams {
             message: create_message("Hello", None, None),
@@ -179,7 +179,7 @@ mod tests {
             &self,
             _task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             _content: Content,
         ) -> Result<OnRequestResult, AgentError> {
             Ok(OnRequestResult::InputRequired {
@@ -192,7 +192,7 @@ mod tests {
             &self,
             task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             input: Content,
         ) -> Result<OnInputResult, AgentError> {
             let slot: GreetingSlot = task_context.load_slot()?.expect("slot should be available");
@@ -219,10 +219,11 @@ mod tests {
     async fn test_task_continuation_with_input() {
         let llm = FakeLlm::with_responses("fake-llm", [negotiation_response("greeting")]);
 
-        let agent = Agent::builder().with_skill(GreetingSkill).build();
-
-        let runtime = Arc::new(DefaultRuntime::new(llm));
-        let executor = RequestExecutor::new(runtime.clone(), &agent);
+        let runtime = Runtime::builder(Agent::builder().with_skill(GreetingSkill).build(), llm)
+            .build()
+            .into_shared();
+        let executor_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(executor_runtime);
 
         // Step 1: Send initial request
         let params1 = MessageSendParams {
@@ -296,7 +297,7 @@ mod tests {
             &self,
             _task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             _content: Content,
         ) -> Result<OnRequestResult, AgentError> {
             Err(AgentError::Internal {
@@ -309,7 +310,7 @@ mod tests {
             &self,
             _task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             _input: Content,
         ) -> Result<OnInputResult, AgentError> {
             unreachable!()
@@ -326,10 +327,11 @@ mod tests {
     async fn test_task_failure() {
         let llm = FakeLlm::with_responses("fake-llm", [negotiation_response("failing")]);
 
-        let agent = Agent::builder().with_skill(FailingSkill).build();
-
-        let runtime = Arc::new(DefaultRuntime::new(llm));
-        let executor = RequestExecutor::new(runtime.clone(), &agent);
+        let runtime = Runtime::builder(Agent::builder().with_skill(FailingSkill).build(), llm)
+            .build()
+            .into_shared();
+        let executor_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(executor_runtime);
 
         let params = MessageSendParams {
             message: create_message("Do something", None, None),
@@ -358,10 +360,11 @@ mod tests {
     async fn test_get_task() {
         let llm = FakeLlm::with_responses("fake-llm", [negotiation_response("immediate")]);
 
-        let agent = Agent::builder().with_skill(ImmediateSkill).build();
-
-        let runtime = Arc::new(DefaultRuntime::new(llm));
-        let executor = RequestExecutor::new(runtime.clone(), &agent);
+        let runtime = Runtime::builder(Agent::builder().with_skill(ImmediateSkill).build(), llm)
+            .build()
+            .into_shared();
+        let executor_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(executor_runtime);
 
         // Create a task
         let params = MessageSendParams {
@@ -399,10 +402,11 @@ mod tests {
     async fn test_get_nonexistent_task() {
         let llm = FakeLlm::with_responses("fake-llm", [negotiation_response("immediate")]);
 
-        let agent = Agent::builder().with_skill(ImmediateSkill).build();
-
-        let runtime = Arc::new(DefaultRuntime::new(llm));
-        let executor = RequestExecutor::new(runtime.clone(), &agent);
+        let runtime = Runtime::builder(Agent::builder().with_skill(ImmediateSkill).build(), llm)
+            .build()
+            .into_shared();
+        let executor_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(executor_runtime);
 
         let result = executor
             .handle_get_task(TaskQueryParams {
@@ -429,10 +433,11 @@ mod tests {
     async fn test_invalid_context_task_combination() {
         let llm = FakeLlm::with_responses("fake-llm", [negotiation_response("greeting")]);
 
-        let agent = Agent::builder().with_skill(GreetingSkill).build();
-
-        let runtime = Arc::new(DefaultRuntime::new(llm));
-        let executor = RequestExecutor::new(runtime.clone(), &agent);
+        let runtime = Runtime::builder(Agent::builder().with_skill(GreetingSkill).build(), llm)
+            .build()
+            .into_shared();
+        let executor_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(executor_runtime);
 
         // Create first task
         let params1 = MessageSendParams {

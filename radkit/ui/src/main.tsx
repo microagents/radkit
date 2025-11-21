@@ -2,7 +2,6 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import App from "./App";
-import Home, { loader as homeLoader } from "./routes/home";
 import AgentDetail, { loader as agentLoader } from "./routes/agent-detail";
 import "./index.css";
 
@@ -14,11 +13,6 @@ const router = createBrowserRouter([
     children: [
       {
         index: true,
-        Component: Home,
-        loader: homeLoader,
-      },
-      {
-        path: "agents/:agentId",
         Component: AgentDetail,
         loader: agentLoader,
       },

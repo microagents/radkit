@@ -7,7 +7,7 @@ use radkit::macros::skill;
 use radkit::models::providers::OpenRouterLlm;
 use radkit::models::Content;
 use radkit::runtime::context::{Context, TaskContext};
-use radkit::runtime::{MemoryServiceExt, Runtime};
+use radkit::runtime::{AgentRuntime, MemoryServiceExt};
 
 fn generate_onboarding_tasks() -> LlmFunction<Vec<String>> {
     let llm = OpenRouterLlm::from_env("anthropic/claude-3.5-sonnet")
@@ -44,7 +44,7 @@ impl SkillHandler for GenerateOnboardingPlanSkill {
         &self,
         task_context: &mut TaskContext,
         context: &Context,
-        runtime: &dyn Runtime,
+        runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         // Send intermediate update

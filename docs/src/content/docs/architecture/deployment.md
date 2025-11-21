@@ -27,11 +27,11 @@ Once the `.wasm` module is uploaded, the cloud platform takes over:
 
 1.  **Instantiation**: The platform loads the `.wasm` module into a high-performance, secure WASM runtime (like Wasmtime).
 
-2.  **Discovery via Configuration Function**: The runtime calls a known function in the module to retrieve the `AgentDefinition`s you have defined. This is typically the `configure_agents()` function.
+2.  **Discovery via Configuration Function**: The runtime calls a known function in the module to retrieve the `AgentDefinition` you have defined. This is typically the `configure_agent()` function.
 
     ```rust
-    pub fn configure_agents() -> Vec<AgentDefinition> {
-        // ... return agent definitions
+    pub fn configure_agent() -> AgentDefinition {
+        // ... return an agent definition
     }
     ```
 

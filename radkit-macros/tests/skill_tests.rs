@@ -2,7 +2,7 @@ use radkit::agent::{OnRequestResult, RegisteredSkill, SkillHandler};
 use radkit::errors::AgentError;
 use radkit::models::Content;
 use radkit::runtime::context::{Context, TaskContext};
-use radkit::runtime::Runtime;
+use radkit::runtime::AgentRuntime;
 use radkit_macros::skill;
 
 // Test 1: Basic skill with required fields only
@@ -22,7 +22,7 @@ impl SkillHandler for TestSkill {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         Ok(OnRequestResult::Completed {
@@ -57,7 +57,7 @@ impl SkillHandler for FullSkill {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         Ok(OnRequestResult::Completed {
@@ -92,7 +92,7 @@ impl SkillHandler for EmptyArraysSkill {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         Ok(OnRequestResult::Completed {

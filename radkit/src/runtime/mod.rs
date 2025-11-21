@@ -24,7 +24,9 @@ mod banner;
 pub use auth::AuthService;
 pub use logging::{LogLevel, LoggingService};
 pub use memory::{MemoryService, MemoryServiceExt};
-pub use task_manager::{ListTasksFilter, PaginatedResult, Task, TaskEvent, TaskManager};
+pub use task_manager::{
+    DefaultTaskManager, ListTasksFilter, PaginatedResult, Task, TaskEvent, TaskManager, TaskStore,
+};
 
 // Re-export default implementations for convenience
 #[cfg(feature = "runtime")]
@@ -36,8 +38,10 @@ pub use logging::ConsoleLoggingService;
 #[cfg(feature = "runtime")]
 pub use memory::InMemoryMemoryService;
 #[cfg(feature = "runtime")]
-pub use task_manager::InMemoryTaskManager;
+pub use task_manager::{InMemoryTaskManager, InMemoryTaskStore};
 
+#[cfg(feature = "runtime")]
+use crate::agent::AgentDefinition;
 use crate::{MaybeSend, MaybeSync};
 use std::sync::Arc;
 
@@ -63,58 +67,35 @@ use {
 #[cfg(all(feature = "dev-ui", not(all(target_os = "wasi", target_env = "p1"))))]
 use tower_http::services::{ServeDir, ServeFile};
 
-/// Core trait for runtime implementations.
+/// Core trait for runtime implementations exposed to skill authors.
 ///
-/// Runtimes provide access to services needed during agent execution,
-/// including session management, memory storage, and logging.
-pub trait Runtime: MaybeSend + MaybeSync {
+/// The trait intentionally exposes only the services that handlers should use
+/// directly. Infrastructure components like the negotiator, task manager, or
+/// event bus remain internal to the runtime so advanced orchestration can
+/// evolve without affecting the public API.
+pub trait AgentRuntime: MaybeSend + MaybeSync {
     /// Returns the authentication service.
-    fn auth_service(&self) -> Arc<dyn AuthService>;
-
-    /// Returns the task manager for persisting and retrieving tasks and events.
-    fn task_manager(&self) -> Arc<dyn TaskManager>;
+    fn auth(&self) -> Arc<dyn AuthService>;
 
     /// Returns the memory service for storing and retrieving data.
-    fn memory_service(&self) -> Arc<dyn MemoryService>;
+    fn memory(&self) -> Arc<dyn MemoryService>;
 
     /// Returns the logging service for structured logging.
-    fn logging_service(&self) -> Arc<dyn LoggingService>;
+    fn logging(&self) -> Arc<dyn LoggingService>;
 
     /// Returns the default LLM for this runtime.
     #[cfg(feature = "runtime")]
-    fn get_default_llm(&self) -> Arc<dyn BaseLlm>;
-
-    /// Returns the negotiator for handling pre-task conversations.
-    #[cfg(feature = "runtime")]
-    fn negotiator(&self) -> Arc<dyn core::negotiator::Negotiator>;
-
-    /// Returns the task event bus used for streaming.
-    #[cfg(feature = "runtime")]
-    fn event_bus(&self) -> Arc<TaskEventBus>;
-
-    /// Convenience method for accessing auth service.
-    fn auth(&self) -> Arc<dyn AuthService> {
-        self.auth_service()
-    }
-
-    /// Convenience method for accessing memory service.
-    fn memory(&self) -> Arc<dyn MemoryService> {
-        self.memory_service()
-    }
-
-    /// Convenience method for accessing logging service.
-    fn logging(&self) -> Arc<dyn LoggingService> {
-        self.logging_service()
-    }
+    fn default_llm(&self) -> Arc<dyn BaseLlm>;
 }
 
 /// Default runtime implementation for native targets.
 ///
-/// This runtime can be configured with agents and started as a local server.
-/// Use the builder pattern: `DefaultRuntime::new().agents(my_agents).serve(addr).await`.
+/// Each runtime instance is responsible for exactly one [`AgentDefinition`].
+/// Use [`RuntimeBuilder`] to configure custom services or to override the
+/// public base URL before calling [`Runtime::serve`].
 #[cfg(feature = "runtime")]
 #[derive(Clone)]
-pub struct DefaultRuntime {
+pub struct Runtime {
     auth_service: Arc<dyn AuthService>,
     task_manager: Arc<dyn TaskManager>,
     memory_service: Arc<dyn MemoryService>,
@@ -122,80 +103,54 @@ pub struct DefaultRuntime {
     base_llm: Arc<dyn BaseLlm>,
     negotiator: Arc<dyn core::negotiator::Negotiator>,
     event_bus: Arc<TaskEventBus>,
-    pub(crate) agents: Arc<Vec<crate::agent::AgentDefinition>>,
-    pub(crate) base_url: Option<String>,
-    pub(crate) bind_address: Option<String>,
+    agent: Arc<AgentDefinition>,
+    base_url: Option<String>,
+    bind_address: Option<String>,
+}
+
+/// Builder for configuring [`Runtime`] instances.
+#[cfg(feature = "runtime")]
+pub struct RuntimeBuilder {
+    agent: AgentDefinition,
+    auth_service: Arc<dyn AuthService>,
+    task_store: Arc<dyn TaskStore>,
+    memory_service: Arc<dyn MemoryService>,
+    logging_service: Arc<dyn LoggingService>,
+    base_llm: Arc<dyn BaseLlm>,
+    base_url: Option<String>,
 }
 
 #[cfg(feature = "runtime")]
-impl DefaultRuntime {
-    /// Creates a new default runtime instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `llm` - The LLM provider to use as the default for this runtime
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use radkit::models::providers::AnthropicLlm;
-    ///
-    /// let llm = AnthropicLlm::from_env("claude-sonnet-4")?;
-    /// let runtime = DefaultRuntime::new(llm)
-    ///     .agents(vec![my_agent])
-    ///     .serve("127.0.0.1:8080").await?;
-    /// ```
-    pub fn new(llm: impl BaseLlm + 'static) -> Self {
-        let base_llm: Arc<dyn BaseLlm> = Arc::new(llm);
-
-        Self {
-            auth_service: Arc::new(StaticAuthService::default()),
-            task_manager: Arc::new(InMemoryTaskManager::new()),
-            memory_service: Arc::new(InMemoryMemoryService::new()),
-            logging_service: Arc::new(ConsoleLoggingService),
-            base_llm: base_llm.clone(),
-            negotiator: Arc::new(DefaultNegotiator::new(base_llm)),
-            event_bus: Arc::new(TaskEventBus::new()),
-            agents: Arc::new(Vec::new()),
-            base_url: None,
-            bind_address: None,
-        }
+impl Runtime {
+    /// Creates a builder for the provided agent and LLM provider.
+    pub fn builder(agent: AgentDefinition, llm: impl BaseLlm + 'static) -> RuntimeBuilder {
+        RuntimeBuilder::new(agent, llm)
     }
 
-    #[must_use]
-    pub fn agents(mut self, agents: Vec<crate::agent::AgentDefinition>) -> Self {
-        self.agents = Arc::new(agents);
-        self
+    /// Returns the agent definition owned by this runtime.
+    pub(crate) fn agent(&self) -> &AgentDefinition {
+        &self.agent
     }
 
-    /// Sets the public-facing base URL for agent card generation.
-    ///
-    /// This URL is used when generating agent cards to provide clients with
-    /// the correct endpoints for RPC calls and streaming. It should be the
-    /// public URL where the agent is accessible, not the internal bind address.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - The base URL (e.g., "<http://localhost:3000>" for dev,
-    ///   "<https://api.example.com>" for production)
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Local development
-    /// DefaultRuntime::new(llm)
-    ///     .base_url("http://localhost:3000")
-    ///     .serve("127.0.0.1:3000").await?;
-    ///
-    /// // Production with reverse proxy
-    /// DefaultRuntime::new(llm)
-    ///     .base_url("https://api.example.com")
-    ///     .serve("0.0.0.0:8080").await?;
-    /// ```
+    pub(crate) fn configured_base_url(&self) -> Option<&str> {
+        self.base_url.as_deref()
+    }
+
+    pub(crate) fn bind_address(&self) -> Option<&str> {
+        self.bind_address.as_deref()
+    }
+
+    /// Exposes the task manager for integration tests.
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub fn base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = Some(url.into());
-        self
+    pub fn task_manager(&self) -> Arc<dyn TaskManager> {
+        self.task_manager.clone()
+    }
+
+    /// Converts this runtime into a reference-counted handle suitable for sharing.
+    #[must_use]
+    pub fn into_shared(self) -> Arc<Self> {
+        Arc::new(self)
     }
 
     /// Starts the local development server at the given address.
@@ -221,7 +176,6 @@ impl DefaultRuntime {
         // Store bind address for fallback URL generation
         self.bind_address = Some(address.to_string());
 
-        // Warn if base_url is not configured for production deployments
         if self.base_url.is_none() {
             tracing::warn!(
                 "base_url not configured - agent cards will infer from bind address. \
@@ -229,25 +183,18 @@ impl DefaultRuntime {
             );
         }
 
-        // Display startup banner before starting the server
-        banner::display_banner(address, self.base_url.as_deref(), &self.agents);
+        banner::display_banner(address, self.base_url.as_deref(), &self.agent);
 
         // Share the runtime state with the handlers
         let shared_runtime = Arc::new(self);
 
         // Build the Axum router with A2A API routes
         let api_routes = Router::new()
+            .route("/.well-known/agent-card.json", get(web::agent_card_handler))
+            .route("/rpc", post(web::json_rpc_handler))
+            .route("/message:stream", post(web::message_stream_handler))
             .route(
-                "/{agent_id}/.well-known/agent-card.json",
-                get(web::agent_card_handler),
-            )
-            .route("/{agent_id}/{version}/rpc", post(web::json_rpc_handler))
-            .route(
-                "/{agent_id}/{version}/message:stream",
-                post(web::message_stream_handler),
-            )
-            .route(
-                "/{agent_id}/{version}/tasks/{task_id}/subscribe",
+                "/tasks/{task_id}/subscribe",
                 post(web::task_resubscribe_handler),
             )
             .with_state(Arc::clone(&shared_runtime));
@@ -266,21 +213,15 @@ impl DefaultRuntime {
 
             // UI-specific API routes under /ui/*
             let ui_api_routes = Router::new()
-                .route("/ui/agents", get(web::list_agents_handler))
+                .route("/ui/agent", get(web::agent_info_handler))
+                .route("/ui/contexts", get(web::list_contexts_handler))
                 .route(
-                    "/ui/{agent_id}/{version}/contexts",
-                    get(web::list_contexts_handler),
-                )
-                .route(
-                    "/ui/{agent_id}/{version}/contexts/{context_id}/tasks",
+                    "/ui/contexts/{context_id}/tasks",
                     get(web::context_tasks_handler),
                 )
+                .route("/ui/tasks/{task_id}/events", get(web::task_events_handler))
                 .route(
-                    "/ui/{agent_id}/{version}/tasks/{task_id}/events",
-                    get(web::task_events_handler),
-                )
-                .route(
-                    "/ui/{agent_id}/{version}/tasks/{task_id}/transitions",
+                    "/ui/tasks/{task_id}/transitions",
                     get(web::task_transitions_handler),
                 )
                 .with_state(Arc::clone(&shared_runtime));
@@ -316,57 +257,134 @@ impl DefaultRuntime {
     }
 }
 
-#[cfg(all(test, feature = "runtime"))]
-mod tests {
-    use super::*;
-    use crate::test_support::FakeLlm;
+#[cfg(feature = "runtime")]
+impl AgentRuntime for Runtime {
+    fn auth(&self) -> Arc<dyn AuthService> {
+        self.auth_service.clone()
+    }
 
-    #[test]
-    fn default_runtime_provides_default_services() {
-        let llm = FakeLlm::with_responses("runtime", std::iter::empty());
-        let runtime = DefaultRuntime::new(llm);
+    fn memory(&self) -> Arc<dyn MemoryService> {
+        self.memory_service.clone()
+    }
 
-        let auth_ctx = runtime.auth_service().get_auth_context();
-        assert_eq!(auth_ctx.app_name, "default-app");
-        assert_eq!(auth_ctx.user_name, "default-user");
+    fn logging(&self) -> Arc<dyn LoggingService> {
+        self.logging_service.clone()
+    }
 
-        // Task manager is accessible and list operation succeeds.
-        let ids =
-            futures::executor::block_on(runtime.task_manager().list_task_ids(&auth_ctx, None))
-                .expect("list task ids");
-        assert!(ids.is_empty());
+    fn default_llm(&self) -> Arc<dyn BaseLlm> {
+        self.base_llm.clone()
     }
 }
 
 #[cfg(feature = "runtime")]
-impl Runtime for DefaultRuntime {
-    fn auth_service(&self) -> Arc<dyn AuthService> {
-        self.auth_service.clone()
+impl crate::runtime::core::executor::ExecutorRuntime for Runtime {
+    fn agent(&self) -> &AgentDefinition {
+        &self.agent
     }
 
     fn task_manager(&self) -> Arc<dyn TaskManager> {
         self.task_manager.clone()
     }
 
-    fn memory_service(&self) -> Arc<dyn MemoryService> {
-        self.memory_service.clone()
+    fn event_bus(&self) -> Arc<TaskEventBus> {
+        self.event_bus.clone()
     }
 
-    fn logging_service(&self) -> Arc<dyn LoggingService> {
-        self.logging_service.clone()
-    }
-
-    fn get_default_llm(&self) -> Arc<dyn BaseLlm> {
-        self.base_llm.clone()
-    }
-
-    #[cfg(feature = "runtime")]
     fn negotiator(&self) -> Arc<dyn core::negotiator::Negotiator> {
         self.negotiator.clone()
     }
+}
 
-    #[cfg(feature = "runtime")]
-    fn event_bus(&self) -> Arc<TaskEventBus> {
-        self.event_bus.clone()
+#[cfg(feature = "runtime")]
+impl RuntimeBuilder {
+    pub fn new(agent: AgentDefinition, llm: impl BaseLlm + 'static) -> Self {
+        let base_llm: Arc<dyn BaseLlm> = Arc::new(llm);
+        Self {
+            agent,
+            auth_service: Arc::new(StaticAuthService::default()),
+            task_store: Arc::new(InMemoryTaskStore::new()),
+            memory_service: Arc::new(InMemoryMemoryService::new()),
+            logging_service: Arc::new(ConsoleLoggingService),
+            base_llm,
+            base_url: None,
+        }
+    }
+
+    /// Overrides the authentication service used by the runtime.
+    #[must_use]
+    pub fn with_auth_service(mut self, service: impl AuthService + 'static) -> Self {
+        self.auth_service = Arc::new(service);
+        self
+    }
+
+    /// Overrides the memory service implementation.
+    #[must_use]
+    pub fn with_memory_service(mut self, service: impl MemoryService + 'static) -> Self {
+        self.memory_service = Arc::new(service);
+        self
+    }
+
+    /// Overrides the logging service implementation.
+    #[must_use]
+    pub fn with_logging_service(mut self, service: impl LoggingService + 'static) -> Self {
+        self.logging_service = Arc::new(service);
+        self
+    }
+
+    /// Overrides the task store implementation (persistence layer).
+    #[must_use]
+    pub fn with_task_store(mut self, store: impl TaskStore + 'static) -> Self {
+        self.task_store = Arc::new(store);
+        self
+    }
+
+    /// Sets the public-facing base URL for the runtime.
+    #[must_use]
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = Some(url.into());
+        self
+    }
+
+    /// Builds the runtime with the configured services.
+    #[must_use]
+    pub fn build(self) -> Runtime {
+        let negotiator = Arc::new(DefaultNegotiator::new(self.base_llm.clone()));
+        let task_manager = Arc::new(DefaultTaskManager::with_store(self.task_store));
+        Runtime {
+            auth_service: self.auth_service,
+            task_manager,
+            memory_service: self.memory_service,
+            logging_service: self.logging_service,
+            base_llm: self.base_llm,
+            negotiator,
+            event_bus: Arc::new(TaskEventBus::new()),
+            agent: Arc::new(self.agent),
+            base_url: self.base_url,
+            bind_address: None,
+        }
+    }
+}
+
+#[cfg(all(test, feature = "runtime"))]
+mod tests {
+    use super::*;
+    use crate::agent::Agent;
+    use crate::test_support::FakeLlm;
+
+    fn test_agent() -> AgentDefinition {
+        Agent::builder()
+            .with_id("test-agent")
+            .with_name("Test Agent")
+            .build()
+    }
+
+    #[test]
+    fn builder_provides_default_services() {
+        let llm = FakeLlm::with_responses("runtime", std::iter::empty());
+        let runtime = Runtime::builder(test_agent(), llm).build();
+
+        let auth_ctx = runtime.auth().get_auth_context();
+        assert_eq!(auth_ctx.app_name, "default-app");
+        assert_eq!(auth_ctx.user_name, "default-user");
     }
 }

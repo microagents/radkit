@@ -4,7 +4,6 @@
 //! including agent details, endpoints, and server configuration.
 
 use crate::agent::AgentDefinition;
-use std::sync::Arc;
 
 /// Displays a startup banner with agent and server information.
 ///
@@ -12,8 +11,8 @@ use std::sync::Arc;
 ///
 /// * `address` - The bind address the server is listening on
 /// * `base_url` - The public-facing base URL (if configured)
-/// * `agents` - List of registered agents
-pub fn display_banner(address: &str, base_url: Option<&str>, agents: &Arc<Vec<AgentDefinition>>) {
+/// * `agent` - The single agent served by this runtime
+pub fn display_banner(address: &str, base_url: Option<&str>, agent: &AgentDefinition) {
     let banner = r"
   ____            _ _  ___ _
  |  _ \ __ _   __| | |/ (_) |_
@@ -37,6 +36,8 @@ pub fn display_banner(address: &str, base_url: Option<&str>, agents: &Arc<Vec<Ag
 
     println!();
 
+    let normalized_base = effective_base_url.trim_end_matches('/');
+
     // Server info
     println!("Server Configuration:");
     println!("  Bind Address: {address}");
@@ -49,55 +50,23 @@ pub fn display_banner(address: &str, base_url: Option<&str>, agents: &Arc<Vec<Ag
 
     println!();
 
-    // Agent info
-    let agent_count = agents.len();
-    println!("Agents Loaded: {agent_count}");
+    println!("Agents Loaded: 1");
     println!();
 
-    if agent_count == 0 {
-        println!("  No agents registered. Use .agents(vec![...]) to register agents.");
-    } else {
-        for agent in agents.iter() {
-            let agent_id = agent.id();
-            let version = agent.version();
-            let skill_count = agent.skills().len();
+    let agent_id = agent.id();
+    let version = agent.version();
+    let skill_count = agent.skills().len();
 
-            println!("  \u{2022} {} (v{})", agent.name(), version);
-            println!("    ID:          {agent_id}");
-            println!("    Skills:      {skill_count}");
-            println!(
-                "    Agent Card:  {}/.well-known/agent-card.json",
-                format_agent_base_url(&effective_base_url, agent_id)
-            );
-            println!(
-                "    RPC:         {}/rpc",
-                format_agent_versioned_url(&effective_base_url, agent_id, version)
-            );
-            println!(
-                "    Streaming:   {}/message:stream",
-                format_agent_versioned_url(&effective_base_url, agent_id, version)
-            );
-            println!();
-        }
-    }
+    println!("  \u{2022} {} (v{})", agent.name(), version);
+    println!("    ID:          {agent_id}");
+    println!("    Skills:      {skill_count}");
+    println!("    Agent Card:  {normalized_base}/.well-known/agent-card.json");
+    println!("    RPC:         {normalized_base}/rpc");
+    println!("    Streaming:   {normalized_base}/message:stream");
+    println!();
 
     println!("Ready to accept connections!");
     println!();
-}
-
-/// Formats the base URL for an agent (without version).
-fn format_agent_base_url(base_url: &str, agent_id: &str) -> String {
-    format!("{}/{}", base_url.trim_end_matches('/'), agent_id)
-}
-
-/// Formats the versioned URL for an agent endpoint.
-fn format_agent_versioned_url(base_url: &str, agent_id: &str, version: &str) -> String {
-    format!(
-        "{}/{}/{}",
-        base_url.trim_end_matches('/'),
-        agent_id,
-        version
-    )
 }
 
 /// Infers a base URL from a bind address.
@@ -157,32 +126,6 @@ mod tests {
         assert_eq!(
             infer_base_url("example.com:7000"),
             "http://example.com:7000"
-        );
-    }
-
-    #[test]
-    fn test_format_urls() {
-        let base = "http://localhost:8080";
-        assert_eq!(
-            format_agent_base_url(base, "my-agent"),
-            "http://localhost:8080/my-agent"
-        );
-        assert_eq!(
-            format_agent_versioned_url(base, "my-agent", "1.0.0"),
-            "http://localhost:8080/my-agent/1.0.0"
-        );
-    }
-
-    #[test]
-    fn test_format_urls_with_trailing_slash() {
-        let base = "http://localhost:8080/";
-        assert_eq!(
-            format_agent_base_url(base, "my-agent"),
-            "http://localhost:8080/my-agent"
-        );
-        assert_eq!(
-            format_agent_versioned_url(base, "my-agent", "1.0.0"),
-            "http://localhost:8080/my-agent/1.0.0"
         );
     }
 }

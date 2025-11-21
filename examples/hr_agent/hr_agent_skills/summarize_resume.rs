@@ -8,8 +8,8 @@ use radkit::macros::{skill, tool, LLMOutput};
 use radkit::models::providers::OpenRouterLlm;
 use radkit::models::Content;
 use radkit::runtime::context::{Context, TaskContext};
-use radkit::runtime::{MemoryServiceExt, Runtime};
-use radkit::tools::ToolResult;
+use radkit::runtime::{AgentRuntime, MemoryServiceExt};
+use radkit::tools::{BaseTool, FunctionTool, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -164,7 +164,7 @@ impl SkillHandler for SummarizeResumeSkill {
         &self,
         task_context: &mut TaskContext,
         context: &Context,
-        runtime: &dyn Runtime,
+        runtime: &dyn AgentRuntime,
         content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         // Send intermediate status update
@@ -230,7 +230,7 @@ impl SkillHandler for SummarizeResumeSkill {
         &self,
         task_context: &mut TaskContext,
         _context: &Context,
-        runtime: &dyn Runtime,
+        runtime: &dyn AgentRuntime,
         content: Content,
     ) -> Result<OnInputResult, AgentError> {
         let slot: ResumeInputSlot = task_context.load_slot()?.unwrap();

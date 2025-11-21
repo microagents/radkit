@@ -23,7 +23,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["macros"]
-# Enables the DefaultRuntime and a full native agent server environment
+# Enables the runtime handle and a full native agent server environment
 runtime = ["dep:axum", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber"]
 # Enables developer UI with TypeScript type generation
 dev-ui = ["runtime", "dep:ts-rs"]
@@ -80,6 +80,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1.47.0", features = ["rt", "sync", "time", "io-util", "macros"] }
 # Random number generation for WASI (no special features needed)
 getrandom = "0.2"
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
 http-body-util = "0.1"

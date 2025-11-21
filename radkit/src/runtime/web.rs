@@ -1,14 +1,16 @@
 #![cfg(all(feature = "runtime", not(all(target_os = "wasi", target_env = "p1"))))]
 
-//! Web server handlers for the `DefaultRuntime`.
+//! Web server handlers for the runtime handle.
 
 use crate::agent::AgentDefinition;
 use crate::errors::{AgentError, AgentResult};
 use crate::runtime::context::AuthContext;
 use crate::runtime::core::error_mapper;
-use crate::runtime::core::executor::{PreparedSendMessage, RequestExecutor, TaskStream};
+use crate::runtime::core::executor::{
+    ExecutorRuntime, PreparedSendMessage, RequestExecutor, TaskStream,
+};
 use crate::runtime::task_manager::{Task, TaskEvent};
-use crate::runtime::{DefaultRuntime, Runtime};
+use crate::runtime::{AgentRuntime, Runtime};
 use a2a_types::{
     A2ARequestPayload, AgentCard, AgentSkill, CancelTaskResponse, CancelTaskSuccessResponse,
     GetTaskResponse, GetTaskSuccessResponse, JSONRPCErrorResponse, JSONRPCId, MessageSendParams,
@@ -75,30 +77,28 @@ fn infer_base_url(bind_address: &str) -> String {
     }
 }
 
-pub(crate) fn build_agent_card(runtime: &DefaultRuntime, agent: &AgentDefinition) -> AgentCard {
-    let base_url = runtime.base_url.clone().unwrap_or_else(|| {
-        runtime.bind_address.as_ref().map_or_else(
-            || "http://localhost".to_string(),
-            |addr| infer_base_url(addr),
-        )
-    });
+pub(crate) fn build_agent_card(runtime: &Runtime, agent: &AgentDefinition) -> AgentCard {
+    let base_url = runtime.configured_base_url().map_or_else(
+        || {
+            runtime
+                .bind_address()
+                .map_or_else(|| "http://localhost".to_string(), infer_base_url)
+        },
+        str::to_owned,
+    );
 
     let normalized_base = base_url.trim_end_matches('/');
     let version = agent.version();
-    let agent_id = agent.id();
 
     let mut card = AgentCard::new(
         agent.name(),
         agent.description().unwrap_or_default(),
         version,
-        format!("{normalized_base}/{agent_id}/{version}/rpc"),
+        format!("{normalized_base}/rpc"),
     );
 
     card.capabilities.streaming = Some(true);
-    card = card.add_interface(
-        TransportProtocol::HttpJson,
-        format!("{normalized_base}/{agent_id}/{version}"),
-    );
+    card = card.add_interface(TransportProtocol::HttpJson, normalized_base.to_string());
 
     card.skills = agent
         .skills()
@@ -171,7 +171,7 @@ mod tests {
         use crate::errors::{AgentError, AgentResult};
         use crate::models::{Content, LlmResponse};
         use crate::runtime::context::{Context, TaskContext};
-        use crate::runtime::{DefaultRuntime, Runtime};
+        use crate::runtime::{AgentRuntime, RuntimeBuilder};
         use crate::test_support::FakeLlm;
         use a2a_types::{
             A2ARequest, A2ARequestPayload, JSONRPCId, Message, MessageRole, MessageSendParams,
@@ -248,7 +248,7 @@ mod tests {
                 &self,
                 _task_context: &mut TaskContext,
                 _context: &Context,
-                _runtime: &dyn Runtime,
+                _runtime: &dyn AgentRuntime,
                 _content: Content,
             ) -> Result<OnRequestResult, AgentError> {
                 Ok(OnRequestResult::Completed {
@@ -261,7 +261,7 @@ mod tests {
                 &self,
                 _task_context: &mut TaskContext,
                 _context: &Context,
-                _runtime: &dyn Runtime,
+                _runtime: &dyn AgentRuntime,
                 _input: Content,
             ) -> Result<OnInputResult, AgentError> {
                 unreachable!("immediate skill never continues");
@@ -284,27 +284,23 @@ mod tests {
                 .with_name("Test Agent")
                 .with_skill(ImmediateSkill)
                 .build();
-            let runtime = Arc::new(
-                DefaultRuntime::new(llm)
-                    .base_url("http://localhost:3000")
-                    .agents(vec![agent]),
-            );
+            let runtime = RuntimeBuilder::new(agent, llm)
+                .base_url("http://localhost:3000")
+                .build()
+                .into_shared();
 
-            let response = agent_card_handler(
-                State(Arc::clone(&runtime)),
-                axum::extract::Path("agent-1".to_string()),
-            )
-            .await;
+            let response = agent_card_handler(State(Arc::clone(&runtime))).await;
 
             assert_eq!(response.status(), StatusCode::OK);
             let bytes = response_bytes(response).await;
             let card: a2a_types::AgentCard = serde_json::from_slice(&bytes).expect("agent card");
             assert_eq!(card.capabilities.streaming, Some(true));
             assert_eq!(card.skills.len(), 1);
+            assert!(card.url.ends_with("/rpc"));
             assert!(card
                 .additional_interfaces
                 .iter()
-                .any(|iface| iface.url.contains("/agent-1/1.0.0")));
+                .any(|iface| iface.url == "http://localhost:3000"));
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -317,11 +313,10 @@ mod tests {
                 .with_name("Test Agent")
                 .with_skill(ImmediateSkill)
                 .build();
-            let runtime = Arc::new(
-                DefaultRuntime::new(llm)
-                    .base_url("http://localhost:3000")
-                    .agents(vec![agent]),
-            );
+            let runtime = RuntimeBuilder::new(agent, llm)
+                .base_url("http://localhost:3000")
+                .build()
+                .into_shared();
 
             let params = MessageSendParams {
                 message: create_message("hello", None, None),
@@ -335,12 +330,7 @@ mod tests {
                 payload: A2ARequestPayload::SendMessage { params },
             };
 
-            let response = json_rpc_handler(
-                State(Arc::clone(&runtime)),
-                axum::extract::Path(("agent-1".to_string(), "1.0.0".to_string())),
-                Json(payload),
-            )
-            .await;
+            let response = json_rpc_handler(State(Arc::clone(&runtime)), Json(payload)).await;
 
             assert_eq!(response.status(), StatusCode::OK);
             let body = response_bytes(response).await;
@@ -375,9 +365,9 @@ mod tests {
                 .with_skill(ImmediateSkill)
                 .build();
             let runtime = Arc::new(
-                DefaultRuntime::new(llm)
+                RuntimeBuilder::new(agent, llm)
                     .base_url("http://localhost:3000")
-                    .agents(vec![agent]),
+                    .build(),
             );
 
             let params = MessageSendParams {
@@ -386,12 +376,7 @@ mod tests {
                 metadata: None,
             };
 
-            let response = message_stream_handler(
-                State(Arc::clone(&runtime)),
-                axum::extract::Path(("agent-1".to_string(), "1.0.0".to_string())),
-                Json(params),
-            )
-            .await;
+            let response = message_stream_handler(State(Arc::clone(&runtime)), Json(params)).await;
 
             assert_eq!(response.status(), StatusCode::OK);
             let body = response_bytes(response).await;
@@ -437,7 +422,7 @@ mod tests {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn task_resubscribe_handler_requires_suffix() {
+        async fn task_resubscribe_handler_returns_error_for_missing_task() {
             let llm =
                 FakeLlm::with_responses("fake-llm", [negotiation_response(IMMEDIATE_METADATA.id)]);
             let agent = Agent::builder()
@@ -447,28 +432,31 @@ mod tests {
                 .with_skill(ImmediateSkill)
                 .build();
             let runtime = Arc::new(
-                DefaultRuntime::new(llm)
+                RuntimeBuilder::new(agent, llm)
                     .base_url("http://localhost:3000")
-                    .agents(vec![agent]),
+                    .build(),
             );
 
             let response = task_resubscribe_handler(
                 State(Arc::clone(&runtime)),
-                axum::extract::Path((
-                    "agent-1".to_string(),
-                    "1.0.0".to_string(),
-                    "task-123".to_string(),
-                )),
+                axum::extract::Path("task-123".to_string()),
             )
             .await;
 
-            let status = response.status();
-            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(response.status(), StatusCode::OK);
             let body = response_bytes(response).await;
-            let parsed: serde_json::Value =
+            let parsed: SendStreamingMessageResponse =
                 serde_json::from_slice(&body).expect("json error response");
-            let message = parsed["error"].as_str().expect("error message string");
-            assert!(message.contains("suffix"), "message: {message}");
+            match parsed {
+                SendStreamingMessageResponse::Error(err) => {
+                    assert!(
+                        err.error.message.contains("not found"),
+                        "unexpected message: {}",
+                        err.error.message
+                    );
+                }
+                other => panic!("expected error response, got {other:?}"),
+            }
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -476,8 +464,14 @@ mod tests {
             use crate::runtime::task_manager::{Task, TaskEvent};
 
             let llm = FakeLlm::with_responses("fake-llm", std::iter::empty());
-            let runtime = Arc::new(DefaultRuntime::new(llm));
-            let auth_ctx = runtime.auth_service().get_auth_context();
+            let agent = Agent::builder()
+                .with_id("agent-1")
+                .with_version("1.0.0")
+                .with_name("Test Agent")
+                .with_skill(ImmediateSkill)
+                .build();
+            let runtime = RuntimeBuilder::new(agent, llm).build().into_shared();
+            let auth_ctx = runtime.auth().get_auth_context();
             let task_manager = runtime.task_manager();
 
             let mut stored_task = Task {
@@ -630,45 +624,25 @@ mod tests {
     }
 }
 
-/// Axum handler for serving an agent's `AgentCard`.
+/// Axum handler for serving the runtime's `AgentCard`.
 ///
-/// This function will handle `GET /:agent_id/.well-known/agent-card.json` requests.
-pub async fn agent_card_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-    Path(agent_id): Path<String>,
-) -> Response {
-    let agent_def = runtime.agents.iter().find(|a| a.id() == agent_id);
-
-    agent_def.map_or_else(
-        || (StatusCode::NOT_FOUND, "Agent not found").into_response(),
-        |agent| {
-            let card = build_agent_card(&runtime, agent);
-            (StatusCode::OK, Json(card)).into_response()
-        },
-    )
+/// This function handles `GET /.well-known/agent-card.json` requests.
+pub async fn agent_card_handler(State(runtime): State<Arc<Runtime>>) -> Response {
+    let card = build_agent_card(&runtime, runtime.agent());
+    (StatusCode::OK, Json(card)).into_response()
 }
 
-/// Axum handler for agent-specific JSON-RPC requests.
+/// Axum handler for JSON-RPC requests for the single configured agent.
 ///
-/// This function will handle `POST /:agent_id/rpc` requests.
+/// This function handles `POST /rpc` requests.
 pub async fn json_rpc_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-    Path((agent_id, version)): Path<(String, String)>,
+    State(runtime): State<Arc<Runtime>>,
     Json(payload): Json<a2a_types::A2ARequest>,
 ) -> Response {
-    let Some(agent_def) = runtime.agents.iter().find(|a| a.id() == agent_id) else {
-        return AgentError::AgentNotFound { agent_id }.into_response();
+    let executor = {
+        let exec_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        RequestExecutor::new(exec_runtime)
     };
-
-    if agent_def.version() != version {
-        return (
-            StatusCode::NOT_FOUND,
-            format!("Agent version {version} not found for {agent_id}"),
-        )
-            .into_response();
-    }
-
-    let executor = RequestExecutor::new(Arc::clone(&runtime), agent_def);
 
     let request_id = payload.id.clone();
 
@@ -715,23 +689,13 @@ pub async fn json_rpc_handler(
 
 /// Axum handler for the `message/stream` endpoint.
 pub async fn message_stream_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-    Path((agent_id, version)): Path<(String, String)>,
+    State(runtime): State<Arc<Runtime>>,
     Json(params): Json<MessageSendParams>,
 ) -> Response {
-    let Some(agent_def) = runtime.agents.iter().find(|a| a.id() == agent_id) else {
-        return AgentError::AgentNotFound { agent_id }.into_response();
+    let executor = {
+        let exec_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        RequestExecutor::new(exec_runtime)
     };
-
-    if agent_def.version() != version {
-        return (
-            StatusCode::NOT_FOUND,
-            format!("Agent version {version} not found for {agent_id}"),
-        )
-            .into_response();
-    }
-
-    let executor = RequestExecutor::new(Arc::clone(&runtime), agent_def);
 
     match executor.handle_message_stream(params).await {
         Ok(PreparedSendMessage::Task(stream)) => build_streaming_sse(None, stream).into_response(),
@@ -744,32 +708,13 @@ pub async fn message_stream_handler(
 
 /// Axum handler for the `tasks/resubscribe` endpoint.
 pub async fn task_resubscribe_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-    Path((agent_id, version, raw_task_id)): Path<(String, String, String)>,
+    State(runtime): State<Arc<Runtime>>,
+    Path(task_id): Path<String>,
 ) -> Response {
-    let Some(agent_def) = runtime.agents.iter().find(|a| a.id() == agent_id) else {
-        return AgentError::AgentNotFound { agent_id }.into_response();
+    let executor = {
+        let exec_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        RequestExecutor::new(exec_runtime)
     };
-
-    if agent_def.version() != version {
-        return (
-            StatusCode::NOT_FOUND,
-            format!("Agent version {version} not found for {agent_id}"),
-        )
-            .into_response();
-    }
-
-    let task_id = match raw_task_id.strip_suffix(":subscribe") {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => {
-            return AgentError::InvalidInput(
-                "tasks/:id:subscribe route requires suffix ':subscribe'".to_string(),
-            )
-            .into_response()
-        }
-    };
-
-    let executor = RequestExecutor::new(Arc::clone(&runtime), agent_def);
     let params = TaskIdParams {
         id: task_id,
         metadata: None,
@@ -993,44 +938,20 @@ impl AgentInfo {
     }
 }
 
-/// Handler for listing all registered agents (dev-ui only)
-///
-/// Returns a JSON array of agent information for all registered agents.
-/// This endpoint is used by the development UI for agent discovery.
+/// Handler for returning the single registered agent (dev-ui only).
 #[cfg(feature = "dev-ui")]
-pub async fn list_agents_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-) -> Json<Vec<AgentInfo>> {
-    let agents = runtime
-        .agents
-        .iter()
-        .map(AgentInfo::from_agent_definition)
-        .collect();
-
-    Json(agents)
+pub async fn agent_info_handler(State(runtime): State<Arc<Runtime>>) -> Json<AgentInfo> {
+    Json(AgentInfo::from_agent_definition(runtime.agent()))
 }
 
 /// Handler for listing context IDs for an agent (dev-ui only)
 ///
 /// Returns a JSON array of context IDs that have tasks associated with them.
 #[cfg(feature = "dev-ui")]
-pub async fn list_contexts_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-    Path((agent_id, _version)): Path<(String, String)>,
-) -> Response {
-    let agent = runtime.agents.iter().find(|agent| agent.id() == agent_id);
-
-    if agent.is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Agent not found"})),
-        )
-            .into_response();
-    }
-
-    let auth_ctx = runtime.auth_service().get_auth_context();
+pub async fn list_contexts_handler(State(runtime): State<Arc<Runtime>>) -> Response {
+    let auth_ctx = runtime.auth().get_auth_context();
     match runtime.task_manager().list_context_ids(&auth_ctx).await {
-        Ok(context_ids) => Json(context_ids).into_response(),
+        Ok(context_ids) => Json::<Vec<String>>(context_ids).into_response(),
         Err(err) => err.into_response(),
     }
 }
@@ -1062,10 +983,10 @@ struct UiTaskEventsResponse {
 
 #[cfg(feature = "dev-ui")]
 pub async fn context_tasks_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-    Path((agent_id, version, context_id)): Path<(String, String, String)>,
+    State(runtime): State<Arc<Runtime>>,
+    Path(context_id): Path<String>,
 ) -> Response {
-    match fetch_context_tasks(&runtime, &agent_id, &version, &context_id).await {
+    match fetch_context_tasks(&runtime, &context_id).await {
         Ok(tasks) => Json(tasks).into_response(),
         Err(err) => err.into_response(),
     }
@@ -1073,10 +994,10 @@ pub async fn context_tasks_handler(
 
 #[cfg(feature = "dev-ui")]
 pub async fn task_events_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-    Path((agent_id, version, task_id)): Path<(String, String, String)>,
+    State(runtime): State<Arc<Runtime>>,
+    Path(task_id): Path<String>,
 ) -> Response {
-    match fetch_task_events(&runtime, &agent_id, &version, &task_id).await {
+    match fetch_task_events(&runtime, &task_id).await {
         Ok(body) => Json(body).into_response(),
         Err(err) => err.into_response(),
     }
@@ -1103,10 +1024,10 @@ pub struct TaskTransitionsResponse {
 
 #[cfg(feature = "dev-ui")]
 pub async fn task_transitions_handler(
-    State(runtime): State<Arc<DefaultRuntime>>,
-    Path((agent_id, version, task_id)): Path<(String, String, String)>,
+    State(runtime): State<Arc<Runtime>>,
+    Path(task_id): Path<String>,
 ) -> Response {
-    match fetch_task_transitions(&runtime, &agent_id, &version, &task_id).await {
+    match fetch_task_transitions(&runtime, &task_id).await {
         Ok(transitions) => Json(transitions).into_response(),
         Err(err) => err.into_response(),
     }
@@ -1114,28 +1035,12 @@ pub async fn task_transitions_handler(
 
 #[cfg(feature = "dev-ui")]
 async fn fetch_task_transitions(
-    runtime: &Arc<DefaultRuntime>,
-    agent_id: &str,
-    version: &str,
+    runtime: &Arc<Runtime>,
     task_id: &str,
 ) -> AgentResult<TaskTransitionsResponse> {
     use a2a_types::TaskState;
 
-    let agent = runtime
-        .agents
-        .iter()
-        .find(|agent| agent.id() == agent_id)
-        .ok_or_else(|| AgentError::AgentNotFound {
-            agent_id: agent_id.to_string(),
-        })?;
-
-    if agent.version() != version {
-        return Err(AgentError::AgentNotFound {
-            agent_id: agent_id.to_string(),
-        });
-    }
-
-    let auth_ctx = runtime.auth_service().get_auth_context();
+    let auth_ctx = runtime.auth().get_auth_context();
     let events = runtime
         .task_manager()
         .get_task_events(&auth_ctx, task_id)
@@ -1177,26 +1082,10 @@ async fn fetch_task_transitions(
 
 #[cfg(feature = "dev-ui")]
 async fn fetch_context_tasks(
-    runtime: &Arc<DefaultRuntime>,
-    agent_id: &str,
-    version: &str,
+    runtime: &Arc<Runtime>,
     context_id: &str,
 ) -> AgentResult<Vec<UiTaskSummary>> {
-    let agent = runtime
-        .agents
-        .iter()
-        .find(|agent| agent.id() == agent_id)
-        .ok_or_else(|| AgentError::AgentNotFound {
-            agent_id: agent_id.to_string(),
-        })?;
-
-    if agent.version() != version {
-        return Err(AgentError::AgentNotFound {
-            agent_id: agent_id.to_string(),
-        });
-    }
-
-    let auth_ctx = runtime.auth_service().get_auth_context();
+    let auth_ctx = runtime.auth().get_auth_context();
     let task_ids = runtime
         .task_manager()
         .list_task_ids(&auth_ctx, Some(context_id))
@@ -1234,26 +1123,10 @@ async fn fetch_context_tasks(
 
 #[cfg(feature = "dev-ui")]
 async fn fetch_task_events(
-    runtime: &Arc<DefaultRuntime>,
-    agent_id: &str,
-    version: &str,
+    runtime: &Arc<Runtime>,
     task_id: &str,
 ) -> AgentResult<UiTaskEventsResponse> {
-    let agent = runtime
-        .agents
-        .iter()
-        .find(|agent| agent.id() == agent_id)
-        .ok_or_else(|| AgentError::AgentNotFound {
-            agent_id: agent_id.to_string(),
-        })?;
-
-    if agent.version() != version {
-        return Err(AgentError::AgentNotFound {
-            agent_id: agent_id.to_string(),
-        });
-    }
-
-    let auth_ctx = runtime.auth_service().get_auth_context();
+    let auth_ctx = runtime.auth().get_auth_context();
     let events = runtime
         .task_manager()
         .get_task_events(&auth_ctx, task_id)
@@ -1293,7 +1166,7 @@ async fn fetch_task_events(
 }
 
 async fn build_task_with_history(
-    runtime: &DefaultRuntime,
+    runtime: &Runtime,
     auth_ctx: &AuthContext,
     stored_task: &Task,
 ) -> AgentResult<a2a_types::Task> {

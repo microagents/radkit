@@ -27,8 +27,6 @@
 //! // Use slot for input validation
 //! ```
 
-#![cfg(all(feature = "runtime", not(all(target_os = "wasi", target_env = "p1"))))]
-
 use crate::agent::{
     builder::SkillRegistration, skill::SkillHandler, AgentDefinition, OnInputResult,
     OnRequestResult,
@@ -37,17 +35,26 @@ use crate::compat;
 use crate::errors::{AgentError, AgentResult};
 use crate::models::{utils, Content, Role};
 use crate::runtime::context::{AuthContext, Context, TaskContext};
-use crate::runtime::core::{negotiator::NegotiationDecision, status_mapper, TaskEventReceiver};
-use crate::runtime::task_manager::{Task, TaskEvent};
-use crate::runtime::{DefaultRuntime, Runtime};
+use crate::runtime::core::{
+    negotiator::{NegotiationDecision, Negotiator},
+    status_mapper, TaskEventBus, TaskEventReceiver,
+};
+use crate::runtime::task_manager::{Task, TaskEvent, TaskManager};
+use crate::runtime::AgentRuntime;
 use a2a_types::{MessageSendParams, SendMessageResult, TaskIdParams, TaskQueryParams};
 use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
 
-pub struct RequestExecutor<'a> {
-    runtime: Arc<dyn Runtime>,
-    agent_def: &'a AgentDefinition,
+pub trait ExecutorRuntime: AgentRuntime {
+    fn agent(&self) -> &AgentDefinition;
+    fn task_manager(&self) -> Arc<dyn TaskManager>;
+    fn event_bus(&self) -> Arc<TaskEventBus>;
+    fn negotiator(&self) -> Arc<dyn Negotiator>;
+}
+
+pub struct RequestExecutor {
+    runtime: Arc<dyn ExecutorRuntime>,
 }
 
 /// Buffered task events plus optional event-bus subscription used to power
@@ -57,6 +64,22 @@ pub struct RequestExecutor<'a> {
 pub(crate) struct TaskStream {
     pub(crate) initial_events: Vec<TaskEvent>,
     pub(crate) receiver: Option<TaskEventReceiver>,
+}
+
+#[derive(Clone)]
+struct TaskIdentifiers {
+    context_id: String,
+    task_id: String,
+}
+
+impl TaskIdentifiers {
+    #[allow(clippy::missing_const_for_fn)]
+    fn new(context_id: String, task_id: String) -> Self {
+        Self {
+            context_id,
+            task_id,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -115,10 +138,10 @@ impl MessageRoute {
     }
 }
 
-impl<'a> RequestExecutor<'a> {
+impl RequestExecutor {
     #[must_use]
-    pub fn new(runtime: Arc<DefaultRuntime>, agent_def: &'a AgentDefinition) -> Self {
-        Self { runtime, agent_def }
+    pub fn new(runtime: Arc<dyn ExecutorRuntime>) -> Self {
+        Self { runtime }
     }
 
     /// Handles a message send request and returns the result.
@@ -183,7 +206,7 @@ impl<'a> RequestExecutor<'a> {
         params: MessageSendParams,
         mode: DeliveryMode,
     ) -> AgentResult<DeliveryOutcome> {
-        let auth_context = self.runtime.auth_service().get_auth_context();
+        let auth_context = self.runtime.auth().get_auth_context();
         match MessageRoute::from_params(&params)? {
             MessageRoute::ExistingTask {
                 context_id,
@@ -297,7 +320,7 @@ impl<'a> RequestExecutor<'a> {
             .negotiator()
             .negotiate(
                 auth_ctx,
-                self.agent_def,
+                self.runtime.agent(),
                 &context_id,
                 content.clone(),
                 negotiation_messages,
@@ -327,7 +350,7 @@ impl<'a> RequestExecutor<'a> {
             .negotiator()
             .negotiate(
                 auth_ctx,
-                self.agent_def,
+                self.runtime.agent(),
                 &context_id,
                 content.clone(),
                 Vec::new(),
@@ -352,7 +375,7 @@ impl<'a> RequestExecutor<'a> {
         &self,
         params: TaskIdParams,
     ) -> AgentResult<TaskStream> {
-        let auth_ctx = self.runtime.auth_service().get_auth_context();
+        let auth_ctx = self.runtime.auth().get_auth_context();
         let stored_task = self
             .runtime
             .task_manager()
@@ -401,7 +424,7 @@ impl<'a> RequestExecutor<'a> {
         &self,
         params: TaskQueryParams,
     ) -> AgentResult<a2a_types::Task> {
-        let auth_context = self.runtime.auth_service().get_auth_context();
+        let auth_context = self.runtime.auth().get_auth_context();
         let task_id = params.id;
 
         let stored_task = self
@@ -444,7 +467,8 @@ impl<'a> RequestExecutor<'a> {
     /// # Returns
     /// Reference to the skill registration or `SkillNotFound` error
     fn find_skill_by_id(&self, skill_id: &str) -> AgentResult<&SkillRegistration> {
-        self.agent_def
+        self.runtime
+            .agent()
             .skills
             .iter()
             .find(|skill| skill.id() == skill_id)
@@ -929,24 +953,8 @@ impl<'a> RequestExecutor<'a> {
     }
 }
 
-#[derive(Clone)]
-struct TaskIdentifiers {
-    context_id: String,
-    task_id: String,
-}
-
-impl TaskIdentifiers {
-    #[allow(clippy::missing_const_for_fn)] // Takes owned `String`s, so it cannot be const.
-    fn new(context_id: String, task_id: String) -> Self {
-        Self {
-            context_id,
-            task_id,
-        }
-    }
-}
-
 async fn drive_on_request(
-    runtime: Arc<dyn Runtime>,
+    runtime: Arc<dyn ExecutorRuntime>,
     handler: Arc<dyn SkillHandler>,
     mut task_context: TaskContext,
     auth_ctx: AuthContext,
@@ -959,11 +967,12 @@ async fn drive_on_request(
         task_id,
     } = identifiers;
     let context = Context::new(auth_ctx.clone());
+    let runtime_for_handlers: &dyn AgentRuntime = runtime.as_ref();
     let result = handler
         .on_request(
             &mut task_context,
             &context,
-            runtime.as_ref(),
+            runtime_for_handlers,
             initial_message,
         )
         .await?;
@@ -1030,7 +1039,7 @@ async fn drive_on_request(
 }
 
 async fn drive_on_input(
-    runtime: Arc<dyn Runtime>,
+    runtime: Arc<dyn ExecutorRuntime>,
     handler: Arc<dyn SkillHandler>,
     mut task_context: TaskContext,
     auth_ctx: AuthContext,
@@ -1043,8 +1052,14 @@ async fn drive_on_input(
         task_id,
     } = identifiers;
     let context = Context::new(auth_ctx.clone());
+    let runtime_for_handlers: &dyn AgentRuntime = runtime.as_ref();
     let result = handler
-        .on_input_received(&mut task_context, &context, runtime.as_ref(), user_message)
+        .on_input_received(
+            &mut task_context,
+            &context,
+            runtime_for_handlers,
+            user_message,
+        )
         .await?;
 
     let final_status = status_mapper::on_input_to_status(&result);
@@ -1103,7 +1118,7 @@ async fn drive_on_input(
 }
 
 async fn emit_on_request_message(
-    runtime: Arc<dyn Runtime>,
+    runtime: Arc<dyn ExecutorRuntime>,
     auth_ctx: &AuthContext,
     task_id: &str,
     context_id: &str,
@@ -1131,7 +1146,7 @@ async fn emit_on_request_message(
 }
 
 async fn emit_on_input_message(
-    runtime: Arc<dyn Runtime>,
+    runtime: Arc<dyn ExecutorRuntime>,
     auth_ctx: &AuthContext,
     task_id: &str,
     context_id: &str,
@@ -1162,6 +1177,7 @@ mod tests {
     use super::*;
     use crate::agent::{Agent, RegisteredSkill, SkillHandler, SkillMetadata, SkillSlot};
     use crate::models::{Content, LlmResponse};
+    use crate::runtime::RuntimeBuilder;
     use crate::test_support::FakeLlm;
     use a2a_types::{Message, MessageRole, MessageSendParams, Part};
 
@@ -1240,7 +1256,7 @@ mod tests {
             &self,
             _task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             _content: Content,
         ) -> Result<OnRequestResult, AgentError> {
             Ok(OnRequestResult::Completed {
@@ -1281,7 +1297,7 @@ mod tests {
             &self,
             task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             _content: Content,
         ) -> Result<OnRequestResult, AgentError> {
             task_context.save_data("asked", &true)?;
@@ -1295,7 +1311,7 @@ mod tests {
             &self,
             task_context: &mut TaskContext,
             _context: &Context,
-            _runtime: &dyn Runtime,
+            _runtime: &dyn AgentRuntime,
             content: Content,
         ) -> Result<OnInputResult, AgentError> {
             task_context.clear_pending_slot();
@@ -1326,9 +1342,9 @@ mod tests {
             .with_name("Agent")
             .with_skill(SimpleSkill)
             .build();
-        let runtime = Arc::new(DefaultRuntime::new(llm).agents(vec![agent]));
-        let agent_ref = runtime.agents.get(0).expect("agent");
-        let executor = RequestExecutor::new(Arc::clone(&runtime), agent_ref);
+        let runtime = RuntimeBuilder::new(agent, llm).build().into_shared();
+        let exec_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(exec_runtime);
 
         let params = make_message_params("Do the task", None, None);
         let result = executor
@@ -1342,7 +1358,7 @@ mod tests {
         };
 
         assert_eq!(task.status.state, a2a_types::TaskState::Completed);
-        let auth = runtime.auth_service().get_auth_context();
+        let auth = runtime.auth().get_auth_context();
         let stored = runtime
             .task_manager()
             .get_task(&auth, &task.id)
@@ -1371,9 +1387,9 @@ mod tests {
             .with_name("Agent")
             .with_skill(MultiTurnSkill)
             .build();
-        let runtime = Arc::new(DefaultRuntime::new(llm).agents(vec![agent]));
-        let agent_ref = runtime.agents.get(0).expect("agent");
-        let executor = RequestExecutor::new(Arc::clone(&runtime), agent_ref);
+        let runtime = RuntimeBuilder::new(agent, llm).build().into_shared();
+        let exec_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(exec_runtime);
 
         let first_result = executor
             .handle_send_message(make_message_params("Start", None, None))
@@ -1385,7 +1401,7 @@ mod tests {
         };
         assert_eq!(task.status.state, a2a_types::TaskState::InputRequired);
 
-        let auth = runtime.auth_service().get_auth_context();
+        let auth = runtime.auth().get_auth_context();
 
         let continue_params =
             make_message_params("Provide details", Some(&task.context_id), Some(&task.id));
@@ -1417,9 +1433,9 @@ mod tests {
             .with_name("Agent")
             .with_skill(SimpleSkill)
             .build();
-        let runtime = Arc::new(DefaultRuntime::new(llm).agents(vec![agent]));
-        let agent_ref = runtime.agents.get(0).expect("agent");
-        let executor = RequestExecutor::new(Arc::clone(&runtime), agent_ref);
+        let runtime = RuntimeBuilder::new(agent, llm).build().into_shared();
+        let exec_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(exec_runtime);
 
         let result = executor
             .handle_send_message(make_message_params("Clarify", None, None))
@@ -1442,9 +1458,9 @@ mod tests {
             .with_name("Agent")
             .with_skill(SimpleSkill)
             .build();
-        let runtime = Arc::new(DefaultRuntime::new(llm).agents(vec![agent]));
-        let agent_ref = runtime.agents.get(0).expect("agent");
-        let executor = RequestExecutor::new(Arc::clone(&runtime), agent_ref);
+        let runtime = RuntimeBuilder::new(agent, llm).build().into_shared();
+        let exec_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(exec_runtime);
 
         let result = executor
             .handle_send_message(make_message_params("Reject", None, None))
@@ -1467,9 +1483,9 @@ mod tests {
             .with_name("Agent")
             .with_skill(SimpleSkill)
             .build();
-        let runtime = Arc::new(DefaultRuntime::new(llm).agents(vec![agent]));
-        let agent_ref = runtime.agents.get(0).expect("agent");
-        let executor = RequestExecutor::new(Arc::clone(&runtime), agent_ref);
+        let runtime = RuntimeBuilder::new(agent, llm).build().into_shared();
+        let exec_runtime: Arc<dyn ExecutorRuntime> = runtime.clone();
+        let executor = RequestExecutor::new(exec_runtime);
 
         let err = executor
             .handle_cancel_task(TaskIdParams {

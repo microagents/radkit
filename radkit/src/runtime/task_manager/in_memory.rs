@@ -1,14 +1,11 @@
-//! In-memory implementation of the `TaskManager` trait.
+//! In-memory implementation of the `TaskStore` trait.
 //!
 //! This module provides both native (thread-safe) and WASM (single-threaded)
 //! implementations of the task manager using in-memory storage.
 
 use crate::errors::AgentResult;
 use crate::runtime::context::AuthContext;
-use crate::runtime::task_manager::{
-    ListTasksFilter, PaginatedResult, Task, TaskEvent, TaskManager,
-};
-use a2a_types::Message;
+use crate::runtime::task_manager::{Task, TaskEvent, TaskStore};
 
 // ============================================================================
 // Native Implementation (Thread-Safe)
@@ -16,15 +13,12 @@ use a2a_types::Message;
 
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 mod native {
-    use super::{
-        AgentResult, AuthContext, ListTasksFilter, Message, PaginatedResult, Task, TaskEvent,
-        TaskManager,
-    };
+    use super::{AgentResult, AuthContext, Task, TaskEvent, TaskStore};
     use dashmap::DashMap;
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    /// An in-memory, thread-safe implementation of the [`TaskManager`].
+    /// An in-memory, thread-safe implementation of the [`TaskStore`].
     ///
     /// This implementation uses `DashMap` for concurrent access, making it suitable
     /// for the multi-threaded `tokio` runtime on native targets.
@@ -32,10 +26,10 @@ mod native {
     /// # Examples
     ///
     /// ```ignore
-    /// use radkit::runtime::InMemoryTaskManager;
-    /// use radkit::runtime::task_manager::{Task, TaskManager};
+    /// use radkit::runtime::task_manager::{DefaultTaskManager, Task, TaskManager};
+    /// use radkit::runtime::InMemoryTaskStore;
     ///
-    /// let manager = InMemoryTaskManager::new();
+    /// let manager = DefaultTaskManager::new(InMemoryTaskStore::new());
     /// let auth_ctx = AuthContext {
     ///     app_name: "my-app".to_string(),
     ///     user_name: "user1".to_string(),
@@ -51,7 +45,7 @@ mod native {
     /// manager.save_task(&auth_ctx, &task).await?;
     /// ```
     #[derive(Debug, Default)]
-    pub struct InMemoryTaskManager {
+    pub struct InMemoryTaskStore {
         tasks: Arc<DashMap<String, Task>>,
         events: Arc<DashMap<String, Vec<TaskEvent>>>,
         /// Store `TaskContext` state for multi-turn conversations
@@ -60,8 +54,8 @@ mod native {
         task_skills: Arc<DashMap<String, String>>,
     }
 
-    impl InMemoryTaskManager {
-        /// Creates a new `InMemoryTaskManager`.
+    impl InMemoryTaskStore {
+        /// Creates a new `InMemoryTaskStore`.
         #[must_use]
         pub fn new() -> Self {
             Self::default()
@@ -74,7 +68,7 @@ mod native {
     }
 
     #[async_trait::async_trait]
-    impl TaskManager for InMemoryTaskManager {
+    impl TaskStore for InMemoryTaskStore {
         async fn get_task(
             &self,
             auth_ctx: &AuthContext,
@@ -84,44 +78,14 @@ mod native {
             Ok(self.tasks.get(&key).map(|t| t.value().clone()))
         }
 
-        async fn list_tasks(
-            &self,
-            auth_ctx: &AuthContext,
-            filter: &ListTasksFilter<'_>,
-        ) -> AgentResult<PaginatedResult<Task>> {
+        async fn list_tasks(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<Task>> {
             let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
-            let mut all_tasks: Vec<Task> = self
+            Ok(self
                 .tasks
                 .iter()
                 .filter(|item| item.key().starts_with(&prefix))
                 .map(|item| item.value().clone())
-                .filter(|task| filter.context_id.is_none_or(|sid| task.context_id == sid))
-                .collect();
-
-            // Sort tasks by ID for consistent ordering
-            all_tasks.sort_by(|a, b| a.id.cmp(&b.id));
-
-            // Apply pagination
-            let page_size = filter.page_size.unwrap_or(100) as usize;
-            let start_offset = filter
-                .page_token
-                .and_then(|token| token.parse::<usize>().ok())
-                .unwrap_or(0);
-
-            let total = all_tasks.len();
-            let end_offset = (start_offset + page_size).min(total);
-            let items = all_tasks[start_offset..end_offset].to_vec();
-
-            let next_page_token = if end_offset < total {
-                Some(end_offset.to_string())
-            } else {
-                None
-            };
-
-            Ok(PaginatedResult {
-                items,
-                next_page_token,
-            })
+                .collect())
         }
 
         async fn save_task(&self, auth_ctx: &AuthContext, task: &Task) -> AgentResult<()> {
@@ -130,116 +94,66 @@ mod native {
             Ok(())
         }
 
-        async fn add_task_event(
+        async fn append_event(
             &self,
             auth_ctx: &AuthContext,
+            task_key: &str,
             event: &TaskEvent,
         ) -> AgentResult<()> {
-            // Extract task_id from the event itself
-            let event_key = match event {
-                TaskEvent::Message(msg) => {
-                    // For negotiation messages (task_id is None), use synthetic key
-                    msg.task_id.as_ref().map_or_else(
-                        || {
-                            format!(
-                                "_negotiation:{}",
-                                msg.context_id.as_deref().unwrap_or("default")
-                            )
-                        },
-                        std::clone::Clone::clone,
-                    )
-                }
-                TaskEvent::StatusUpdate(update) => update.task_id.clone(),
-                TaskEvent::ArtifactUpdate(update) => update.task_id.clone(),
-            };
-
-            let key = Self::get_namespaced_key(auth_ctx, &event_key);
+            let key = Self::get_namespaced_key(auth_ctx, task_key);
             self.events.entry(key).or_default().push(event.clone());
             Ok(())
         }
 
-        async fn get_task_events(
+        async fn get_events(
             &self,
             auth_ctx: &AuthContext,
-            task_id: &str,
+            task_key: &str,
         ) -> AgentResult<Vec<TaskEvent>> {
-            let key = Self::get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_key);
             Ok(self
                 .events
                 .get(&key)
                 .map_or_else(Vec::new, |v| v.value().clone()))
         }
 
-        async fn get_negotiating_messages(
-            &self,
-            auth_ctx: &AuthContext,
-            context_id: &str,
-        ) -> AgentResult<Vec<Message>> {
+        async fn list_event_task_keys(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>> {
             let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
-            let mut messages = Vec::new();
-
-            // Iterate through all events and filter messages by context_id
-            for entry in self.events.iter() {
-                if entry.key().starts_with(&prefix) {
-                    for event in entry.value() {
-                        if let TaskEvent::Message(msg) = event {
-                            if msg.context_id.as_deref() == Some(context_id)
-                                && msg.task_id.is_none()
-                            {
-                                messages.push(msg.clone());
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Sort messages deterministically by their message identifiers.
-            messages.sort_by(|a, b| a.message_id.cmp(&b.message_id));
-
-            Ok(messages)
+            let keys = self
+                .events
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .key()
+                        .strip_prefix(&prefix)
+                        .map(std::string::ToString::to_string)
+                })
+                .collect();
+            Ok(keys)
         }
 
-        async fn list_task_ids(
-            &self,
-            auth_ctx: &AuthContext,
-            context_id: Option<&str>,
-        ) -> AgentResult<Vec<String>> {
+        async fn list_task_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>> {
             let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
-            let task_ids: Vec<String> = self
+            let ids = self
                 .tasks
                 .iter()
-                .filter(|item| item.key().starts_with(&prefix))
-                .map(|item| item.value().clone())
-                .filter(|task| context_id.is_none_or(|cid| task.context_id == cid))
-                .map(|task| task.id)
+                .filter_map(|item| {
+                    item.key()
+                        .strip_prefix(&prefix)
+                        .map(std::string::ToString::to_string)
+                })
                 .collect();
-
-            Ok(task_ids)
+            Ok(ids)
         }
 
         async fn list_context_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>> {
             let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
-            let mut contexts: BTreeSet<String> = BTreeSet::new();
-
-            for task in self
+            let contexts: BTreeSet<String> = self
                 .tasks
                 .iter()
                 .filter(|item| item.key().starts_with(&prefix))
-            {
-                contexts.insert(task.value().context_id.clone());
-            }
-
-            for entry in self
-                .events
-                .iter()
-                .filter(|item| item.key().starts_with(&prefix))
-            {
-                if let Some(stripped) = entry.key().strip_prefix(&prefix) {
-                    if let Some(context_id) = stripped.strip_prefix("_negotiation:") {
-                        contexts.insert(context_id.to_string());
-                    }
-                }
-            }
+                .map(|item| item.value().context_id.clone())
+                .collect();
 
             Ok(contexts.into_iter().collect())
         }
@@ -251,7 +165,6 @@ mod native {
             context: &crate::runtime::context::TaskContext,
         ) -> AgentResult<()> {
             let key = Self::get_namespaced_key(auth_ctx, task_id);
-            // Serialize TaskContext to JSON
             let json_str = serde_json::to_string(context).map_err(|e| {
                 crate::errors::AgentError::Serialization {
                     format: "json".to_string(),
@@ -305,7 +218,7 @@ mod native {
 }
 
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
-pub use native::InMemoryTaskManager;
+pub use native::InMemoryTaskStore;
 
 // ============================================================================
 // WASM Implementation (Single-Threaded)
@@ -313,19 +226,16 @@ pub use native::InMemoryTaskManager;
 
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
 mod wasm {
-    use super::{
-        AgentResult, AuthContext, ListTasksFilter, Message, PaginatedResult, Task, TaskEvent,
-        TaskManager,
-    };
+    use super::{AgentResult, AuthContext, Task, TaskEvent, TaskStore};
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
 
-    /// An in-memory, single-threaded implementation of the [`TaskManager`] for WASM.
+    /// An in-memory, single-threaded implementation of the [`TaskStore`] for WASM.
     ///
     /// This implementation uses `RefCell<HashMap>` for interior mutability, suitable
     /// for the single-threaded WASM environment.
     #[derive(Debug, Default)]
-    pub struct InMemoryTaskManager {
+    pub struct InMemoryTaskStore {
         tasks: RefCell<HashMap<String, Task>>,
         events: RefCell<HashMap<String, Vec<TaskEvent>>>,
         /// Store `TaskContext` state for multi-turn conversations
@@ -334,8 +244,8 @@ mod wasm {
         task_skills: RefCell<HashMap<String, String>>,
     }
 
-    impl InMemoryTaskManager {
-        /// Creates a new `InMemoryTaskManager`.
+    impl InMemoryTaskStore {
+        /// Creates a new `InMemoryTaskStore`.
         #[must_use]
         pub fn new() -> Self {
             Self::default()
@@ -348,7 +258,7 @@ mod wasm {
     }
 
     #[async_trait::async_trait(?Send)]
-    impl TaskManager for InMemoryTaskManager {
+    impl TaskStore for InMemoryTaskStore {
         async fn get_task(
             &self,
             auth_ctx: &AuthContext,
@@ -358,45 +268,15 @@ mod wasm {
             Ok(self.tasks.borrow().get(&key).cloned())
         }
 
-        async fn list_tasks(
-            &self,
-            auth_ctx: &AuthContext,
-            filter: &ListTasksFilter<'_>,
-        ) -> AgentResult<PaginatedResult<Task>> {
+        async fn list_tasks(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<Task>> {
             let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
-            let mut all_tasks: Vec<Task> = self
+            Ok(self
                 .tasks
                 .borrow()
                 .iter()
                 .filter(|(key, _)| key.starts_with(&prefix))
                 .map(|(_, task)| task.clone())
-                .filter(|task| filter.context_id.is_none_or(|sid| task.context_id == sid))
-                .collect();
-
-            // Sort tasks by ID for consistent ordering
-            all_tasks.sort_by(|a, b| a.id.cmp(&b.id));
-
-            // Apply pagination
-            let page_size = filter.page_size.unwrap_or(100) as usize;
-            let start_offset = filter
-                .page_token
-                .and_then(|token| token.parse::<usize>().ok())
-                .unwrap_or(0);
-
-            let total = all_tasks.len();
-            let end_offset = (start_offset + page_size).min(total);
-            let items = all_tasks[start_offset..end_offset].to_vec();
-
-            let next_page_token = if end_offset < total {
-                Some(end_offset.to_string())
-            } else {
-                None
-            };
-
-            Ok(PaginatedResult {
-                items,
-                next_page_token,
-            })
+                .collect())
         }
 
         async fn save_task(&self, auth_ctx: &AuthContext, task: &Task) -> AgentResult<()> {
@@ -405,30 +285,13 @@ mod wasm {
             Ok(())
         }
 
-        async fn add_task_event(
+        async fn append_event(
             &self,
             auth_ctx: &AuthContext,
+            task_key: &str,
             event: &TaskEvent,
         ) -> AgentResult<()> {
-            // Extract task_id from the event itself
-            let event_key = match event {
-                TaskEvent::Message(msg) => {
-                    // For negotiation messages (task_id is None), use synthetic key
-                    msg.task_id.as_ref().map_or_else(
-                        || {
-                            format!(
-                                "_negotiation:{}",
-                                msg.context_id.as_deref().unwrap_or("default")
-                            )
-                        },
-                        std::clone::Clone::clone,
-                    )
-                }
-                TaskEvent::StatusUpdate(update) => update.task_id.clone(),
-                TaskEvent::ArtifactUpdate(update) => update.task_id.clone(),
-            };
-
-            let key = Self::get_namespaced_key(auth_ctx, &event_key);
+            let key = Self::get_namespaced_key(auth_ctx, task_key);
             self.events
                 .borrow_mut()
                 .entry(key)
@@ -437,88 +300,52 @@ mod wasm {
             Ok(())
         }
 
-        async fn get_task_events(
+        async fn get_events(
             &self,
             auth_ctx: &AuthContext,
-            task_id: &str,
+            task_key: &str,
         ) -> AgentResult<Vec<TaskEvent>> {
-            let key = Self::get_namespaced_key(auth_ctx, task_id);
+            let key = Self::get_namespaced_key(auth_ctx, task_key);
             Ok(self.events.borrow().get(&key).cloned().unwrap_or_default())
         }
 
-        async fn get_negotiating_messages(
-            &self,
-            auth_ctx: &AuthContext,
-            context_id: &str,
-        ) -> AgentResult<Vec<Message>> {
+        async fn list_event_task_keys(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>> {
             let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
-            let mut messages = Vec::new();
-
-            // Iterate through all events and filter messages by context_id
-            for (key, events) in self.events.borrow().iter() {
-                if key.starts_with(&prefix) {
-                    for event in events {
-                        if let TaskEvent::Message(msg) = event {
-                            if msg.context_id.as_deref() == Some(context_id)
-                                && msg.task_id.is_none()
-                            {
-                                messages.push(msg.clone());
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Sort deterministically by message id so results match native behavior.
-            messages.sort_by(|a, b| a.message_id.cmp(&b.message_id));
-
-            Ok(messages)
+            let keys = self
+                .events
+                .borrow()
+                .keys()
+                .filter_map(|key| {
+                    key.strip_prefix(&prefix)
+                        .map(std::string::ToString::to_string)
+                })
+                .collect();
+            Ok(keys)
         }
 
-        async fn list_task_ids(
-            &self,
-            auth_ctx: &AuthContext,
-            context_id: Option<&str>,
-        ) -> AgentResult<Vec<String>> {
+        async fn list_task_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>> {
             let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
-            let task_ids: Vec<String> = self
+            let ids = self
                 .tasks
                 .borrow()
-                .iter()
-                .filter(|(key, _)| key.starts_with(&prefix))
-                .map(|(_, task)| task.clone())
-                .filter(|task| context_id.is_none_or(|cid| task.context_id == cid))
-                .map(|task| task.id)
+                .keys()
+                .filter_map(|key| {
+                    key.strip_prefix(&prefix)
+                        .map(std::string::ToString::to_string)
+                })
                 .collect();
-
-            Ok(task_ids)
+            Ok(ids)
         }
 
         async fn list_context_ids(&self, auth_ctx: &AuthContext) -> AgentResult<Vec<String>> {
             let prefix = format!("{}:{}:", auth_ctx.app_name, auth_ctx.user_name);
-            let mut contexts: BTreeSet<String> = BTreeSet::new();
-
-            for (_, task) in self
+            let contexts: BTreeSet<String> = self
                 .tasks
                 .borrow()
                 .iter()
                 .filter(|(key, _)| key.starts_with(&prefix))
-            {
-                contexts.insert(task.context_id.clone());
-            }
-
-            for (key, _) in self
-                .events
-                .borrow()
-                .iter()
-                .filter(|(key, _)| key.starts_with(&prefix))
-            {
-                if let Some(stripped) = key.strip_prefix(&prefix) {
-                    if let Some(context_id) = stripped.strip_prefix("_negotiation:") {
-                        contexts.insert(context_id.to_string());
-                    }
-                }
-            }
+                .map(|(_, task)| task.context_id.clone())
+                .collect();
 
             Ok(contexts.into_iter().collect())
         }
@@ -530,7 +357,6 @@ mod wasm {
             context: &crate::runtime::context::TaskContext,
         ) -> AgentResult<()> {
             let key = Self::get_namespaced_key(auth_ctx, task_id);
-            // Serialize TaskContext to JSON
             let json_str = serde_json::to_string(context).map_err(|e| {
                 crate::errors::AgentError::Serialization {
                     format: "json".to_string(),
@@ -586,13 +412,13 @@ mod wasm {
 }
 
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
-pub use wasm::InMemoryTaskManager;
+pub use wasm::InMemoryTaskStore;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::context::{AuthContext, TaskContext};
-    use crate::runtime::task_manager::{ListTasksFilter, TaskEvent};
+    use crate::runtime::task_manager::{DefaultTaskManager, ListTasksFilter, TaskEvent, TaskManager};
     use a2a_types::{
         Message, MessageRole, TaskArtifactUpdateEvent, TaskState, TaskStatus, TaskStatusUpdateEvent,
     };
@@ -620,7 +446,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn stores_tasks_events_and_context() {
-        let manager = InMemoryTaskManager::new();
+        let manager = DefaultTaskManager::new(InMemoryTaskStore::new());
         let auth_ctx = auth();
         let task = Task {
             id: "task-1".into(),

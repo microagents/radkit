@@ -387,7 +387,7 @@ mod tests {
             &self,
             _task_context: &mut crate::runtime::context::TaskContext,
             _context: &crate::runtime::context::Context,
-            _runtime: &dyn crate::runtime::Runtime,
+            _runtime: &dyn crate::runtime::AgentRuntime,
             _content: Content,
         ) -> Result<OnRequestResult, AgentError> {
             Ok(OnRequestResult::Completed {
@@ -400,7 +400,7 @@ mod tests {
             &self,
             _task_context: &mut crate::runtime::context::TaskContext,
             _context: &crate::runtime::context::Context,
-            _runtime: &dyn crate::runtime::Runtime,
+            _runtime: &dyn crate::runtime::AgentRuntime,
             _content: Content,
         ) -> Result<OnInputResult, AgentError> {
             Ok(OnInputResult::InputRequired {
@@ -441,7 +441,7 @@ mod tests {
             &self,
             _task_context: &mut crate::runtime::context::TaskContext,
             _context: &crate::runtime::context::Context,
-            _runtime: &dyn crate::runtime::Runtime,
+            _runtime: &dyn crate::runtime::AgentRuntime,
             _content: Content,
         ) -> Result<OnRequestResult, AgentError> {
             Ok(OnRequestResult::Rejected {

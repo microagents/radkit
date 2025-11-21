@@ -23,7 +23,7 @@ pub use self::thread::Thread;
 /// Trait for types that can be deserialized from LLM outputs with fuzzy matching.
 ///
 /// This is a trait alias for `tryparse::deserializer::LlmDeserialize`, providing:
-/// - Fuzzy field name matching (camelCase ↔ snake_case ↔ kebab-case)
+/// - Fuzzy field name matching (`camelCase` ↔ `snake_case` ↔ `kebab-case`)
 /// - Fuzzy enum variant matching (case-insensitive with edit-distance scoring)
 /// - Type coercion (string → number, single → array, etc.)
 ///

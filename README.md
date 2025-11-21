@@ -48,7 +48,7 @@ schemars = "1"
 
 #### With Agent Server Runtime
 
-To include the `DefaultRuntime` and enable the full A2A agent server capabilities (on native targets), enable the `runtime` feature:
+To include the runtime server handle and enable the full A2A agent server capabilities (on native targets), enable the `runtime` feature:
 
 ```toml
 [dependencies]
@@ -63,7 +63,7 @@ schemars = "1"
 
 Radkit ships optional capabilities that you can opt into per target:
 
-- `runtime`: Enables the native `DefaultRuntime`, HTTP server, tracing, and other dependencies required to run A2A-compliant agents locally.
+- `runtime`: Enables the native runtime handle, HTTP server, tracing, and other dependencies required to run A2A-compliant agents locally.
 - `dev-ui`: Builds on top of `runtime` and serves an interactive UI (native-only) where you can trigger tasks, and inspect streaming output.
 
 ## Core Concepts
@@ -924,10 +924,10 @@ impl SkillHandler for ReportGeneratorSkill {
 ```rust
 use radkit::agent::{Agent, AgentDefinition};
 use radkit::models::providers::AnthropicLlm;
-use radkit::runtime::DefaultRuntime;
+use radkit::runtime::Runtime;
 
-pub fn configure_agents() -> Vec<AgentDefinition> {
-    let my_agent = Agent::builder()
+pub fn configure_agent() -> AgentDefinition {
+    Agent::builder()
         .with_id("my-agent-v1")
         .with_name("My A2A Agent")
         .with_description("An intelligent agent with multiple skills")
@@ -935,9 +935,7 @@ pub fn configure_agents() -> Vec<AgentDefinition> {
         .with_skill(ProfileExtractorSkill)
         .with_skill(ReportGeneratorSkill)
         .with_skill(DataAnalysisSkill)
-        .build();
-
-    vec![my_agent]
+        .build()
 }
 
 // Local development
@@ -945,10 +943,8 @@ pub fn configure_agents() -> Vec<AgentDefinition> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llm = AnthropicLlm::from_env("claude-sonnet-4-5-20250929")?;
-    let runtime = DefaultRuntime::new(llm);
-
-    runtime
-        .agents(configure_agents())
+    Runtime::builder(configure_agent(), llm)
+        .build()
         .serve("127.0.0.1:8080")
         .await?;
 

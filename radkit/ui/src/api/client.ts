@@ -9,8 +9,6 @@ import type {
   TaskIdParams,
 } from "@a2a-js/sdk";
 import { v4 as uuidv4 } from "uuid";
-import type { AgentInfo } from "../types/AgentInfo";
-
 // Union type for streaming events (SDK doesn't export this)
 export type A2AStreamEvent =
   | Message
@@ -21,8 +19,8 @@ export type A2AStreamEvent =
 // Base URL for API calls (relative to current origin)
 const API_BASE = "";
 
-// Cache of A2A clients per agent
-const clientCache = new Map<string, Promise<A2AClient>>();
+// Cache of the runtime client
+let cachedClient: Promise<A2AClient> | null = null;
 
 export interface SendMessageOptions {
   messageText: string;
@@ -49,44 +47,30 @@ export interface TaskHistoryResponse {
 /**
  * Get or create an A2AClient for the specified agent
  */
-async function getA2AClient(agentId: string): Promise<A2AClient> {
-  if (!clientCache.has(agentId)) {
-    const cardUrl = `${API_BASE}/${agentId}/.well-known/agent-card.json`;
+async function getA2AClient(): Promise<A2AClient> {
+  if (!cachedClient) {
+    const cardUrl = `${API_BASE}/.well-known/agent-card.json`;
     console.log("[A2A Client] Creating client for:", cardUrl);
-
-    const clientPromise = A2AClient.fromCardUrl(cardUrl)
+    cachedClient = A2AClient.fromCardUrl(cardUrl)
       .then(client => {
         console.log("[A2A Client] Client created successfully");
         return client;
       })
       .catch(error => {
         console.error("[A2A Client] Failed to create client:", error);
+        cachedClient = null;
         throw error;
       });
-
-    clientCache.set(agentId, clientPromise);
   }
 
-  return clientCache.get(agentId)!;
-}
-
-/**
- * List all available agents
- * Fetches from the /ui/agents discovery endpoint (dev-ui only)
- */
-export async function listAgents(): Promise<AgentInfo[]> {
-  const response = await fetch(`${API_BASE}/ui/agents`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch agents: ${response.statusText}`);
-  }
-  return response.json();
+  return cachedClient;
 }
 
 /**
  * Fetch agent card from the A2A protocol endpoint
  */
-export async function getAgentCard(agentId: string): Promise<AgentCard> {
-  const client = await getA2AClient(agentId);
+export async function getAgentCard(): Promise<AgentCard> {
+  const client = await getA2AClient();
   const card = await client.getAgentCard();
   console.log("[A2A Client] Agent card:", card);
   return card;
@@ -97,10 +81,9 @@ export async function getAgentCard(agentId: string): Promise<AgentCard> {
  * Returns an AsyncGenerator that yields events as they arrive.
  */
 export async function* sendMessageStream(
-  agentId: string,
   options: SendMessageOptions
 ): AsyncGenerator<A2AStreamEvent, void, undefined> {
-  const client = await getA2AClient(agentId);
+  const client = await getA2AClient();
 
   const message: Message = {
     messageId: uuidv4(),
@@ -126,10 +109,9 @@ export async function* sendMessageStream(
 }
 
 export async function* resubscribeTaskStream(
-  agentId: string,
   params: TaskIdParams
 ): AsyncGenerator<A2AStreamEvent, void, undefined> {
-  const client = await getA2AClient(agentId);
+  const client = await getA2AClient();
   try {
     for await (const event of client.resubscribeTask(params)) {
       yield event as A2AStreamEvent;
@@ -143,26 +125,23 @@ export async function* resubscribeTaskStream(
 /**
  * Get agent detail including full metadata
  */
-export async function getAgentDetail(agentId: string) {
-  const card = await getAgentCard(agentId);
+export async function getAgentDetail() {
+  const card = await getAgentCard();
 
   return {
-    id: agentId,
     name: card.name,
     description: card.description,
     version: card.version,
     skills: card.skills || [],
-    cardUrl: `/${agentId}/.well-known/agent-card.json`,
+    cardUrl: "/.well-known/agent-card.json",
   };
 }
 
 export async function listContextTasks(
-  agentId: string,
-  version: string,
   contextId: string
 ): Promise<TaskSummary[]> {
   const response = await fetch(
-    `${API_BASE}/ui/${agentId}/${version}/contexts/${contextId}/tasks`
+    `${API_BASE}/ui/contexts/${contextId}/tasks`
   );
 
   if (!response.ok) {
@@ -173,12 +152,10 @@ export async function listContextTasks(
 }
 
 export async function getTaskHistory(
-  agentId: string,
-  version: string,
   taskId: string
 ): Promise<TaskHistoryResponse> {
   const response = await fetch(
-    `${API_BASE}/ui/${agentId}/${version}/tasks/${taskId}/events`
+    `${API_BASE}/ui/tasks/${taskId}/events`
   );
 
   if (!response.ok) {
@@ -193,12 +170,10 @@ export async function getTaskHistory(
 }
 
 export async function getTaskTransitions(
-  agentId: string,
-  version: string,
   taskId: string
 ): Promise<import("../types/TaskTransitionsResponse").TaskTransitionsResponse> {
   const response = await fetch(
-    `${API_BASE}/ui/${agentId}/${version}/tasks/${taskId}/transitions`
+    `${API_BASE}/ui/tasks/${taskId}/transitions`
   );
 
   if (!response.ok) {
@@ -208,16 +183,11 @@ export async function getTaskTransitions(
   return response.json();
 }
 
-export async function listContexts(
-  agentId: string,
-  version: string
-): Promise<string[]> {
-  const response = await fetch(
-    `${API_BASE}/ui/${agentId}/${version}/contexts`
-  );
+export async function listContexts(): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/ui/contexts`);
 
   if (!response.ok) {
-    throw new Error(`Failed to load contexts for agent ${agentId}`);
+    throw new Error("Failed to load contexts");
   }
 
   return response.json();

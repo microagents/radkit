@@ -1,11 +1,11 @@
 use radkit::agent::{
-    Agent, Artifact, OnInputResult, OnRequestResult, RegisteredSkill, SkillHandler, SkillMetadata,
-    SkillSlot,
+    Agent, AgentDefinition, Artifact, OnInputResult, OnRequestResult, RegisteredSkill,
+    SkillHandler, SkillMetadata, SkillSlot,
 };
 use radkit::errors::AgentError;
 use radkit::models::Content;
 use radkit::runtime::context::{Context, TaskContext};
-use radkit::runtime::{DefaultRuntime, Runtime};
+use radkit::runtime::{AgentRuntime, Runtime};
 use radkit::test_support::FakeLlm;
 
 // A test skill for verifying lifecycle behavior.
@@ -36,7 +36,7 @@ impl SkillHandler for LifecycleSkill {
         &self,
         task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         task_context.save_data("request_seen", &true)?;
@@ -50,7 +50,7 @@ impl SkillHandler for LifecycleSkill {
         &self,
         task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         content: Content,
     ) -> Result<OnInputResult, AgentError> {
         let request_seen: bool = task_context.load_data("request_seen")?.unwrap_or(false);
@@ -79,14 +79,18 @@ impl RegisteredSkill for LifecycleSkill {
     }
 }
 
+fn lifecycle_agent_definition() -> AgentDefinition {
+    Agent::builder()
+        .with_id("test-agent")
+        .with_skill(LifecycleSkill)
+        .build()
+}
+
 #[tokio::test]
 async fn test_skill_lifecycle() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
-    let agent = Agent::builder()
-        .with_id("test-agent")
-        .with_skill(LifecycleSkill)
-        .build();
+    let agent = lifecycle_agent_definition();
+    let runtime = Runtime::builder(lifecycle_agent_definition(), llm).build();
 
     let skill = agent.skills().first().unwrap();
     let mut task_context = TaskContext::new();
@@ -140,11 +144,8 @@ async fn test_skill_lifecycle() {
 #[tokio::test]
 async fn test_skill_lifecycle_with_failure() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
-    let agent = Agent::builder()
-        .with_id("test-agent")
-        .with_skill(LifecycleSkill)
-        .build();
+    let agent = lifecycle_agent_definition();
+    let runtime = Runtime::builder(lifecycle_agent_definition(), llm).build();
 
     let skill = agent.skills().first().unwrap();
     let mut task_context = TaskContext::new();
@@ -211,7 +212,7 @@ impl SkillHandler for ImmediateSkill {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         let text = content.first_text().unwrap_or("no input");
@@ -225,7 +226,7 @@ impl SkillHandler for ImmediateSkill {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnInputResult, AgentError> {
         panic!("on_input_received should not be called for immediate completion");
@@ -238,14 +239,18 @@ impl RegisteredSkill for ImmediateSkill {
     }
 }
 
+fn immediate_agent_definition() -> AgentDefinition {
+    Agent::builder()
+        .with_id("test-agent")
+        .with_skill(ImmediateSkill)
+        .build()
+}
+
 #[tokio::test]
 async fn test_immediate_completion_skill() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
-    let agent = Agent::builder()
-        .with_id("test-agent")
-        .with_skill(ImmediateSkill)
-        .build();
+    let agent = immediate_agent_definition();
+    let runtime = Runtime::builder(immediate_agent_definition(), llm).build();
 
     let skill = agent.skills().first().unwrap();
     let mut task_context = TaskContext::new();
@@ -296,7 +301,7 @@ impl SkillHandler for RejectingSkill {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         let text = content.first_text().unwrap_or("");
@@ -316,7 +321,7 @@ impl SkillHandler for RejectingSkill {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnInputResult, AgentError> {
         panic!("on_input_received should not be called for rejected requests");
@@ -329,14 +334,18 @@ impl RegisteredSkill for RejectingSkill {
     }
 }
 
+fn rejecting_agent_definition() -> AgentDefinition {
+    Agent::builder()
+        .with_id("test-agent")
+        .with_skill(RejectingSkill)
+        .build()
+}
+
 #[tokio::test]
 async fn test_rejecting_skill() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
-    let agent = Agent::builder()
-        .with_id("test-agent")
-        .with_skill(RejectingSkill)
-        .build();
+    let agent = rejecting_agent_definition();
+    let runtime = Runtime::builder(rejecting_agent_definition(), llm).build();
 
     let skill = agent.skills().first().unwrap();
     let mut task_context = TaskContext::new();
@@ -412,7 +421,7 @@ impl SkillHandler for MultiRoundSkill {
         &self,
         _task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         _content: Content,
     ) -> Result<OnRequestResult, AgentError> {
         Ok(OnRequestResult::InputRequired {
@@ -425,7 +434,7 @@ impl SkillHandler for MultiRoundSkill {
         &self,
         task_context: &mut TaskContext,
         _context: &Context,
-        _runtime: &dyn Runtime,
+        _runtime: &dyn AgentRuntime,
         content: Content,
     ) -> Result<OnInputResult, AgentError> {
         let slot: MultiRoundSlot = task_context.load_slot()?.expect("slot should be set");
@@ -455,14 +464,18 @@ impl RegisteredSkill for MultiRoundSkill {
     }
 }
 
+fn multi_round_agent_definition() -> AgentDefinition {
+    Agent::builder()
+        .with_id("test-agent")
+        .with_skill(MultiRoundSkill)
+        .build()
+}
+
 #[tokio::test]
 async fn test_multi_round_input_skill() {
     let llm = FakeLlm::with_responses("fake_llm", std::iter::empty());
-    let runtime = DefaultRuntime::new(llm);
-    let agent = Agent::builder()
-        .with_id("test-agent")
-        .with_skill(MultiRoundSkill)
-        .build();
+    let agent = multi_round_agent_definition();
+    let runtime = Runtime::builder(multi_round_agent_definition(), llm).build();
 
     let skill = agent.skills().first().unwrap();
     let mut task_context = TaskContext::new();
